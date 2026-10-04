@@ -66,6 +66,8 @@ The bridge accepts only values shaped like a Wisply token (`wspc_` or `wsp_` fol
 
 Before every Wisply tool call, the bridge sends a fresh random challenge, without the token, to the program on `127.0.0.1:51771` and asks it to prove that it is the Wisply that issued your token; Wisply answers with a proof derived from the token, and the bridge checks it. A program that can't answer correctly, such as another app that took the port while Wisply was closed, never receives the token, and Claude gets an error saying the token was not sent. A Wisply version without the check gets the same treatment, with a request to update Wisply.
 
+One limit: the check and the tool call are two separate requests a few milliseconds apart. If Wisply quit and another program took the port in exactly that gap, that program could receive the token. A read-only connector token limits what it could do with it, and regenerating the token in Wisply revokes it.
+
 ## Try it
 
 With Wisply running, its MCP server on and the token set, ask Claude Code:
