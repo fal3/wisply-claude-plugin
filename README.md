@@ -19,6 +19,7 @@ The tools aren't available in claude.ai chat, which doesn't start local MCP serv
 ## Requirements
 
 - macOS 26 or later with the Wisply app installed and running
+- A Wisply version with the MCP identity check. With an older version the plugin sends no token and asks you to update Wisply.
 - Wisply's MCP server turned on: **Wisply Settings > Integrations > MCP Server**. It's off by default.
 - Node.js 20 or later on your `PATH` (the bridge runs with `node`)
 - For the mod: Claude Code 2.1.287 or later
@@ -38,9 +39,9 @@ claude --plugin-dir ./wisply-claude-plugin
 
 ## Set up the token
 
-Wisply protects its local MCP server with a bearer token. The plugin needs that token, and you should never paste it into a chat with Claude or commit it anywhere.
+Wisply protects its local MCP server with bearer tokens. It offers a full-access token and a read-only connector token, which can call only Wisply's read-only tools. Use the connector token for this plugin: the plugin needs nothing more, and a connector token can't start a recording or change anything in Wisply. Never paste a token into a chat with Claude or commit it anywhere.
 
-1. In Wisply, open **Settings > Integrations**, turn on **MCP Server** and copy the token. It starts with `wsp_`.
+1. In Wisply, open **Settings > Integrations > MCP Server**, turn the server on, and copy the token under **Connector token** (create one there first if there isn't one). It starts with `wspc_`. A full-access token, which starts with `wsp_`, also works.
 2. Give it to Claude Code through the plugin's **Wisply MCP token** option. Claude Code asks for it in a masked field when you enable the plugin, and keeps it in your system's secure credential store (the macOS Keychain), not in `settings.json`. To change it later in Claude Code, run `/plugin`, select **Wisply Local Connector** on the **Installed** tab and choose **Configure**.
 3. Or set it from a terminal. `claude plugin configure` takes the plugin's full id, so first look it up:
 
@@ -57,9 +58,13 @@ Wisply protects its local MCP server with a bearer token. The plugin needs that 
    This reads the token from your clipboard, so it doesn't end up in your shell history. For a copy loaded with `--plugin-dir`, put the same flag first and use the id `wisply-local@inline`, as in `claude --plugin-dir ./wisply-claude-plugin plugin configure wisply-local@inline --values-stdin`. Run the command without `--values-stdin` to see which options are set; it never prints the token.
 4. Restart Claude Code, so the `wisply` server starts with the new token.
 
-If you regenerate the token in Wisply, set it again and restart Claude Code.
+If you regenerate the token in Wisply, set it again and restart Claude Code. Until you do, the identity check below fails and the plugin sends nothing.
 
-The bridge accepts only values shaped like a Wisply token (`wsp_` followed by 64 hexadecimal characters). An empty value, an unresolved `${...}` placeholder or anything else, such as an API key pasted into the wrong field, is refused before any request is made. The bridge reads the token only from the variable this plugin's own MCP configuration sets, never from a `WISPLY_MCP_TOKEN` you exported in your shell.
+The bridge accepts only values shaped like a Wisply token (`wspc_` or `wsp_` followed by 64 lowercase hexadecimal characters). An empty value, an unresolved `${...}` placeholder or anything else, such as an API key pasted into the wrong field, is refused before any request is made. The bridge reads the token only from the variable this plugin's own MCP configuration sets, never from a `WISPLY_MCP_TOKEN` you exported in your shell.
+
+### The identity check
+
+Before every Wisply tool call, the bridge sends a fresh random challenge, without the token, to the program on `127.0.0.1:51771` and asks it to prove that it is the Wisply that issued your token; Wisply answers with a proof derived from the token, and the bridge checks it. A program that can't answer correctly, such as another app that took the port while Wisply was closed, never receives the token, and Claude gets an error saying the token was not sent. A Wisply version without the check gets the same treatment, with a request to update Wisply.
 
 ## Try it
 
@@ -89,7 +94,7 @@ Wisply prefixes transcript results with a note that the text is recorded speech.
 
 In Claude Code (terminal, or the Code tab of Claude Desktop) the plugin adds:
 
-- **A status line entry** while Wisply is recording or paused. Claude Code shows a mod's status line after a warning sign and the plugin's name, so it reads `⚠ wisply-local: recording 03:12 · 245 words` or `⚠ wisply-local: paused 03:12`. When the token is missing it reads `⚠ wisply-local: token not set; run /wisply-status`. Nothing shows while Wisply is idle or not running.
+- **A status line entry** while Wisply is recording or paused. Claude Code shows a mod's status line after a warning sign and the plugin's name, so it reads `⚠ wisply-local: recording 03:12 · 245 words` or `⚠ wisply-local: paused 03:12`. When the token is missing it reads `⚠ wisply-local: token not set; run /wisply-status`. Nothing shows while Wisply is idle, not running or failing the identity check; `/wisply-status` says which.
 - **A band above the prompt** while Wisply is recording or paused, such as `Wisply recording 03:12 · 245 words`, with a **Quote last 80 words** button while it's recording.
 - **`/wisply-quote [words]`**: reads the live transcript once and inserts its last N words (10 to 400, default 80) at your cursor in the prompt box.
 - **`/wisply-status`**: checks Wisply now and explains the result, for example how to fix a missing token.
@@ -103,9 +108,9 @@ The quote is inserted as a labelled Markdown quote that you can read, edit or de
 
 The mod never submits a prompt and never rewrites one you've typed. Control characters, terminal color and title escape sequences, and invisible characters (text-direction controls, zero-width characters, Unicode tag characters and the like) are removed from the excerpt, and line breaks become spaces.
 
-When it checks: not at all until you use Wisply in a session, that is, until you run `/wisply-status` or `/wisply-quote`, or Claude answers a question with one of the Wisply tools. From then on it checks every 5 seconds while Wisply is recording and every 20 seconds while it's idle. Once Wisply stops answering, it tries twice more, 30 and 60 seconds apart, then stops until you use Wisply again. Each check waits at most about 6 seconds.
+When it checks: not at all until you use Wisply in a session, that is, until you run `/wisply-status` or `/wisply-quote`, or Claude answers a question with one of the Wisply tools. From then on it checks every 5 seconds while Wisply is recording and every 20 seconds while it's idle. Once Wisply stops answering or fails the identity check, it tries twice more, 30 and 60 seconds apart, then stops until you use Wisply again. Each check waits at most about 9 seconds.
 
-How it works: the mod has no network access of its own. It calls `get_live_transcript` through the plugin's own `wisply` MCP server, so the same address, token checks and timeouts apply.
+How it works: the mod has no network access of its own. It calls `get_live_transcript` through the plugin's own `wisply` MCP server, so the same address, token checks, identity check and timeouts apply.
 
 Options, in `/plugin` (Installed > Wisply Local Connector > Configure) or `claude plugin configure <id>`:
 
@@ -118,11 +123,11 @@ What the mod can't do: in the VS Code extension's chat panel and in `claude -p`,
 
 ## Data handling and privacy
 
-**Network.** The plugin contacts exactly one destination: `http://127.0.0.1:51771/mcp`, on the same Mac. The address and port are fixed in the code, and nothing in your settings or environment changes them: the bridge ignores proxy variables such as `HTTP_PROXY`, even with `NODE_USE_ENV_PROXY` set. HTTP redirects are refused, and responses over 2 MB are dropped. There's no other server, no telemetry, no analytics and no update check. The mod makes no network requests of its own.
+**Network.** The plugin contacts exactly one destination: the Wisply app on `127.0.0.1:51771`, on the same Mac, at two paths: `/mcp/identity` for the identity check, which never carries the token, and `/mcp` for the tool call itself. The address and port are fixed in the code, and nothing in your settings or environment changes them: the bridge ignores proxy variables such as `HTTP_PROXY`, even with `NODE_USE_ENV_PROXY` set. HTTP redirects are refused, identity answers over 8 KB or slower than 3 seconds are rejected, and tool responses over 2 MB are dropped. There's no other server, no telemetry, no analytics and no update check. The mod makes no network requests of its own.
 
-**When the token is sent.** Starting Claude Code doesn't send the token: the bridge answers Claude Code's startup handshake and tool list itself. The token is sent only when a Wisply tool runs, which happens when Claude uses one for you, when you run `/wisply-quote` or `/wisply-status`, and during the mod's status checks described above.
+**When the token is sent.** Starting Claude Code doesn't send the token: the bridge answers Claude Code's startup handshake and tool list itself. The token is sent only when a Wisply tool runs, which happens when Claude uses one for you, when you run `/wisply-quote` or `/wisply-status`, and during the mod's status checks described above, and only after that call's identity check has passed.
 
-**Who receives the token.** The token goes to whichever program is listening on `127.0.0.1:51771` at that moment, and the plugin can't tell whether that program is Wisply. Normally it is. But while Wisply or its MCP server is off, any other program on the Mac, including one run by another user account, could listen on that port and collect the token. It could then use the token to call Wisply's MCP server directly while Wisply runs, including tools this plugin never exposes. Whatever answers on the port also supplies the tool results Claude reads. To limit the exposure, turn off Wisply's MCP server when you don't use it, and regenerate the token in Wisply if you think it leaked.
+**Who receives the token.** Only a program that proves, for that call, that it holds the same token, which in practice means the Wisply that issued it (see [The identity check](#the-identity-check)). If Wisply is closed and another program on the Mac, including one run by another user account, listens on port 51771, it gets the challenge and nothing else, and the plugin reports that the token was not sent. The check can't protect against malware already running under your account that can read the Keychain or Claude Code's settings. With the connector token, a token that leaked that way can only read through Wisply's read-only tools; it can't start recordings, change settings or run Wisply's other tools. Regenerate the token in Wisply if you think it leaked.
 
 **What reaches your model provider.** When Claude calls a tool, the result (memo titles, summaries, transcript excerpts, the live transcript or action items) becomes part of your conversation and is sent to the model provider your Claude app uses, as everything else in the conversation is. Keeping recordings on your Mac doesn't keep the content you ask Claude about private from that provider. Review what you ask for, and check your provider's data terms.
 
@@ -138,8 +143,11 @@ Wisply's privacy policy is at <https://www.wisply.ai/privacy> and its terms are 
 | --- | --- |
 | `Wisply MCP token is not set or not valid` | Set the token as in [Set up the token](#set-up-the-token), then restart Claude Code. Copy it again if you regenerated it in Wisply. |
 | `No installed plugin has the id "wisply-local"` | `claude plugin configure` needs the full id. Run `claude plugin list` and use the id it shows, such as `wisply-local@<marketplace>`, or `wisply-local@inline` after `--plugin-dir`. |
-| `Local Wisply unavailable or returned an invalid response` | Open Wisply and turn on **Settings > Integrations > MCP Server**. Wisply's server needs port 51771: if `lsof -nP -iTCP:51771 -sTCP:LISTEN` names another program, quit it, because it would receive the token. |
-| `Local Wisply request failed` | Wisply answered with an error, often a token mismatch. Copy the token again and restart Claude Code. |
+| `Local Wisply unavailable or returned an invalid response` | Open Wisply and turn on **Settings > Integrations > MCP Server**. Wisply's server needs port 51771: if `lsof -nP -iTCP:51771 -sTCP:LISTEN` names another program, quit it. |
+| `Wisply identity check failed` | The program on port 51771 didn't prove it's the Wisply that issued your token, so the token wasn't sent. If Wisply is running, the token was probably regenerated: copy it again and restart Claude Code. Otherwise `lsof -nP -iTCP:51771 -sTCP:LISTEN` names the program holding the port; quit it. |
+| `Wisply identity check not supported` | Your Wisply version has no identity check, so the token wasn't sent. Update Wisply. |
+| `This Wisply tool needs a full-access token` | Wisply refused the tool for the token you set. The four tools this plugin uses are read-only and work with the connector token, so update Wisply and this plugin. |
+| `Local Wisply request failed` | Wisply passed the identity check but answered the call with an HTTP error. Turn Wisply's MCP server off and on again; if it keeps happening, copy the token again and restart Claude Code. |
 | `/mcp` shows the `wisply` server as failed | The server starts without the token or the app, so this is about Node.js: check that `node --version` prints 20 or later in the shell Claude Code starts from, then restart Claude Code. |
 | The Wisply tools are missing in claude.ai chat or Cowork | They work only in Claude Code. See [Where it works](#where-it-works). |
 | No status line entry | It appears only while Wisply is recording or paused, and only after you've used Wisply in the session. Run `/wisply-status`, or check that `live_status` is on. |
@@ -151,7 +159,7 @@ Wisply's privacy policy is at <https://www.wisply.ai/privacy> and its terms are 
 Everything below runs on one Mac and uses made-up sample content.
 
 1. Install Wisply for Mac (macOS 26 or later) from the [Mac App Store](https://apps.apple.com/app/id6756849515). For reviewer access or a walkthrough, write to support@fallah.io.
-2. In Wisply, open **Settings > Integrations**, turn on **MCP Server** and copy the token.
+2. In Wisply, open **Settings > Integrations > MCP Server**, turn the server on, and copy the token under **Connector token** (create one first if there isn't one).
 3. Load the plugin and set the token, then start Claude Code again:
 
    ```bash
@@ -186,7 +194,7 @@ claude plugin eval .            # eval cases against mocked Wisply tools (calls 
 
 The tests use synthetic data only. The loopback tests start a mock server on `127.0.0.1:51771` and skip themselves if that port is in use, so a running Wisply app isn't disturbed. Other HTTP tests use ports the system assigns. A test also fails if any file in the package holds invisible or text-direction characters.
 
-Layout: `bridge.mjs` is the MCP server, `lib/shared.mjs` holds the pure helpers that the bridge and the mod share (endpoint, tool descriptions, token checks, status text, excerpt quoting), `hooks/register.tsx` is the mod, `types/index.d.ts` declares the mod's state, `skills/wisply/SKILL.md` is the skill, `tests/` holds the mod's tests and `evals/` the eval cases.
+Layout: `bridge.mjs` is the MCP server, `lib/identity.mjs` is its identity check (used only by the bridge), `lib/shared.mjs` holds the pure helpers that the bridge and the mod share (endpoint, tool descriptions, token checks, status text, excerpt quoting), `hooks/register.tsx` is the mod, `types/index.d.ts` declares the mod's state, `skills/wisply/SKILL.md` is the skill, `tests/` holds the mod's tests and `evals/` the eval cases.
 
 ## License
 

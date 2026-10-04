@@ -10,13 +10,14 @@
 // quote_words, and never reads, stores, logs or sends the token or the
 // options object.
 //
-// Each status read makes the bridge send the token to whatever is listening
-// on the port, so the mod never checks on its own at session start. It
-// starts checking only after the person uses Wisply in the session (one of
-// the two commands, or a Wisply tool call that succeeded), and stops again
-// once Wisply stops answering. Transcript text is fetched only for the
-// quote action, is inserted into the prompt box for the person to read and
-// send (or delete), and is never stored or logged.
+// Each status read makes the bridge contact whatever is listening on the
+// port (it sends the token only after the listener proves it is Wisply), so
+// the mod never checks on its own at session start. It starts checking only
+// after the person uses Wisply in the session (one of the two commands, or a
+// Wisply tool call that succeeded), and stops again once Wisply stops
+// answering or stops proving it is Wisply. Transcript text is fetched only
+// for the quote action, is inserted into the prompt box for the person to
+// read and send (or delete), and is never stored or logged.
 
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
@@ -38,7 +39,9 @@ type LiveRead = { ok: true; snapshot: Snapshot } | { ok: false; phase: WisplyPha
 
 const SERVER_KEY = 'wisply'
 const LIVE_TOOL = 'get_live_transcript'
-const CALL_TIMEOUT_MS = 6000
+// The bridge's own budgets bind first: up to 3 s for the identity check, then
+// 5 s for the live transcript. This only catches a call that never returns.
+const CALL_TIMEOUT_MS = 9000
 const FIRST_POLL_MS = 1500
 
 const INITIAL: WisplyStatus = { phase: 'checking', durationSeconds: 0, wordCount: 0 }
@@ -54,7 +57,7 @@ const isLive = (phase: WisplyPhase) => phase === 'recording' || phase === 'pause
 const isAnswering = (phase: WisplyPhase) => isLive(phase) || phase === 'idle' || phase === 'unknown'
 
 const failureText = (phase: WisplyPhase) =>
-  phase === 'setup' || phase === 'offline' || phase === 'disconnected'
+  phase === 'setup' || phase === 'offline' || phase === 'unverified' || phase === 'disconnected'
     ? describeStatus({ phase })
     : 'Wisply did not return a live transcript.'
 
@@ -129,8 +132,9 @@ function schedule($: EngineInterface, delayMs: number) {
 }
 
 // Plans the next background check from the latest result: keep checking
-// while Wisply answers, retry twice once it stops, then stop until the
-// person uses Wisply again.
+// while Wisply answers, retry twice once it stops answering or stops proving
+// it is Wisply ('offline' or 'unverified'), then stop until the person uses
+// Wisply again.
 function plan($: EngineInterface, phase: WisplyPhase) {
   poller.timer?.cancel()
   poller.timer = undefined

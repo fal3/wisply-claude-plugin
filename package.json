@@ -1,6 +1,6 @@
 {
   "name": "wisply-local-connector",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Read-only Claude plugin and Claude Code mod for the local Wisply app.",
   "license": "MIT",

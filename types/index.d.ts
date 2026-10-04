@@ -9,6 +9,7 @@ export type WisplyPhase =
   | 'unknown'
   | 'setup'
   | 'offline'
+  | 'unverified'
   | 'disconnected'
 
 export type WisplyStatus = {

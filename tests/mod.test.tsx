@@ -8,6 +8,8 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { McpToolResult, On } from 'claude-code'
 
+import { NOT_WISPLY_MESSAGE, SETUP_MESSAGE, UPDATE_WISPLY_MESSAGE } from '../lib/shared.mjs'
+
 const PLUGIN = 'wisply-local'
 const SERVER = `plugin:${PLUGIN}:wisply`
 const WISPLY_TOOL = 'mcp__plugin_wisply-local_wisply__list_memos'
@@ -45,9 +47,10 @@ function liveResult(state: 'recording' | 'paused' | 'idle', transcript: string):
 
 const toolError = (text: string): McpToolResult => ({ content: [{ type: 'text', text }], isError: true })
 const UNAVAILABLE = toolError('Local Wisply unavailable or returned an invalid response')
-const UNSET = toolError(
-  'Wisply MCP token is not set or not valid. Copy it from Wisply Settings > Integrations into this plugin\'s "Wisply MCP token" option, then restart Claude Code.',
-)
+const UNSET = toolError(SETUP_MESSAGE)
+// The bridge's answers when whatever holds the port does not prove it is Wisply.
+const NOT_WISPLY = toolError(NOT_WISPLY_MESSAGE)
+const OLD_WISPLY = toolError(UPDATE_WISPLY_MESSAGE)
 
 type World = {
   calls: { server: string; tool: string }[]
@@ -168,6 +171,63 @@ test('a check while Wisply is off leaves nothing running behind it', async ($, o
   await start($)
   const status = await runCommand($, 'wisply-status')
   expect(status.text).toMatch(/Open Wisply/)
+  await clock.advance(TEN_MINUTES)
+  expect(world.calls).toHaveLength(1)
+  expect(world.statuses.at(-1)).toBeUndefined()
+})
+
+test('a listener that does not prove it is Wisply hides the status, explains, and backs off', async ($, on) => {
+  const clock = mock.clock(on)
+  const world = fakeWisply(on, liveResult('recording', SPEECH))
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text key="engine-band">engine band</Text>
+  })
+  await start($)
+  await runCommand($, 'wisply-status')
+  expect(world.statuses.at(-1)).toBe('recording 01:15 \u00B7 120 words')
+
+  world.next = NOT_WISPLY
+  await clock.advance(5000)
+  expect(world.calls).toHaveLength(2)
+  expect(world.statuses.at(-1)).toBeUndefined()
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount({ plugin: PLUGIN, surface, component: 'AbovePrompt', props: BAND_PROPS })
+    expect(await ui.find({ key: 'wisply-quote' })).toBeUndefined()
+    expect((await ui.find({ type: 'Text', text: 'engine band' }))?.text).toBe('engine band')
+    await ui.unmount()
+  }
+
+  // Two retries, 30 s and 60 s apart, then no more background checks.
+  await clock.advance(29000)
+  expect(world.calls).toHaveLength(2)
+  await clock.advance(1000)
+  expect(world.calls).toHaveLength(3)
+  await clock.advance(60000)
+  expect(world.calls).toHaveLength(4)
+  await clock.advance(TEN_MINUTES)
+  expect(world.calls).toHaveLength(4)
+
+  const status = await runCommand($, 'wisply-status')
+  expect(status.text).toMatch(/did not prove it is Wisply/)
+  expect(status.text).toMatch(/did not send your token/)
+  expect(status.text).toMatch(/lsof -nP -iTCP:51771 -sTCP:LISTEN/)
+  const quote = await runCommand($, 'wisply-quote')
+  expect(quote.text).toMatch(/did not prove it is Wisply/)
+  expect(world.fills).toHaveLength(0)
+  await clock.advance(TEN_MINUTES)
+  expect(world.calls).toHaveLength(6)
+  expect(world.statuses.every(line => line === undefined || line.startsWith('recording'))).toBe(true)
+})
+
+test('an older Wisply is explained on demand and leaves nothing running', async ($, on) => {
+  const clock = mock.clock(on)
+  const world = fakeWisply(on, OLD_WISPLY)
+  await start($)
+  await clock.advance(TEN_MINUTES)
+  expect(world.calls).toHaveLength(0)
+  const status = await runCommand($, 'wisply-status')
+  expect(status.text).toMatch(/update it to a version with the MCP identity check/)
   await clock.advance(TEN_MINUTES)
   expect(world.calls).toHaveLength(1)
   expect(world.statuses.at(-1)).toBeUndefined()

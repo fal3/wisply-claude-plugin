@@ -3,6 +3,7 @@
 // does not read JavaScript sources. Keep in step with shared.mjs.
 
 export declare const WISPLY_ENDPOINT: 'http://127.0.0.1:51771/mcp';
+export declare const WISPLY_IDENTITY_ENDPOINT: 'http://127.0.0.1:51771/mcp/identity';
 export declare const BRIDGE_NAME: string;
 export declare const BRIDGE_VERSION: string;
 export declare const PROTOCOL_VERSIONS: readonly string[];
@@ -23,6 +24,10 @@ export declare const SETUP_MARKER: string;
 export declare const SETUP_MESSAGE: string;
 export declare const REQUEST_FAILED_MESSAGE: string;
 export declare const UNAVAILABLE_MESSAGE: string;
+export declare const IDENTITY_MARKER: string;
+export declare const NOT_WISPLY_MESSAGE: string;
+export declare const UPDATE_WISPLY_MESSAGE: string;
+export declare const SCOPE_MESSAGE: string;
 
 export declare function tokenProblem(raw: unknown): 'missing' | 'placeholder' | 'malformed' | null;
 export declare function usableToken(raw: unknown): string | null;
@@ -38,7 +43,7 @@ export type LiveSnapshot = {
   transcript: string;
 };
 export declare function parseLiveTranscript(result: unknown): LiveSnapshot | null;
-export declare function classifyFailure(failure: unknown): 'setup' | 'offline';
+export declare function classifyFailure(failure: unknown): 'setup' | 'unverified' | 'offline';
 
 export type StatusLike = { phase: string; durationSeconds?: number; wordCount?: number };
 export declare function formatDuration(seconds: number): string;

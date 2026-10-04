@@ -8,10 +8,17 @@ import {join, relative} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {
   BRIDGE_VERSION,
+  IDENTITY_MARKER,
+  NOT_WISPLY_MESSAGE,
   READ_ONLY_TOOLS,
+  SCOPE_MESSAGE,
+  SETUP_MARKER,
   SETUP_MESSAGE,
   TOOL_DESCRIPTORS,
+  UNAVAILABLE_MESSAGE,
+  UPDATE_WISPLY_MESSAGE,
   WISPLY_ENDPOINT,
+  WISPLY_IDENTITY_ENDPOINT,
   buildExcerpt,
   clampQuoteWords,
   classifyFailure,
@@ -30,6 +37,7 @@ import {
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 // Built at runtime so no token-shaped literal sits in the source.
 const TOKEN = 'wsp_' + '9e'.repeat(32);
+const CONNECTOR = 'wspc_' + '8f'.repeat(32);
 const words = (count, prefix = 'word') => Array.from({length: count}, (_, i) => `${prefix}${i + 1}`).join(' ');
 const liveResult = (payload, {structured = true} = {}) => ({
   content: [
@@ -44,6 +52,8 @@ const tagged = (text) => [...text].map((char) => String.fromCodePoint(0xE0000 + 
 
 test('endpoint and tool scope are fixed and read-only', () => {
   assert.equal(WISPLY_ENDPOINT, 'http://127.0.0.1:51771/mcp');
+  assert.equal(WISPLY_IDENTITY_ENDPOINT, 'http://127.0.0.1:51771/mcp/identity');
+  assert.equal(new URL(WISPLY_IDENTITY_ENDPOINT).host, new URL(WISPLY_ENDPOINT).host);
   assert.deepEqual([...READ_ONLY_TOOLS], ['list_memos', 'search_transcripts', 'get_live_transcript', 'get_action_items']);
   assert.ok(Object.isFrozen(READ_ONLY_TOOLS));
 });
@@ -89,7 +99,35 @@ test('token validation names the problem without echoing the value', () => {
   assert.equal(tokenProblem(TOKEN), null);
   assert.equal(usableToken(`\t${TOKEN}\n`), TOKEN);
   assert.equal(usableToken('wsp_short'), null);
-  assert.ok(!SETUP_MESSAGE.includes('wsp_'));
+  assert.ok(!SETUP_MESSAGE.includes('wsp_') && !SETUP_MESSAGE.includes('wspc_'));
+});
+
+test('read-only connector tokens are accepted in the same strict shape', () => {
+  assert.equal(tokenProblem(CONNECTOR), null);
+  assert.equal(usableToken(` ${CONNECTOR}\r\n`), CONNECTOR);
+  assert.equal(tokenProblem(CONNECTOR.toUpperCase()), 'malformed');
+  assert.equal(tokenProblem('wspc_' + '8f'.repeat(31)), 'malformed');
+  assert.equal(tokenProblem(CONNECTOR + '0'), 'malformed');
+  assert.equal(tokenProblem('wspcc_' + '8f'.repeat(32)), 'malformed');
+  assert.equal(tokenProblem('wsc_' + '8f'.repeat(32)), 'malformed');
+  assert.equal(tokenProblem('WSPC_' + '8f'.repeat(32)), 'malformed');
+  assert.equal(tokenProblem(CONNECTOR + '\r\nInjected: bad'), 'malformed');
+});
+
+test('identity and scope messages say what happened to the token, and share one marker', () => {
+  for (const message of [NOT_WISPLY_MESSAGE, UPDATE_WISPLY_MESSAGE]) {
+    assert.ok(message.includes(IDENTITY_MARKER));
+    assert.match(message, /token was not sent/);
+    assert.match(message, /127\.0\.0\.1:51771/);
+    assert.ok(!message.includes(SETUP_MARKER));
+  }
+  assert.match(NOT_WISPLY_MESSAGE, /could not prove it is the Wisply/);
+  assert.match(NOT_WISPLY_MESSAGE, /quit whatever is using that port, or update Wisply/);
+  assert.match(UPDATE_WISPLY_MESSAGE, /Update Wisply to a version with the MCP identity check/);
+  assert.match(SCOPE_MESSAGE, /full-access token/);
+  for (const message of [SCOPE_MESSAGE, UNAVAILABLE_MESSAGE]) {
+    assert.ok(!message.includes(IDENTITY_MARKER) && !message.includes(SETUP_MARKER));
+  }
 });
 
 test('status reads get a short timeout, saved-memo reads a longer one', () => {
@@ -121,6 +159,16 @@ test('failure classification only treats the bridge setup message as setup', () 
   assert.equal(classifyFailure(undefined), 'offline');
 });
 
+test('failure classification treats only the identity-check messages as unverified', () => {
+  assert.equal(classifyFailure(NOT_WISPLY_MESSAGE), 'unverified');
+  assert.equal(classifyFailure(UPDATE_WISPLY_MESSAGE), 'unverified');
+  assert.equal(classifyFailure(new Error(`MCP error -32603: ${NOT_WISPLY_MESSAGE}`)), 'unverified');
+  assert.equal(classifyFailure({message: UPDATE_WISPLY_MESSAGE}), 'unverified');
+  for (const other of [SCOPE_MESSAGE, UNAVAILABLE_MESSAGE, 'Wisply identity', 'identity check failed']) {
+    assert.equal(classifyFailure(other), 'offline');
+  }
+});
+
 test('durations and status lines are short and never carry transcript text', () => {
   assert.equal(formatDuration(0), '00:00');
   assert.equal(formatDuration(192.9), '03:12');
@@ -131,12 +179,12 @@ test('durations and status lines are short and never carry transcript text', () 
   assert.equal(formatStatusLine({phase: 'recording', durationSeconds: 1, wordCount: 1}), 'recording 00:01 \u00B7 1 word');
   assert.equal(formatStatusLine({phase: 'paused', durationSeconds: 61}), 'paused 01:01');
   assert.equal(formatStatusLine({phase: 'setup'}), 'token not set; run /wisply-status');
-  for (const phase of ['idle', 'offline', 'disconnected', 'checking', 'unknown']) assert.equal(formatStatusLine({phase}), undefined);
+  for (const phase of ['idle', 'offline', 'unverified', 'disconnected', 'checking', 'unknown']) assert.equal(formatStatusLine({phase}), undefined);
   assert.equal(formatStatusLine(null), undefined);
   assert.equal(formatBandLabel({phase: 'recording', durationSeconds: 75, wordCount: 120}), 'Wisply recording 01:15 \u00B7 120 words');
   assert.equal(formatBandLabel({phase: 'paused', durationSeconds: 75}), 'Wisply paused 01:15');
-  for (const phase of ['idle', 'setup', 'offline']) assert.equal(formatBandLabel({phase}), undefined);
-  for (const phase of ['recording', 'paused', 'idle', 'setup', 'offline', 'disconnected', 'checking']) {
+  for (const phase of ['idle', 'setup', 'offline', 'unverified']) assert.equal(formatBandLabel({phase}), undefined);
+  for (const phase of ['recording', 'paused', 'idle', 'setup', 'offline', 'unverified', 'disconnected', 'checking']) {
     const text = describeStatus({phase, durationSeconds: 5, wordCount: 2});
     assert.ok(text.length > 0 && !text.includes('wsp_'));
   }
@@ -150,6 +198,16 @@ test('setup help names a configure command that takes a qualified id', () => {
   assert.doesNotMatch(setup, /configure wisply-local[^@]/);
   assert.match(setup, /restart Claude Code/);
   assert.match(describeStatus({phase: 'disconnected'}), /\/mcp/);
+});
+
+test('unverified help says the token was withheld and how to find out why', () => {
+  const unverified = describeStatus({phase: 'unverified'});
+  assert.match(unverified, /did not prove it is Wisply/);
+  assert.match(unverified, /did not send your token/);
+  assert.match(unverified, /MCP identity check/);
+  assert.match(unverified, /lsof -nP -iTCP:51771 -sTCP:LISTEN/);
+  assert.notEqual(unverified, describeStatus({phase: 'offline'}));
+  assert.notEqual(unverified, describeStatus({phase: 'nonsense'}));
 });
 
 test('speech sanitizing strips escapes, bidi and invisible characters', () => {
@@ -217,6 +275,7 @@ test('polling is frequent while recording and stops once Wisply stops answering'
   assert.equal(nextPollDelayMs('idle'), 20000);
   assert.equal(nextPollDelayMs('unknown'), 20000);
   assert.deepEqual([1, 2, 3, 9].map((n) => nextPollDelayMs('offline', n)), [30000, 60000, null, null]);
+  assert.deepEqual([1, 2, 3, 9].map((n) => nextPollDelayMs('unverified', n)), [30000, 60000, null, null]);
   for (const phase of ['setup', 'disconnected', 'checking']) assert.equal(nextPollDelayMs(phase, 1), null);
 });
 

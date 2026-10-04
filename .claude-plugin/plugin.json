@@ -1,7 +1,7 @@
 {
   "name": "wisply-local",
   "displayName": "Wisply Local Connector",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Read-only access to your Wisply memos, transcript excerpts, live transcript and action items from Claude Code on the Mac running Wisply, plus a status line and quote button for live recordings. Talks only to the Wisply app on 127.0.0.1.",
   "author": {
     "name": "Alex Fallah",
@@ -21,7 +21,7 @@
     "wisply_mcp_token": {
       "type": "string",
       "title": "Wisply MCP token",
-      "description": "Copy it from Wisply Settings > Integrations > MCP Server. Stored in your system's secure credential store. Never paste it into a chat.",
+      "description": "Use the read-only connector token from Wisply Settings > Integrations > MCP Server > Connector token (a full-access token also works). Stored in your system's secure credential store. Never paste it into a chat.",
       "sensitive": true
     },
     "live_status": {
