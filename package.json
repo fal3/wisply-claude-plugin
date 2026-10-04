@@ -1,0 +1,18 @@
+{
+  "name": "wisply-local-connector",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Read-only Claude plugin and Claude Code mod for the local Wisply app.",
+  "license": "MIT",
+  "author": "Alex Fallah",
+  "homepage": "https://wisply.ai",
+  "repository": "github:fal3/wisply-claude-plugin",
+  "type": "module",
+  "scripts": {
+    "test": "node --test shared.test.mjs bridge.test.mjs loopback.test.mjs",
+    "test:mod": "claude plugin test .",
+    "validate": "claude plugin validate --strict .",
+    "eval": "claude plugin eval ."
+  },
+  "engines": { "node": ">=20" }
+}

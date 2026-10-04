@@ -1,0 +1,42 @@
+{
+  "name": "wisply-local",
+  "displayName": "Wisply Local Connector",
+  "version": "0.2.0",
+  "description": "Read-only access to your Wisply memos, transcript excerpts, live transcript and action items from Claude Code on the Mac running Wisply, plus a status line and quote button for live recordings. Talks only to the Wisply app on 127.0.0.1.",
+  "author": {
+    "name": "Alex Fallah",
+    "email": "support@fallah.io",
+    "url": "https://wisply.ai"
+  },
+  "homepage": "https://wisply.ai",
+  "repository": "https://github.com/fal3/wisply-claude-plugin",
+  "license": "MIT",
+  "keywords": ["wisply", "transcription", "meetings", "voice-memos", "local", "privacy", "mcp", "macos"],
+  "documentationUrl": "https://github.com/fal3/wisply-claude-plugin#readme",
+  "supportUrl": "https://github.com/fal3/wisply-claude-plugin/issues",
+  "privacyPolicyUrl": "https://www.wisply.ai/privacy",
+  "termsOfServiceUrl": "https://www.wisply.ai/terms",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "wisply_mcp_token": {
+      "type": "string",
+      "title": "Wisply MCP token",
+      "description": "Copy it from Wisply Settings > Integrations > MCP Server. Stored in your system's secure credential store. Never paste it into a chat.",
+      "sensitive": true
+    },
+    "live_status": {
+      "type": "boolean",
+      "title": "Show Wisply recording state",
+      "description": "Claude Code only: show Wisply's recording state in the status line and a quote button above the prompt while recording. Checks start after you first use Wisply in a session (/wisply-status, /wisply-quote or a Wisply tool), run every 5 s while recording and every 20 s otherwise, and stop when Wisply stops answering.",
+      "default": true
+    },
+    "quote_words": {
+      "type": "number",
+      "title": "Words per quote",
+      "description": "How many of the most recent live transcript words /wisply-quote and the quote button insert into your prompt (10 to 400).",
+      "default": 80,
+      "min": 10,
+      "max": 400
+    }
+  }
+}

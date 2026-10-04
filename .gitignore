@@ -1,0 +1,37 @@
+# Dependencies and lockfiles. The plugin has no dependencies; a lockfile at the
+# plugin root would make the directory hold the plugin for an install review.
+node_modules/
+package-lock.json
+npm-shrinkwrap.json
+bun.lock
+bun.lockb
+yarn.lock
+pnpm-lock.yaml
+
+# Editor and OS files (the directory blocks .DS_Store and friends)
+.DS_Store
+Thumbs.db
+desktop.ini
+__MACOSX/
+*.swp
+.vscode/
+.idea/
+
+# Local type output and tool caches. Claude Code writes its API declarations
+# into .claude-plugin/types/ when it loads this folder as a mod; the
+# plugin's own contract, types/index.d.ts, stays tracked.
+.claude/
+.claude-plugin/types/
+# ...and a tsconfig.json at the root that extends that ignored folder.
+/tsconfig.json
+evals/results/
+.mcpb-cache/
+coverage/
+*.log
+
+# Internal notes that must never reach the public repository
+SUBMISSION_NOTES.md
+
+# Never commit local secrets
+.env
+.env.*

@@ -1,0 +1,103 @@
+{
+  "tools": [
+    {
+      "name": "list_memos",
+      "title": "List Memos",
+      "description": "List the user's Wisply recordings (memos), newest first. Read-only. Returns id, title, timestamps, duration, and a short summary when insights exist.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "description": "Maximum memos to return (1-100). Default 20.",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "offset": {
+            "type": "integer",
+            "description": "Number of memos to skip for paging. Default 0.",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "annotations": {
+        "title": "List Memos",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "search_transcripts",
+      "title": "Search Transcripts",
+      "description": "Search recording titles, summaries, and transcripts for a phrase. Read-only. Returns matching memos with a short excerpt around the first hit. Scans only the newest 500 memos.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Phrase to look for (case-insensitive)."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Maximum matches to return (1-50). Default 10.",
+            "minimum": 1,
+            "maximum": 50
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "query"
+        ]
+      },
+      "annotations": {
+        "title": "Search Transcripts",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "get_live_transcript",
+      "title": "Get Live Transcript",
+      "description": "Return the transcript of the recording currently in progress, plus its state and duration. Read-only. Empty when nothing is recording; never starts a recording.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "annotations": {
+        "title": "Get Live Transcript",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "get_action_items",
+      "title": "Get Action Items",
+      "description": "Return the AI-generated action items and open questions for a memo (default: the newest memo that has insights), plus the follow-up proposals currently waiting for the user in Wisply. Read-only: never creates, confirms or runs anything.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "memo_id": {
+            "type": "string",
+            "description": "Memo id from list_memos. Defaults to the newest memo with insights."
+          }
+        },
+        "additionalProperties": false
+      },
+      "annotations": {
+        "title": "Get Action Items",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    }
+  ]
+}

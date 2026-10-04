@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "wisply": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/bridge.mjs"],
+      "env": { "WISPLY_PLUGIN_TOKEN": "${user_config.wisply_mcp_token}" }
+    }
+  }
+}
