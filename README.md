@@ -206,7 +206,7 @@ claude plugin test .            # the mod's tests in Claude Code's mod runtime
 claude plugin eval .            # eval cases against mocked Wisply tools (calls the model)
 ```
 
-The tests use synthetic data only. The loopback tests start a mock server on `127.0.0.1:51771` and skip themselves if that port is in use, so a running Wisply app isn't disturbed. Other HTTP tests use ports the system assigns. A test also fails if any file in the package holds invisible or text-direction characters.
+The eval cases in `evals/` are synthetic and mock the `wisply` server from `evals/mocks/wisply/`, so an eval run never starts the bridge, needs a token or contacts Wisply; it does call the model on your account. The tests use synthetic data only. The loopback tests start a mock server on `127.0.0.1:51771` and skip themselves if that port is in use, so a running Wisply app isn't disturbed. Other HTTP tests use ports the system assigns. A test also fails if any file in the package holds invisible or text-direction characters.
 
 Layout: `bridge.mjs` is the MCP server, `lib/identity.mjs` is its identity check (used only by the bridge), `lib/shared.mjs` holds the pure helpers that the bridge and the mod share (endpoint, tool descriptions, token checks, status text, excerpt quoting), `hooks/register.tsx` is the mod, `types/index.d.ts` declares the mod's state, `skills/wisply/SKILL.md` is the skill, `tests/` holds the mod's tests and `evals/` the eval cases.
 
