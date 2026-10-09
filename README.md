@@ -114,6 +114,18 @@ When it checks: not at all until you use Wisply in a session, that is, until you
 
 How it works: the mod has no network access of its own. It calls `get_live_transcript` through the plugin's own `wisply` MCP server, so the same address, token checks, identity check and timeouts apply.
 
+### What the mod calls, reads and sends
+
+- **Tools it calls on its own:** only `get_live_transcript`, on this plugin's own `wisply` MCP server, through `$.mcp.connect` and `$.mcp.call`, with no arguments. It calls it when you run `/wisply-status` or `/wisply-quote`, when you press the quote button, and for the background status checks described above, which start only after you've used Wisply in the session. It calls no other tool and runs no shell command, process, agent or subagent.
+- **What it fetches:** that one tool result, from the Wisply app on `127.0.0.1:51771`, by way of the plugin's bridge, which runs the identity check and adds the token. Nothing else is fetched.
+- **What it reads:** that tool result and its own two options (`live_status`, `quote_words`). Its `tool.call` hook sees the plugin's own four Wisply tool calls when Claude makes them, and uses only whether each succeeded. It doesn't read your messages, files or other tools' results.
+- **What it sends, and where:**
+  - to the Wisply app on this Mac: the `get_live_transcript` request above;
+  - to your prompt box: the labelled excerpt, only when you press the quote button or run `/wisply-quote` (`$.prompt.fill`; it is never submitted);
+  - to the conversation: the `/wisply-status` result, state and duration only;
+  - to the status line, the band and toasts: state, duration and word count.
+- **Its hooks:** `session.start` registers `/wisply-quote` and `/wisply-status`; `command.run` handles those two commands; `tool.call`, limited to this plugin's four Wisply tools, passes each call through unchanged and starts the status checks after one succeeds; `ui.render` for the area above the prompt draws the band while Wisply is recording or paused and otherwise leaves that area to Claude Code. No hook blocks, rewrites or approves a tool call, a prompt or a permission request.
+
 Options, in `/plugin` (Installed > Wisply Local Connector > Configure) or `claude plugin configure <id>`:
 
 | Option | Default | Effect |

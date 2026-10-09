@@ -1,7 +1,7 @@
 {
   "name": "wisply-local",
   "displayName": "Wisply Local Connector",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Read-only access to your Wisply memos, transcript excerpts, live transcript and action items from Claude Code on the Mac running Wisply, plus a status line and quote button for live recordings. Talks only to the Wisply app on 127.0.0.1.",
   "author": {
     "name": "Alex Fallah",
