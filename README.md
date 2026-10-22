@@ -8,17 +8,21 @@ talking to Wisply before it uses your token, and needs no account.
 
 > **Status: not released yet.** This package isn't on npm, and the name
 > `@wisply/mcp` is a placeholder until it is (the `wisply` npm organization
-> doesn't exist yet). Its contract with the Wisply app is provisional
-> (transcribed from the app's tool catalog), so `package.json` is marked
-> `"private"`, which makes `npm publish` refuse it, and
-> `WISPLY_RELEASE=1 npm test` fails. Until the name is Wisply's on npm
-> (`PACKAGE_NAME_FINAL` in `lib/constants.mjs`), the connector's own messages
-> never name it: errors in your AI app point at `WISPLY_MCP_TOKEN`, and
-> terminal messages say `wisply-mcp setup`, `wisply-mcp print-config` and so
-> on (from a checkout: `node bin/wisply-mcp.mjs setup`). For the same reason
-> `print-config <app>` and `install` print and add nothing yet (exit 1): every
-> setup runs the connector through `npx`, from a name that isn't Wisply's on
-> npm yet. The `npx` commands below are what the first release will print.
+> doesn't exist yet). Nobody owns that name on npm yet, so don't run the
+> `npx` commands below before the first release: until Wisply owns the name,
+> whoever registers it first would receive the token you type into `setup`.
+> The contract with the Wisply app is provisional (transcribed from the
+> app's tool catalog). `package.json` stays `"private"`, which makes
+> `npm publish` refuse it, until the contract is final and the name is
+> Wisply's, and `WISPLY_RELEASE=1 npm test` fails. Until the name is Wisply's
+> on npm (`PACKAGE_NAME_FINAL` in `lib/constants.mjs`), the connector's own
+> messages never name it: errors in your AI app point at `WISPLY_MCP_TOKEN`,
+> and terminal messages say `wisply-mcp setup`, `wisply-mcp print-config` and
+> so on (from a checkout: `node bin/wisply-mcp.mjs setup`). For the same
+> reason `print-config <app>` and `install` print and add nothing yet (exit
+> 1): every setup runs the connector through `npx`, from a name that isn't
+> Wisply's on npm yet. The `npx` commands below are what the first release
+> will print.
 
 ## What you need
 
@@ -190,6 +194,14 @@ and setup says so. Setup then reads the item back once:
   access (recording control and follow-ups) to every AI app on this Mac that
   starts the connector without its own `WISPLY_MCP_TOKEN`, and setup and
   status say so.
+- A recording-control token (`wspr_...`) is kept, and setup and status say
+  what that means: every AI app on this Mac that starts the connector without
+  its own `WISPLY_MCP_TOKEN` can then start and stop recordings whenever
+  Wisply's **Allow agents to start and stop recordings** is on (turning it on
+  for one app, such as Raycast, turns it on for all of them) and propose
+  follow-ups. If only one app should control recordings, give that app the
+  recording token through its own secret storage instead, and keep the
+  read-only connector token in the keychain.
 - Anything that isn't a Wisply token is removed again.
 - A kept token gets the identity check, and setup says what it found:
   "Stored. Wisply answered on 127.0.0.1:51771 and proved it holds this token
@@ -483,9 +495,11 @@ and skip (the change reaches the fixture through the re-vendor once it is on
   `released: true`; the Mac QA of `install` runs from the release change's
   checkout, where both flags are already `true`.
 - `docs/release-checks.json` records the checks no file here can prove (the
-  Mac port test, the MCP Registry namespace); `WISPLY_RELEASE=1 npm test`
-  fails until they are recorded. `docs/design-differences.md` lists where this
-  repository departs from the distribution design. Neither is in the package.
+  Mac port test, the MCP Registry namespace, Wisply's npm name);
+  `WISPLY_RELEASE=1 npm test` fails until they are recorded, and
+  `PACKAGE_NAME_FINAL` follows the npm name's record (`tests/pack.test.mjs`).
+  `docs/design-differences.md` lists where this repository departs from the
+  distribution design. Neither is in the package.
 - `tests/fixtures/fake-wisply.mjs` is a synthetic Wisply for local runs:
   `node tests/fixtures/fake-wisply.mjs` prints its port and synthetic tokens.
 - `install` is tested against a temporary `HOME` and a temporary `PATH`

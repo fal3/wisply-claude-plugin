@@ -34,14 +34,16 @@ All notable changes to `@wisply/mcp` are listed here. Versions follow
   `/usr/bin/security`), so the token never passes through the connector's
   arguments or output. Setup reads it back once, removes a full-access token
   unless `--full-access` and anything that isn't a Wisply token, and runs the
-  identity check on what it keeps. A stored full-access token comes with a
-  note that it reaches every AI app without its own token. It needs a
-  terminal.
+  identity check on what it keeps. A stored full-access or recording-control
+  token comes with a note that it reaches every AI app without its own token
+  (full access, or starting and stopping recordings while Wisply allows
+  agents to). It needs a terminal.
 - `status`: where the token comes from (environment or Keychain, and whether
   a placeholder was ignored), its scope, the port (also without a token),
   whether Wisply answered and proved it holds the token (or answered that it
   couldn't read its own tokens from the Keychain), and the tool count ("none"
-  for `--read-only` with a recording-control token). It never prints the
+  for `--read-only` with a recording-control token), with the same note for a
+  full-access or recording-control token in the keychain. It never prints the
   token.
 - `forget`: removes the Keychain item, every copy in the keychain search
   list. It ignores `WISPLY_MCP_PORT`. Off macOS there is nothing saved (setup
@@ -106,8 +108,12 @@ All notable changes to `@wisply/mcp` are listed here. Versions follow
   writes anything, and refuses a missing file or a contract the connector
   can't load.
 - `WISPLY_RELEASE=1 npm test` also requires the release checks in
-  `docs/release-checks.json` (the Mac port test, the MCP Registry namespace)
-  and a destructive `setup_claude` in the contract.
+  `docs/release-checks.json` (the Mac port test, the MCP Registry namespace,
+  Wisply's npm name), `PACKAGE_NAME_FINAL` with no `"private"` in
+  `package.json`, and a destructive `setup_claude` in the contract.
+  `PACKAGE_NAME_FINAL` follows the recorded npm name (`npm_scope`), never the
+  contract, so re-vendoring the contract can't make the connector's messages
+  name an npm package nobody owns yet.
 
 ### Added outside the npm package
 
@@ -161,25 +167,27 @@ These live in the repository, not in the package:
 the distribution design, for the bridge (exact versions, `--prefix /`, the
 Keychain and scope texts, the release checks), for setup, status and
 forget (no package name before it is Wisply's, `SETUP_MALFORMED`, replace
-instead of update, every copy removed, the full-access note, `forget` off
-macOS, exit codes), for print-config and install (npx's flags in the
-argument list, `"published"`, the extra fields, the app list, the absolute
-program path, no Zed edit, the shared Cline file, the splice, the masked
-backup, nothing before the release, `--port` only, re-running install, the
-kept fields, the disclosure) and for the plugins, extensions and the bundle
-(the standard entry on every install surface, the skill's text, the registry
-name, the registry entry's `runtimeArguments`, the `/wisply:live` hedge,
-the separate cloud plugin, the bundle's tools, token fields and icon, two
-release assets, the release build and its gate, git installs and `main`), so
-they can be folded into the spec.
+instead of update, every copy removed, the full-access and recording notes,
+`forget` off macOS, exit codes, the impostor in manual QA 2), for
+print-config and install (npx's flags in the argument list, `"published"`,
+the extra fields, the app list, the absolute program path, no Zed edit, the
+shared Cline file, the splice, the masked backup, nothing before the
+release, `--port` only, re-running install, the kept fields, the disclosure)
+and for the plugins, extensions and the bundle (the standard entry on every
+install surface, the skill's text, the registry name, the registry entry's
+`runtimeArguments`, the `/wisply:live` hedge, the separate cloud plugin, the
+bundle's tools, token fields and icon, two release assets, the release build
+and its gate, git installs and `main`), so they can be folded into the spec.
 
 ### Not yet
 
-- The contract is provisional (transcribed from Wisply's tool catalog), so
-  `package.json` is `"private"` and npm refuses to publish it until the
-  contract is re-vendored from wisply-ai. `WISPLY_RELEASE=1 npm test` fails
-  on purpose until then and until `docs/release-checks.json` records the
-  release checks (DIST-M5); the ordinary `npm test` checks that it does.
+- The contract is provisional (transcribed from Wisply's tool catalog), and
+  the npm name isn't Wisply's yet, so `package.json` is `"private"` and npm
+  refuses to publish it until the contract is re-vendored from wisply-ai
+  (DIST-M5) and `npm_scope` is recorded (Alex, after the npm organization
+  exists). `WISPLY_RELEASE=1 npm test` fails on purpose until then and until
+  `docs/release-checks.json` records the other release checks; the ordinary
+  `npm test` checks that it does.
 - The bundle's `fileSha256` in `server.json` is a placeholder until the
   release asset exists; `WISPLY_REGISTRY_RELEASE=1 npm test` refuses it, and
   refuses any hash without `WISPLY_MCPB_FILE`.

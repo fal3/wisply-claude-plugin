@@ -89,9 +89,10 @@ spec text. Not shipped in the npm package.
   (`Docs/mcp-contract.json` lands at `contract/mcp-contract.json`). The
   extension's `vendor/SOURCE.json` should use the same shape.
 - **`"private": true` in `package.json`.** Not in the design's package.json
-  row. It is true exactly while the contract is provisional
-  (`tests/pack.test.mjs`), so `npm publish` refuses the package without
-  running any script; removing it is the explicit release step.
+  row. It is true exactly while the contract is provisional or the package
+  name isn't final (`tests/pack.test.mjs`), so `npm publish` refuses the
+  package without running any script; removing it is the explicit release
+  step once both hold.
 - **`lib/contract-shape.mjs`.** Not in the design's tree. The shape check
   (`contractProblems`) moved out of `lib/contract.mjs`, which throws at
   import on a broken vendored contract, so `scripts/sync-vendor.mjs` can
@@ -124,9 +125,13 @@ spec text. Not shipped in the npm package.
   for the Wisply commit the contract is vendored from (Wisply sets
   `allowLocalEndpointReuse = true`, so the identity check's assumption that
   Wisply holds its port alone must be shown on a Mac, or the app must bind
-  exclusively), and (2) `registry_namespace`, the MCP Registry verification
+  exclusively), (2) `registry_namespace`, the MCP Registry verification
   of `MCP_NAME` (`ai.wisply/local` needs DNS or HTTP proof on wisply.ai;
-  the fallback is `io.github.fal3/wisply-mcp`), and while the vendored
+  the fallback is `io.github.fal3/wisply-mcp`), and (3) `npm_scope`, that
+  the npm organization `@wisply` (or, for the fallback name, `wisply-mcp`)
+  is Wisply's with two-factor authentication required and `wisply-mcp` held
+  too (Grok packet G-NPM), with `PACKAGE_NAME_FINAL` true and `"private"`
+  gone from `package.json`; and while the vendored
   contract marks `setup_claude` `destructiveHint: false` (it replaces the
   Anthropic key stored in Wisply; the fix belongs in wisply-ai's
   `MCPToolCatalog.swift`, and `stop_recording` may deserve the same).
@@ -135,8 +140,15 @@ spec text. Not shipped in the npm package.
 ## setup, status and forget (DIST-M2)
 
 - **No package name before it is Wisply's.** `PACKAGE_NAME_FINAL` in
-  `lib/constants.mjs` (false; `tests/pack.test.mjs` ties it to
-  `!package.json "private"`) gates every command the connector names. While
+  `lib/constants.mjs` (false) gates every command the connector names.
+  `tests/pack.test.mjs` ties it to `npm_scope.verified` in
+  `docs/release-checks.json`, which Alex sets once the npm organization is
+  his, not to the contract or to `"private"`: re-vendoring the contract
+  (DIST-M5) must not make tool texts name an npm package nobody owns yet. The
+  README's status note tells readers not to run its `npx` commands before the
+  first release while the name isn't final (`tests/pack.test.mjs`), and
+  SECURITY.md's release control 1 counts this repository going public, or
+  its README going to a catalog, as naming the package. While
   it is false, `SETUP`, `MALFORMED` and `NOT_WISPLY` in tool results (which
   the model also reads) use the interim wording that names only
   `WISPLY_MCP_TOKEN`, and terminal texts (setup, status, forget, argument
@@ -176,9 +188,37 @@ spec text. Not shipped in the npm package.
   token (a prefix with hex, or 16+ hex characters) gets the fixed
   `TOKEN_AS_ARGUMENT` text and is never echoed, not even in part, because AI
   apps keep the connector's stderr in their log files.
-- **Full-access note.** `setup --full-access` (`FULL_ACCESS_SHARED`) and
-  `status` with a full-access keychain item say that every AI app without its
-  own token gets full access.
+- **Full-access and recording notes.** `setup --full-access`
+  (`FULL_ACCESS_SHARED`) and `status` with a full-access keychain item say
+  that every AI app without its own token gets full access. A recording-control
+  token in the keychain reaches the same apps, so `setup` with one
+  (`RECORDING_SHARED`) and `status` with one (`STATUS.recordingShared`) say
+  that every such app can start and stop recordings while Wisply allows
+  agents to, and propose follow-ups. Unlike `wsp_`, a `wspr_` token needs no
+  flag: the design's D5 gates only `wsp_`, the token is labelled as recording
+  control in Wisply, and start and stop also need Wisply's own switch. Whether
+  `setup` should also require a `--recording` flag is left to the spec (the
+  VS Code extension's "Store Token in the Mac Keychain" runs `setup` without
+  flags, so it would need the same change).
+- **`print-config` and `install` in this build.** They answer
+  `notInThisBuild`: "wisply-mcp: "{command}" isn't in this build yet. Add the
+  standard entry from the guide (https://www.wisply.ai/docs/mcp/install) to
+  your AI app, then run `{setup command}` once (wisply-mcp --help)." (exit
+  1), not the earlier advice to set `WISPLY_MCP_TOKEN` in the app's settings,
+  which steered people to put a token in a config file. DIST-M4 replaces both
+  commands.
+- **Manual QA 2's impostor (for DIST-A2's `Docs/NEXT_CUT_QA.md`).** The
+  design runs a bare `nc -l 51771` and expects `NOT_WISPLY`. `nc -l` accepts
+  the connection and never answers, so the identity check runs out its 3 s
+  and the outcome is `unavailable` ("Wisply: not answering on
+  127.0.0.1:51771", `UNAVAILABLE`): a listener that stays silent can't be
+  told apart from a Wisply that hangs, and the token is kept back either way,
+  so the connector keeps that mapping. The QA step uses an impostor that
+  answers instead: `printf 'HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}' | nc -l 51771`
+  or `echo garbage | nc -l 51771` both give `NOT_WISPLY` with a connector or
+  a recording token (reproduced against `status` with OpenBSD netcat), and
+  the request `nc` prints has no `Authorization` header. SECURITY.md's manual
+  QA list has the step.
 - **`forget` off macOS.** The design leaves it open. `forget` prints its own
   text (`nothingSavedOffMac`: "This connector saves a token only in the macOS
   Keychain, and this computer runs {platform}, so there's nothing to

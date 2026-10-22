@@ -473,6 +473,15 @@ test('no message sends users to a command this build doesn\'t have', () => {
     }
   }
   assert.equal(messages.SETUP.includes(messages.SETUP_COMMAND), messages.TOOL_TEXTS_NAME_SETUP);
+  // A command of a later release points at what this build has (the guide's standard entry, then setup), and
+  // never at putting the token in an app's config file.
+  for (const command of PLANNED_COMMANDS) {
+    assert.equal(messages.notInThisBuild(command), `wisply-mcp: "${command}" isn't in this build yet. Add the standard ` +
+      `entry from the guide (https://www.wisply.ai/docs/mcp/install) to your AI app, then run \`${messages.SETUP_COMMAND}\` ` +
+      'once (wisply-mcp --help).');
+    assert.doesNotMatch(messages.notInThisBuild(command), /WISPLY_MCP_TOKEN/);
+    for (const other of PLANNED_COMMANDS) assert.ok(!messages.notInThisBuild(command).includes(`wisply-mcp ${other}`));
+  }
 });
 
 test('until the package name is final, no text an AI app shows names the package, and no text runs npx', () => {
@@ -488,8 +497,9 @@ test('until the package name is final, no text an AI app shows names the package
   const terminalTexts = [
     messages.HELP, messages.SETUP_COMMAND, messages.FORGET_COMMAND, messages.STATUS_COMMAND, messages.FULL_ACCESS_REFUSED,
     messages.SETUP_NEEDS_TERMINAL, messages.KEYCHAIN_NOT_STORED, messages.SETUP_MALFORMED, messages.READ_BACK_FAILED,
-    messages.REPLACE_FAILED, messages.PREVIOUS_REMOVED, messages.FULL_ACCESS_SHARED, messages.removeFailed('full-access'),
-    messages.removeFailed('malformed'), messages.STATUS.fullAccessShared, messages.TOKEN_AS_ARGUMENT,
+    messages.REPLACE_FAILED, messages.PREVIOUS_REMOVED, messages.FULL_ACCESS_SHARED, messages.RECORDING_SHARED,
+    messages.removeFailed('full-access'), messages.removeFailed('malformed'), messages.STATUS.fullAccessShared,
+    messages.STATUS.recordingShared, messages.TOKEN_AS_ARGUMENT, ...PLANNED_COMMANDS.map((command) => messages.notInThisBuild(command)),
     messages.TERMINAL_TEXTS.SETUP, messages.TERMINAL_TEXTS.MALFORMED, messages.TERMINAL_TEXTS.notWisply(51771),
     // print-config and install (DIST-M4) name their commands the same way.
     messages.PRINT_CONFIG_COMMAND, messages.INSTALL_COMMAND, messages.appList([{ id: 'cursor', name: 'Cursor', install: true }]),
