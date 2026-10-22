@@ -206,16 +206,30 @@ spec text. Not shipped in the npm package.
   app copy sends anyone to an npm name someone else could still register.
   The first publish flips it with `"private"`, `PACKAGE_NAME_FINAL` and the
   provisional contract.
+- **Nothing renders a setup before the release, the connector included.**
+  The design has `print-config` and `install` print and write the npx entry.
+  Until `SETUPS_RELEASED` (`PACKAGE_NAME_FINAL` and `"published"`),
+  `render()` and `installPlan()` throw `NotReleasedError` for every bundler
+  of `lib/clients.mjs` (the bin, the VS Code extension's server), and
+  `print-config <app>` and `install <app>` print `SETUPS_NOT_RELEASED` and
+  exit 1 without writing a file or running an app's command; `print-config`
+  with no app still lists the apps, with a "Not yet" line. An entry written
+  before the release would run `npx -y` of an unowned name every time the
+  app starts. Tests preview the setups with `beforeRelease: true` and run the
+  CLI with `released: true`.
 - **More fields per app.** Each entry may also have `note` (one sentence
   shown under the snippet), `install` (`{"type": "command", "command"}`,
   `{"type": "add-mcp", "program", "hint"}` or `{"type": "json-file", "path",
   "key", "target"?, "path_env"?, "dir_env"?, "hint"?}`), and alternatives
-  carry their own `format`. Consumers that don't use them ignore them.
+  carry their own `format`. `path_env` names a variable that holds the file;
+  `dir_env` is an ordered list of `{"name", "path"}`, a variable that holds a
+  folder and the file's place in it. Consumers that don't use them ignore
+  them.
 - **Destinations that differ from the design's table.** Kiro is the user
   file `~/.kiro/settings/mcp.json` (the design names the workspace file);
-  the Cline entry names the extension's own list (MCP Servers > Configure >
-  Configure MCP Servers) and the CLI's
-  `~/.cline/data/settings/cline_mcp_settings.json`.
+  the Cline entry names `~/.cline/data/settings/cline_mcp_settings.json`,
+  which Cline 4.0 and later share between the extension, the CLI and the
+  JetBrains plugin.
 - **`print-config` with no app lists the apps.** The design has
   `print-config <client>` only. With no app it prints the list (apps that
   `install` handles are marked) and exits 0; an unknown app exits 2 with the
@@ -238,11 +252,36 @@ spec text. Not shipped in the npm package.
   JSONC and usually has comments, which the design's own rule ("refuses to
   touch invalid JSON") would refuse anyway, so `install zed` prints the
   snippet (exit 1), as for every app without an install.
-- **Which Cline file.** `install cline` writes the Cline CLI's
-  `~/.cline/data/settings/cline_mcp_settings.json` (or
-  `CLINE_MCP_SETTINGS_PATH`), says "Cline CLI", and prints where the
-  extension keeps its own list. GitHub Copilot CLI's file follows
-  `COPILOT_HOME`.
+- **Which Cline file.** Since Cline 4.0.0 ("Migrate legacy MCP files and
+  formats into the shared settings file"), the extension, the CLI and the
+  JetBrains plugin read one file, so `install cline` writes it and says
+  "Cline". It finds the file as Cline's `getSharedMcpSettingsPath` does
+  (cline/cline `apps/vscode/src/hosts/vscode/mcp-settings-legacy-migration.ts`,
+  checked on 2026-10-22): `CLINE_MCP_SETTINGS_PATH`, else `CLINE_DATA_DIR` +
+  `settings/cline_mcp_settings.json`, else `CLINE_DIR` (default `~/.cline`) +
+  `data/settings/cline_mcp_settings.json`. GitHub Copilot CLI's file follows
+  `COPILOT_HOME`. The first variable that is set decides; one that isn't a
+  full path (Cline doesn't expand `~` either) makes install change nothing
+  and print the snippet (exit 1), because the app would resolve it against
+  its own working folder. When a variable decides, install says so.
+- **`--port` only.** The design gives print-config and install the bridge's
+  options. Here they ignore `WISPLY_MCP_PORT` (with a note on stderr for
+  print-config, stdout for install, that never echoes the value), so a port
+  exported for a test Wisply doesn't end up in an app's settings unasked.
+  setup and status still read it, as serving does; forget takes no port.
+- **Re-running install.** For a JSON file, an entry that already matches (in
+  any key order) is "unchanged", exit 0. `claude mcp add` refuses a name it
+  already has, and install can't tell whether that entry is this one, so a
+  second `install claude-code` exits 1 with `commandEntryExists` (run
+  `claude mcp remove wisply`, then install again). `codex mcp add` and
+  `gemini mcp add` replace the entry.
+- **What install keeps of an old entry.** The design replaces
+  `mcpServers.wisply` whole. Here the old entry's `KEPT_FIELDS`
+  (`autoApprove`, `alwaysAllow`, `disabled`, `disabledTools`, `timeout`,
+  `tools`) stay unless one holds something token-shaped, so a second install
+  doesn't reset Cline's approvals or Copilot CLI's narrowed tools; every other
+  old field goes, and install names those (`Not carried over from the old
+  entry: env.`).
 - **The file change is a splice.** The design says "sets only
   `mcpServers.wisply` ... and writes atomically". Here install changes the
   text of that one entry (or appends it, laid out like its neighbours) and
@@ -258,7 +297,15 @@ spec text. Not shipped in the npm package.
   hand-pasted `wisply` entry into a new file. So install writes the backup
   itself, once, with `O_EXCL` and mode 0600, every Wisply token masked as
   `wsp...`, and says when the entry it replaced held a token in plain text
-  (regenerate it in Wisply).
+  (regenerate it in Wisply). Other servers' secrets stay in it, as in the
+  file, and install says so and to delete the backup once the app works; no
+  command removes it. The temporary file is written with mode 0600 and gets
+  the file's own mode just before the rename. A file with a second hard link
+  is refused (`hard-linked`): the rename would leave the other link with the
+  old text.
+- **Where the data goes.** print-config's hint and install's last lines say
+  that what the app reads from Wisply, transcripts included, goes to the AI
+  service it uses (`appDataNote`), as the README and SECURITY.md do.
 - **install never reads a token.** Not the environment's, not the
   Keychain's: the entry it installs reads the Keychain item at run time.
   `tests/clients.test.mjs` runs install with a token in the environment and
@@ -269,4 +316,9 @@ spec text. Not shipped in the npm package.
   until `PACKAGE_NAME_FINAL`, then `npx -y --prefix / @wisply/mcp@0.1.0 ...`
   (`PRINT_CONFIG_COMMAND`, `INSTALL_COMMAND` from `COMMAND_PREFIX`). The
   snippets themselves always show the npx entry, because they are what the
-  app runs, and their consumers wait for `"published"`.
+  app runs, and nothing renders them before the release: their consumers
+  wait for `"published"`, and the connector's own `render()` and
+  `installPlan()` for `SETUPS_RELEASED`. No template names a command: the
+  `vscode-inputs` prompt, which VS Code shows when it asks for the token,
+  says only "the token that the connector's setup saved in your login
+  keychain".

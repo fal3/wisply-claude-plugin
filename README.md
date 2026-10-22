@@ -15,8 +15,10 @@ talking to Wisply before it uses your token, and needs no account.
 > (`PACKAGE_NAME_FINAL` in `lib/constants.mjs`), the connector's own messages
 > never name it: errors in your AI app point at `WISPLY_MCP_TOKEN`, and
 > terminal messages say `wisply-mcp setup`, `wisply-mcp print-config` and so
-> on (from a checkout: `node bin/wisply-mcp.mjs setup`). The `npx` commands
-> below are what the first release will print.
+> on (from a checkout: `node bin/wisply-mcp.mjs setup`). For the same reason
+> `print-config <app>` and `install` print and add nothing yet (exit 1): every
+> setup runs the connector through `npx`, from a name that isn't Wisply's on
+> npm yet. The `npx` commands below are what the first release will print.
 
 ## What you need
 
@@ -60,7 +62,10 @@ in `~/.npmrc` still apply. Every command below uses the same flags.
 `npx -y --prefix / @wisply/mcp@0.1.0 print-config <app>` prints the setup for
 one app (on stdout, so `| pbcopy` copies just the snippet) and says where it
 goes (on stderr). `npx -y --prefix / @wisply/mcp@0.1.0 print-config` lists the
-apps. Add `--port <n>` if Wisply uses another port.
+apps. Add `--port <n>` if Wisply uses another port. `print-config` and
+`install` take the port only from `--port`: a `WISPLY_MCP_PORT` in your shell
+(for a test Wisply, say) is ignored, with a note, so it never ends up in an
+app's settings without you choosing it.
 
 `npx -y --prefix / @wisply/mcp@0.1.0 install <app>` adds the same entry for
 you, for the apps marked "yes" below. Quit the app first: an app that is open
@@ -71,14 +76,34 @@ for apps with a plain JSON settings file, it changes the text of the `wisply`
 entry and nothing else. Every other byte of the file stays as it was (its
 layout, number spellings and other servers). A file with comments, a key that
 appears twice or text that isn't UTF-8 is left alone, and you get the snippet
-to paste. Before the
-first change it saves the file as `<file>.wisply-backup`, readable only by
-you, with any Wisply token in it masked as `wsp...`. It replaces the file in
-one step, following a symlink to a dotfiles copy, and only if nothing else
-wrote the file while it worked. It never reads the token or the Keychain item,
-and never writes a token or passes one on: the app's command starts without
-`WISPLY_MCP_TOKEN` in its environment. For the other apps it prints the
-snippet to paste.
+to paste. When it
+replaces an old `wisply` entry, it keeps what the app or you set on it
+(`autoApprove`, `alwaysAllow`, `disabled`, `disabledTools`, `timeout`,
+`tools`, unless one holds something token-shaped) and names every other old
+field it didn't carry over, such as `env` or `url`. An entry that already
+matches, in any key order, is left as it is. Before the first change it saves
+the file as `<file>.wisply-backup`, readable only by you, with any Wisply
+token in it masked as `wsp...`. Other servers' keys and tokens stay in that
+copy, as they were in the file, so delete it once the app works with Wisply.
+It writes the new text to a temporary file readable only by you and replaces
+the file in one step, following a symlink to a dotfiles copy, and only if
+nothing else wrote the file while it worked. A file with a second hard link
+is left alone, because replacing it would leave the other copy as it was. It
+never reads the token or the Keychain item, and never writes a token or
+passes one on: the app's command starts without `WISPLY_MCP_TOKEN` in its
+environment. For the other apps it prints the snippet to paste.
+
+An app's own override variable decides the file, as it does for the app:
+Cline's `CLINE_MCP_SETTINGS_PATH`, then `CLINE_DATA_DIR`, then `CLINE_DIR`;
+GitHub Copilot CLI's `COPILOT_HOME`. install says when one is set, and
+refuses a value that isn't a full path (the app would resolve it against
+whatever folder it runs in). `claude mcp add` refuses a name it already has,
+so running `install claude-code` again exits 1 and says how to replace the
+entry (`claude mcp remove wisply`); `codex` and `gemini` replace it, and a
+JSON file that already has the entry exits 0.
+
+Once an app has the entry, what it reads from Wisply, transcripts included,
+goes to the AI service it uses; `print-config` and `install` say so too.
 
 | App | `<app>` | Where the setup goes | `install` |
 |---|---|---|---|
@@ -93,7 +118,7 @@ snippet to paste.
 | Gemini CLI | `gemini-cli` | `gemini mcp add --scope user wisply npx -- ...` | yes |
 | GitHub Copilot CLI | `copilot-cli` | `~/.copilot/mcp-config.json` (or `$COPILOT_HOME`) | yes |
 | Warp | `warp` | Settings > AI > Manage MCP Servers, or `/add-mcp` | |
-| Cline | `cline` | `cline_mcp_settings.json`. `install` sets up the Cline CLI (`~/.cline/data/settings/`, or `CLINE_MCP_SETTINGS_PATH`); for the Cline extension, add the entry in Cline: MCP Servers > Configure > Configure MCP Servers | yes |
+| Cline | `cline` | `~/.cline/data/settings/cline_mcp_settings.json`, which Cline 4.0 and later share between the extension, the CLI and the JetBrains plugin (or the file `CLINE_MCP_SETTINGS_PATH`, `CLINE_DATA_DIR` or `CLINE_DIR` points to); in Cline: MCP Servers > Configure > Configure MCP Servers | yes |
 | Roo Code | `roo-code` | global MCP settings, or `.roo/mcp.json` | |
 | Goose | `goose` | `~/.config/goose/config.yaml` | |
 | LM Studio | `lm-studio` | Program > Install > Edit mcp.json | |
@@ -188,10 +213,11 @@ secret. Two more commands:
   says so and succeeds.
 
 The commands exit 0 when they're done (status: a token was found and Wisply
-proved it holds it), 1 when something needs your attention (no token, Wisply
-isn't answering, or setup or status on a computer that isn't a Mac; the
-message says which), and 2 for a usage mistake, such as an unknown option or a
-token passed as an argument.
+proved it holds it; install: the entry was added, or the JSON file already had
+it), 1 when something needs your attention (no token, Wisply isn't answering,
+setup, status or install on a computer that isn't a Mac, an app's own command
+that refused; the message says which), and 2 for a usage mistake, such as an
+unknown option or app, or a token passed as an argument.
 
 What the keychain protects: it keeps the token out of config files, Settings
 Sync, dotfile repositories and backups. It doesn't stop another program
@@ -230,7 +256,7 @@ allows, and Wisply enforces the same rule.
 | Flag | Variable | Meaning |
 |---|---|---|
 | | `WISPLY_MCP_TOKEN` | The Wisply token. Empty, or an unresolved `${...}` placeholder, counts as unset, and then the token saved by `setup` is used. |
-| `--port <n>` | `WISPLY_MCP_PORT` | Wisply's MCP port, 1024-65535. Default `51771`. The host is always `127.0.0.1`. |
+| `--port <n>` | `WISPLY_MCP_PORT` | Wisply's MCP port, 1024-65535. Default `51771`. The host is always `127.0.0.1`. `print-config` and `install` use only `--port`; `forget` takes no port. |
 | `--read-only` | | Offer only the four read-only tools, whatever the token allows. |
 | `--allow-claude-setup` | `WISPLY_MCP_ALLOW_CLAUDE_SETUP=1` | Offer `setup_claude` with a full-access token. |
 | | `WISPLY_MCP_DEBUG=1` | One line per request on stderr: method, tool, outcome, HTTP status, bytes, milliseconds. Never arguments, results, transcript text or tokens. |
@@ -334,8 +360,15 @@ WISPLY_AI_DIR=../wisply-ai WISPLY_PLUGIN_DIR=../wisply-claude-plugin npm test
   the two, and `WISPLY_RELEASE=1 npm test` requires `true`).
 - Every release updates the version in `package.json`, `lib/constants.mjs`
   and every `@wisply/mcp@<version>` in `clients/mcp-clients.json`
-  (`package_spec`, `standard_entry` and the `vscode-inputs` text); the tests
-  fail while one is behind.
+  (`package_spec` and `standard_entry`); the tests fail while one is behind.
+  No template text names a command (the `vscode-inputs` prompt says only
+  "the token that the connector's setup saved in your login keychain").
+- `print-config <app>` and `install`, and `render()` and `installPlan()` in
+  `lib/clients.mjs` for anything that bundles it, refuse until the release
+  (`SETUPS_RELEASED`: `PACKAGE_NAME_FINAL` and `"published"`). The tests
+  preview them with `beforeRelease: true` and run the CLI with
+  `released: true`; the Mac QA of `install` runs from the release change's
+  checkout, where both flags are already `true`.
 - `docs/release-checks.json` records the checks no file here can prove (the
   Mac port test, the MCP Registry namespace); `WISPLY_RELEASE=1 npm test`
   fails until they are recorded. `docs/design-differences.md` lists where this

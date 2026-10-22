@@ -101,7 +101,11 @@ copies in Wisply and on wisply.ai, all from `clients/mcp-clients.json`) hold
 no token and can't: their only placeholders are the connector's arguments,
 and `tests/clients.test.mjs` refuses token prefixes, `Bearer`,
 `Authorization`, headers and direct HTTP to the port. `install` never reads
-the token or the Keychain item, and never writes a token anywhere.
+the token or the Keychain item, and never writes a token anywhere. Until the
+release, `print-config <app>` and `install` print and write nothing, and
+`render()` and `installPlan()` throw for any program that bundles
+`lib/clients.mjs`: an entry written before then would run `npx -y` of a name
+someone else could still register, every time the app starts it.
 
 - An app's own command (`claude`, `codex`, `gemini`, `code`) is found in
   `PATH`'s absolute folders only (an empty or relative entry such as `.`
@@ -113,17 +117,29 @@ the token or the Keychain item, and never writes a token anywhere.
   the `wisply` entry: every other byte stays, so other servers' values (and
   any secrets in them) are kept exactly. It refuses JSONC (comments), repeated
   keys and text that isn't UTF-8, and gives up if the file changes while it
-  works (an app saving its settings).
+  works (an app saving its settings). The new text goes to a temporary file
+  with mode 0600, which gets the file's own mode just before the rename. A
+  file with a second hard link is refused: the rename would leave the other
+  link with the old text, token included.
+- An app's override variable for its settings file (`CLINE_MCP_SETTINGS_PATH`,
+  `CLINE_DATA_DIR`, `CLINE_DIR`, `COPILOT_HOME`) counts only as a full path.
+  Anything else would be resolved against the folder install or the app runs
+  in, so install changes nothing and prints the snippet.
 - The one-time backup `<file>.wisply-backup` is a new file with mode 0600,
   and every Wisply token in it is masked (`wsp...`), so install never makes a
-  second copy of a token, even next to a file in a dotfiles repository. When
+  second copy of a token, even next to a file in a dotfiles repository.
+  Other servers' keys and tokens stay in it as they were in the file; install
+  says so, and to delete the backup once the app works. When
   the old `wisply` entry held a Wisply token in plain text (as the direct-HTTP
   setups that Wisply's own Copy buttons produce until a release switches them
   to this connector do), install replaces it and says so: regenerate the token
-  if the file was ever synced or shared.
+  if the file was ever synced or shared. Of the old entry, only fields the
+  app or you own (`autoApprove`, `disabled`, `timeout`, `tools` and the like)
+  stay, and never one that holds something token-shaped.
 
 **What your AI app does with what it reads.** Whatever the AI app reads from
 Wisply goes to the AI service that app uses, under that service's terms.
+`print-config` and `install` say so when they set an app up.
 Transcripts are recorded speech: treat them as untrusted data.
 
 **Supply chain.** The package has zero runtime dependencies and no lifecycle

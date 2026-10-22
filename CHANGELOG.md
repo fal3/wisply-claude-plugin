@@ -65,19 +65,33 @@ All notable changes to `@wisply/mcp` are listed here. Versions follow
   `clients/mcp-clients.json`, the source the Wisply app and wisply.ai copy.
   The snippet goes to stdout and where it goes to stderr; with no app, the
   list. The file says `"published": false` until the package is on npm, and
-  its copies render nothing while it does.
+  its copies render nothing while it does. Neither does the connector:
+  until the release (`SETUPS_RELEASED`), `print-config <app>` and `install`
+  print and write nothing (exit 1), and `render()` and `installPlan()` throw
+  for anything that bundles `lib/clients.mjs`. Both take the port only from
+  `--port` (a `WISPLY_MCP_PORT` in the shell is ignored, with a note), and say
+  that what the app reads from Wisply, transcripts included, goes to the AI
+  service it uses.
 - `install <app> [--port <n>]`: runs `claude mcp add`, `codex mcp add`,
   `gemini mcp add` (arguments after `--`) or `code --add-mcp`, found by
   absolute path in `PATH`'s absolute folders, with a fixed argument list and
-  without the token or relative `PATH` entries in their environment. For
-  Cursor, Windsurf, Claude Desktop, the Cline CLI and GitHub Copilot CLI it
-  changes only the text of the `wisply` entry in their JSON settings (every
-  other byte of the file stays), after a one-time `<file>.wisply-backup`
-  (mode 0600, Wisply tokens masked), with an atomic write that follows
-  symlinks and gives up if the app wrote the file meanwhile. It refuses JSONC,
-  repeated keys and non-UTF-8 text (Zed's and VS Code's JSONC settings are
-  never edited), never reads or writes a token, and warns when the entry it
-  replaced held one in plain text.
+  without the token or relative `PATH` entries in their environment; when
+  `claude mcp add` refuses because a `wisply` entry exists, install exits 1
+  and says how to replace it. For Cursor, Windsurf, Claude Desktop, Cline
+  (4.0 and later share one file between the extension, the CLI and the
+  JetBrains plugin; `CLINE_MCP_SETTINGS_PATH`, `CLINE_DATA_DIR` and
+  `CLINE_DIR` are followed as Cline follows them) and GitHub Copilot CLI
+  (`COPILOT_HOME`) it changes only the text of the `wisply` entry in their
+  JSON settings (every other byte of the file stays), keeps the old entry's
+  own `autoApprove`, `disabled`, `timeout`, `tools` and similar fields and
+  names the fields it drops, after a one-time `<file>.wisply-backup` (mode
+  0600, Wisply tokens masked; install says it still holds other servers'
+  secrets), with an atomic write through a private temporary file that
+  follows symlinks and gives up if the app wrote the file meanwhile. It
+  refuses JSONC, repeated keys, non-UTF-8 text, hard-linked files and
+  override variables that aren't full paths (Zed's and VS Code's JSONC
+  settings are never edited), never reads or writes a token, and warns when
+  the entry it replaced held one in plain text.
 - Snippets and every command in the docs and messages run the exact version
   with `npx -y --prefix / @wisply/mcp@0.1.0`: the version can't change under
   you, and `--prefix /` stops npx from running a copy of the package (or
@@ -104,8 +118,9 @@ forget (no package name before it is Wisply's, `SETUP_MALFORMED`, replace
 instead of update, every copy removed, the full-access note, `forget` off
 macOS, exit codes) and for print-config and install (npx's flags in the
 argument list, `"published"`, the extra fields, the app list, the absolute
-program path, no Zed edit, the Cline CLI file, the splice, the masked
-backup), so they can be folded into the spec.
+program path, no Zed edit, the shared Cline file, the splice, the masked
+backup, nothing before the release, `--port` only, re-running install, the
+kept fields, the disclosure), so they can be folded into the spec.
 
 ### Not yet
 
