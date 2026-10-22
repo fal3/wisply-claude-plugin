@@ -1,7 +1,9 @@
-// Checks for the Codex build of this plugin: the Codex marketplace, the Codex
-// manifest and MCP configuration, the Codex skill, the Keychain read and the
-// Codex entry point. Synthetic data only; nothing here contacts port 51771 or
-// reads a real Keychain.
+// Checks for the Codex build of this plugin: the Codex manifest and MCP
+// configuration, the Codex skill, the Keychain read and the Codex entry point.
+// The Codex marketplace (.agents/plugins/marketplace.json) and the README's
+// Codex install lines are checked with the Claude Code marketplace in
+// marketplace.test.mjs. Synthetic data only; nothing here contacts port 51771
+// or reads a real Keychain.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
@@ -35,7 +37,6 @@ import {
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const readJson = (path) => JSON.parse(readFileSync(join(ROOT, path), 'utf8'));
-const codexMarketplace = readJson('.agents/plugins/marketplace.json');
 const claudeMarketplace = readJson('.claude-plugin/marketplace.json');
 const plugin = readJson('.claude-plugin/plugin.json');
 const codexPlugin = readJson('.codex-plugin/plugin.json');
@@ -46,14 +47,6 @@ const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
 const TOKEN = 'wsp_' + '8d'.repeat(32);
 const CONNECTOR = 'wspc_' + '9e'.repeat(32);
 const PORT = 51771;
-const KEBAB = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-const RELEASE_TAG = /^v\d+\.\d+\.\d+$/;
-const COMMIT_SHA = /^[0-9a-f]{40}$/;
-// Wisply's own Codex marketplace (fal3/wisply-mcp, the Agent Plugin) is
-// named `wisply`, and Codex refuses a second marketplace with a name it
-// already has. This repository's Codex marketplace takes another name, so a
-// person can add both.
-const AGENT_PLUGIN_MARKETPLACE = 'wisply';
 
 const request = (method, params = {}) => ({jsonrpc: '2.0', id: 'synthetic-codex', method, params});
 const refuse = () => { throw new Error('must not contact the app'); };
@@ -63,12 +56,6 @@ const identityBody = (nonce, full = TOKEN) => ({
   proofs: {full: expectedProof(full, PORT, nonce).toString('hex'), connector: expectedProof(CONNECTOR, PORT, nonce).toString('hex')},
 });
 const proving = (full) => async ({nonce}) => ({status: 200, text: JSON.stringify(identityBody(nonce, full))});
-
-function repoName(url) {
-  const match = /^https:\/\/github\.com\/[A-Za-z0-9-]+\/([A-Za-z0-9._-]+)$/.exec(url);
-  assert.ok(match, `a plain GitHub URL: ${url}`);
-  return match[1];
-}
 
 // A manifest path Codex accepts: "./" plus a normalized path inside the plugin root.
 function pluginPath(path, label) {
@@ -89,34 +76,6 @@ function fakeSecurity(answer) {
   };
   return Object.assign(run, {calls});
 }
-
-test('the Codex marketplace has its own name, so Wisply\'s Agent Plugin marketplace can be added beside it', () => {
-  assert.deepEqual(Object.keys(codexMarketplace).filter((key) => !['name', 'interface', 'plugins'].includes(key)), []);
-  assert.match(codexMarketplace.name, KEBAB);
-  assert.notEqual(codexMarketplace.name, AGENT_PLUGIN_MARKETPLACE);
-  assert.equal(codexMarketplace.name, repoName(plugin.repository), 'named after this repository');
-  // Claude Code reads only .claude-plugin/marketplace.json, where the name stays `wisply`.
-  assert.equal(claudeMarketplace.name, 'wisply');
-  assert.equal(typeof codexMarketplace.interface?.displayName, 'string');
-});
-
-test('the Codex marketplace lists this plugin from the repository root, and pins anything else', () => {
-  const own = codexMarketplace.plugins.filter((entry) => entry.source === './');
-  assert.equal(own.length, 1, 'this plugin, once');
-  assert.equal(own[0].name, plugin.name);
-  assert.equal(own[0].category, 'Productivity');
-  for (const entry of codexMarketplace.plugins.filter((item) => item.source !== './')) {
-    // A plugin from another Wisply repository must pin a release tag and its
-    // full commit, so Codex never installs an unreviewed default branch.
-    assert.match(entry.name ?? '', KEBAB);
-    assert.notEqual(entry.name, plugin.name);
-    assert.equal(entry.source?.source, 'url', `${entry.name}: a remote source`);
-    assert.match(entry.source.url, /^https:\/\/github\.com\/fal3\/[A-Za-z0-9._-]+$/);
-    assert.notEqual(repoName(entry.source.url), repoName(plugin.repository));
-    assert.match(entry.source.ref ?? '', RELEASE_TAG, `${entry.name}: pinned to a release tag`);
-    assert.match(entry.source.sha ?? '', COMMIT_SHA, `${entry.name}: pinned to the tag's full commit`);
-  }
-});
 
 test('the Codex manifest is this plugin, with Codex\'s skill, server and no hooks', () => {
   // Codex reads .codex-plugin/plugin.json before .claude-plugin/plugin.json.
@@ -362,18 +321,5 @@ test('codex/bridge.mjs speaks stdio and, without a Keychain item, answers with C
     assert.ok(!output.includes(TOKEN));
   } finally {
     rmSync(home, {recursive: true, force: true});
-  }
-});
-
-test('the README gives the Codex install lines with this marketplace\'s Codex name', () => {
-  const slug = 'fal3/' + repoName(plugin.repository);
-  for (const line of [
-    `codex plugin marketplace add ${slug}`,
-    `codex plugin add ${plugin.name}@${codexMarketplace.name}`,
-    `codex plugin remove ${plugin.name}@${codexMarketplace.name}`,
-    `codex plugin marketplace remove ${codexMarketplace.name}`,
-    `codex plugin marketplace upgrade ${codexMarketplace.name}`,
-  ]) {
-    assert.ok(readme.includes(line), `README.md is missing: ${line}`);
   }
 });
