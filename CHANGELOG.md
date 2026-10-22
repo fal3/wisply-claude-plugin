@@ -40,7 +40,11 @@ All notable changes to `@wisply/mcp` are listed here. Versions follow
   ("none" for `--read-only` with a recording-control token). It never prints
   the token.
 - `forget`: removes the Keychain item, every copy in the keychain search
-  list. It ignores `WISPLY_MCP_PORT`.
+  list. It ignores `WISPLY_MCP_PORT`. Off macOS there is nothing saved (setup
+  refuses there), so it says so and exits 0.
+- Exit codes for setup, status and forget: 0 done (status: a token was found
+  and Wisply proved it holds it), 1 a problem the message names, 2 a usage
+  mistake (an unknown option, a token passed as an argument).
 - `security` runs with the environment minus every `WISPLY_MCP_*` variable.
 - An argument or `WISPLY_MCP_PORT` that looks like a token is refused with a
   fixed message that shows none of it.
@@ -85,6 +89,16 @@ All notable changes to `@wisply/mcp` are listed here. Versions follow
 - **Full-access note.** `setup --full-access` (`FULL_ACCESS_SHARED`) and
   `status` with a full-access keychain item say that every AI app without its
   own token gets full access.
+- **`forget` off macOS.** The design leaves it open. `forget` prints its own
+  text (`nothingSavedOffMac`: "This connector saves a token only in the macOS
+  Keychain, and this computer runs {platform}, so there's nothing to
+  remove.") and exits 0, instead of `NOT_MAC` and exit 1: setup refuses off
+  macOS, so no saved copy can exist. `setup` and `status` keep `NOT_MAC` and
+  exit 1 there, as the design says for status.
+- **`WISPLY_RELEASE=1 npm test` fails on purpose until DIST-M5.** Exactly one
+  test fails ("a provisional contract is never released"), and the ordinary
+  `npm test` checks that it does. It belongs to the release check (DIST-M5),
+  not to `npm run check`.
 
 ### Not yet
 

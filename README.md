@@ -117,7 +117,15 @@ secret. Two more commands:
 - `npx -y @wisply/mcp@0.1.0 forget` removes the saved token, every copy of it
   in your keychains. It ignores `WISPLY_MCP_PORT`. Connectors that are already
   running keep the token until their app restarts them; regenerating the
-  token in Wisply cuts every app off at once.
+  token in Wisply cuts every app off at once. On another system there is no
+  saved token (setup only saves one on a Mac), so forget says so and
+  succeeds.
+
+The commands exit 0 when they're done (status: a token was found and Wisply
+proved it holds it), 1 when something needs your attention (no token, Wisply
+isn't answering, or setup or status on a computer that isn't a Mac; the
+message says which), and 2 for a usage mistake, such as an unknown option or a
+token passed as an argument.
 
 What the keychain protects: it keeps the token out of config files, Settings
 Sync, dotfile repositories and backups. It doesn't stop another program

@@ -511,11 +511,18 @@ test('forget removes the item, says when there was none, and reports a failure',
   const shadowed = harness({ item: CONNECTOR, env: { WISPLY_MCP_TOKEN: CONNECTOR } });
   assert.equal(await run(['forget'], shadowed), 0);
   assert.deepEqual(shadowed.lines, [messages.FORGOTTEN, messages.ENV_UNCHANGED]);
-  const linux = harness({ platform: 'win32', item: CONNECTOR });
-  assert.equal(await run(['forget'], linux), 1);
-  assert.deepEqual(linux.lines, [messages.notMac('win32')]);
+  // Off macOS setup never stores anything, so there is nothing to remove: done, exit 0.
+  const windows = harness({ platform: 'win32', item: CONNECTOR });
+  assert.equal(await run(['forget'], windows), 0);
+  assert.deepEqual(windows.lines, [messages.nothingSavedOffMac('win32')]);
+  assert.equal(windows.keychain.deletes, 0);
+  const linux = harness({ platform: 'linux', env: { WISPLY_MCP_TOKEN: CONNECTOR, WISPLY_MCP_PORT: 'eighty' } });
+  assert.equal(await run(['forget'], linux), 0);
+  assert.deepEqual(linux.lines, [messages.nothingSavedOffMac('linux'), messages.ENV_UNCHANGED]);
+  assert.deepEqual(linux.errors, []);
   assert.equal(linux.keychain.deletes, 0);
-  for (const h of [removed, none, shadowed]) assert.equal(h.keychain.reads, 0, 'forget never reads the token');
+  assert.match(messages.nothingSavedOffMac('linux'), /runs Linux, so there's nothing to remove\.$/);
+  for (const h of [removed, none, shadowed, windows, linux]) assert.equal(h.keychain.reads, 0, 'forget never reads the token');
 });
 
 test('forget removes every copy in the search list, and never reports a copy it left as gone', async () => {
@@ -729,12 +736,14 @@ test('bin: setup without a terminal changes nothing (on macOS it never reaches s
   assert.equal(result.stderr, '');
 });
 
-test('bin: forget and status off macOS say so', {
+test('bin: forget and status off macOS say so (forget has nothing to remove: exit 0; status: exit 1)', {
   skip: process.platform === 'darwin' ? 'would run the real /usr/bin/security against your login keychain' : false,
 }, async () => {
-  const forget = await bin(['forget']);
-  assert.equal(forget.code, 1);
-  assert.equal(forget.stdout, `${messages.notMac(process.platform)}\n`);
+  // A stale WISPLY_MCP_PORT doesn't stop forget (it takes no port).
+  const forget = await bin(['forget'], { env: { WISPLY_MCP_PORT: 'eighty' } });
+  assert.equal(forget.code, 0, forget.stdout + forget.stderr);
+  assert.equal(forget.stdout, `${messages.nothingSavedOffMac(process.platform)}\n`);
+  assert.equal(forget.stderr, '');
   const status = await bin(['status']);
   assert.equal(status.code, 1);
   assert.equal(status.stdout.trim().split('\n').at(-1), messages.notMac(process.platform));
