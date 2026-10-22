@@ -204,13 +204,39 @@ spec text. Not shipped in the npm package.
   move with the constants. The Agent Plugin, the Gemini extension and the
   bundle run their own copy with `node`, never `npx`, so their server entries
   are unchanged.
-- **The skill keeps the design's text.** `skills/wisply-memos/SKILL.md` is
-  the design's exact text. Its `compatibility` line names the connector by
-  its bare package name, as a description rather than a command to run, and
-  has no version, so the skill doesn't change with every release. The VS
-  Code extension (DIST-V2) and wisply.ai (DIST-W1) vendor it byte for byte;
-  if the spec wants the standard entry there too, it changes in all three at
-  once.
+- **The registry entry carries npx's flags.** The design's `server.json`
+  npm package has no `runtimeArguments`. Apps that install from the MCP
+  Registry build the command from the entry themselves: VS Code's gallery
+  (`mcpManagementService.ts`, `getMcpServerConfigurationFromManifest`) runs
+  `npx`, then `runtimeArguments`, then `identifier@version`, then
+  `packageArguments`, and adds no `-y` and no `--prefix` for npm, so the
+  design's entry would run the package through npx with no flags at all, in
+  the open project: the form DIST-M1 closed everywhere else. Here the package has
+  `"runtimeArguments": [{"type": "positional", "value": "-y"},
+  {"type": "named", "name": "--prefix", "value": "/"}]` (a positional
+  argument adds its value, a named one its name and then its value), so a
+  registry install runs the standard entry. The registry checks only named
+  arguments (no `<`, `>`, space or `$` in the name; the value doesn't start
+  with the name), which these pass. `tests/registry.test.mjs` builds the
+  command as VS Code does and requires `STANDARD_ENTRY`, so the entry moves
+  with `NPX_FLAGS`.
+- **The skill names the package, not a command.** The design's
+  `compatibility` line names the connector as an npx command: `-y` and the
+  bare package name, with no `--prefix /` and no version. A model reads the
+  skill and may run or relay that as the way to install, and it is the form
+  DIST-M1 found can run a copy planted in the open project with
+  `WISPLY_MCP_TOKEN`. Here it reads
+  "Needs the Wisply MCP connector (the @wisply/mcp package, or the Wisply
+  plugin or extension for this app) on the Mac that runs Wisply, with
+  Wisply's MCP server turned on." The rest of the skill is the design's exact
+  text. It still has no version, so it doesn't change with every release.
+  `tests/skills.test.mjs` refuses any `npx` or `npm install` in the skill,
+  the Gemini commands and the Cursor extras, and
+  `tests/manifests.test.mjs` sweeps every file in `skills/`, `commands/` and
+  `extras/` for an npx of the package without the standard flags. The VS
+  Code extension (DIST-V2) and wisply.ai (DIST-W1) vendor the skill byte for
+  byte, so they take this text when they re-vendor it, and the spec's skill
+  block changes to match.
 - **`server.json` follows `MCP_NAME`.** Its `name` must equal
   `package.json` `"mcpName"` (the registry ties the two), so it is the same
   placeholder: if wisply.ai can't be verified, all three become
@@ -257,7 +283,17 @@ spec text. Not shipped in the npm package.
   integrity hashes for every dependency), refuse a checkout that isn't clean
   or isn't at the tag, and stage the tag's own files. The gate runs on the
   asset downloaded back from the draft release and compares its contents with
-  the tag, not only its sha256.
+  the tag, not only its sha256. The design's `WISPLY_REGISTRY_RELEASE=1`
+  refuses only the all-zero placeholder; here it also fails without
+  `WISPLY_MCPB_FILE`, because from the second release on `server.json`
+  holds the previous release's real hash, which only the new asset can tell
+  from the right one (the registry only sends a HEAD request to the URL), and
+  release control 7 resets `fileSha256` to the placeholder with each version
+  bump. The build stages regular files only: `trackedSource` refuses a
+  tracked symlink or a path under a symlinked folder, `refSource` accepts
+  only git modes 100644 and 100755 (never 120000 or 160000) for the code, the
+  manifest and the icon, the manifest's `icon` must be `icon.png`, and
+  `stageBundle` refuses any path that would land outside the stage.
 - **Git installs and `main`.** Git-sourced installs (Agent Plugin, Gemini
   extension) follow the default branch unless they name a ref, so the README
   gives `--ref v<version>` where the app takes one (Codex, Gemini CLI;

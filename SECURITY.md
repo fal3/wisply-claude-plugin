@@ -120,7 +120,15 @@ your AI app runs under the `wisply` entry:
   `lib/constants.mjs`): `npx` then resolves from `/`, the read-only system
   volume on macOS, and installs only from the registry your own `~/.npmrc`
   names. `tests/pack.test.mjs` refuses any `npx` of the package in these
-  documents or in `lib/messages.mjs` without those flags. A global install
+  documents or in `lib/messages.mjs` without those flags, and
+  `tests/manifests.test.mjs` in the manifests, `llms-install.md` and every
+  file in `skills/`, `commands/` and `extras/` (the skill and the prompts
+  name no command at all). Apps that install from the MCP Registry build the
+  command from `server.json` themselves (VS Code's gallery runs `npx`, then
+  the entry's `runtimeArguments`, then `@wisply/mcp@<version>`, and adds
+  nothing of its own), so the entry carries the same flags as
+  `runtimeArguments`; `tests/registry.test.mjs` builds that command and
+  requires the standard entry. A global install
   (`npm i -g @wisply/mcp@0.1.0`) doesn't read a project's `.npmrc` either.
 - **The version.** The snippets in this README (and, once they exist, on
   wisply.ai and in Wisply) run one exact version (`@wisply/mcp@0.1.0`), taken
@@ -259,8 +267,10 @@ provisional or leaves `setup_claude` non-destructive, and until
    `gemini-extension.json`, `mcpb/manifest.json` and `server.json` (its
    bundle URL included) and the README's links and `--ref` tags
    (`tests/manifests.test.mjs` and `tests/registry.test.mjs` fail until they
-   agree). The snippets follow `PACKAGE_SPEC`; update the wisply.ai guide and
-   Wisply's snippets to the new version.
+   agree), and sets `server.json`'s `fileSha256` back to the placeholder (64
+   zeros) until the new bundle exists, so the old release's hash can't be
+   published with the new URL. The snippets follow `PACKAGE_SPEC`; update the
+   wisply.ai guide and Wisply's snippets to the new version.
 8. **The Claude Desktop bundle** is built once, in a fresh clone of the
    release tag, with the pinned packer (`npm ci --ignore-scripts --prefix
    tools/mcpb`, from its committed lockfile; never `npx`). `npm run
@@ -273,8 +283,14 @@ provisional or leaves `setup_claude` non-destructive, and until
    The gate runs on the asset downloaded back from the draft release:
    `WISPLY_REGISTRY_RELEASE=1 WISPLY_MCPB_FILE=<downloaded .mcpb> npm test`
    must pass. It checks the hash, then unpacks the bundle and compares every
-   file with the tag, byte for byte. A rebuilt bundle has a different sha256,
-   so never rebuild a released one.
+   file with the tag, byte for byte. `WISPLY_REGISTRY_RELEASE=1` fails
+   without `WISPLY_MCPB_FILE`: from the second release on, `server.json`
+   holds a real hash from the previous release, and the registry never
+   compares it with the file (it only checks that the URL answers), so only
+   the asset itself shows that the hash is this version's. The build takes
+   regular files only: a tracked symlink or a path under a symlinked folder
+   stops it, and the manifest's `icon` must be `icon.png`. A rebuilt bundle
+   has a different sha256, so never rebuild a released one.
 
 ## If a bad release is published (maintainers)
 

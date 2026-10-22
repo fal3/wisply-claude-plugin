@@ -4,7 +4,10 @@
 // time (modelcontextprotocol/registry internal/validators @11b7b0e), and holds
 // the release gates for the bundle's sha256:
 //
-//   WISPLY_REGISTRY_RELEASE=1                       refuses the all-zero fileSha256 placeholder
+//   WISPLY_REGISTRY_RELEASE=1                       refuses the all-zero fileSha256 placeholder, and requires
+//                                                   WISPLY_MCPB_FILE: from the second release on, server.json
+//                                                   holds the previous release's real hash, which only the
+//                                                   new asset itself can tell apart from the right one
 //   WISPLY_MCPB_FILE=<the asset downloaded back from the draft release>
 //                                                   fileSha256 must equal that file's sha256, and the file must
 //                                                   unpack to exactly the files of tag v<version> (verifyBundle,
@@ -16,7 +19,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { MCP_NAME, NPX_COMMAND, PACKAGE_NAME, VERSION } from '../lib/constants.mjs';
+import { MCP_NAME, NPX_COMMAND, PACKAGE_NAME, STANDARD_ENTRY, VERSION } from '../lib/constants.mjs';
 import { bundleFileName, packerLib, verifyBundle } from '../scripts/build-mcpb.mjs';
 import { validate } from './helpers/json-schema.mjs';
 import { ROOT, exists, readJson } from './helpers/repo.mjs';
@@ -36,6 +39,43 @@ const mcpbPackage = local.packages.find((entry) => entry.registryType === 'mcpb'
 const GITHUB_RELEASE_PATH = /^\/([a-zA-Z0-9]([a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?)\/([a-zA-Z0-9._-]+)\/releases\/download\/([^/]+)\/([^/]+)$/;
 // internal/validators/validators.go looksLikeVersionRange (the common forms)
 const VERSION_RANGE = /^[\^~<>=]|\|\||\s-\s|(^|\.)[xX*](\.|$)/;
+
+/** internal/validators/validators.go validateArgument: named arguments only (positional ones aren't checked). */
+function argumentProblems(args = []) {
+  const problems = [];
+  for (const arg of args) {
+    if (arg.type !== 'named') continue;
+    const name = arg.name ?? '';
+    if (name === '' || /[<> $]/.test(name)) problems.push(`named argument name ${JSON.stringify(name)}`);
+    for (const field of ['value', 'default']) {
+      if (arg[field] && arg[field].startsWith(name)) problems.push(`named argument ${field} starts with its name`);
+    }
+  }
+  return problems;
+}
+
+/**
+ * The command line VS Code's MCP gallery builds from a registry npm package
+ * (microsoft/vscode src/vs/platform/mcp/common/mcpManagementService.ts, getMcpServerConfigurationFromManifest
+ * and processArguments): `npx`, then runtimeArguments, then `--registry <registryBaseUrl>` when set, then
+ * `identifier@version`, then packageArguments. It never reads runtimeHint and adds no `-y` and no `--prefix`
+ * for npm; a positional argument adds its value, a named one its name and then its value. Arguments without a
+ * fixed value would become prompts, so this refuses them.
+ */
+function galleryCommand(entry) {
+  const args = [];
+  const push = (arg) => {
+    assert.equal(typeof arg.value, 'string', `${JSON.stringify(arg)}: every argument has a fixed value, so nothing is prompted`);
+    if (arg.type === 'positional') args.push(arg.value);
+    else if (arg.type === 'named') args.push(arg.name, arg.value);
+    else assert.fail(`unexpected argument type ${arg.type}`);
+  };
+  for (const arg of entry.runtimeArguments ?? []) push(arg);
+  if (entry.registryBaseUrl) args.push('--registry', entry.registryBaseUrl);
+  args.push(entry.version ? `${entry.identifier}@${entry.version}` : entry.identifier);
+  for (const arg of entry.packageArguments ?? []) push(arg);
+  return { command: 'npx', args };
+}
 
 /** Offline copies of the registry's semantic checks for one server.json. */
 function registryProblems(doc) {
@@ -57,6 +97,7 @@ function registryProblems(doc) {
     if (/\s/.test(entry.identifier)) problems.push('identifier has spaces');
     if (entry.version !== undefined && (entry.version === 'latest' || VERSION_RANGE.test(entry.version))) problems.push('package version');
     if (entry.transport?.type === 'stdio' && entry.transport.url) problems.push('stdio transport with a url');
+    problems.push(...argumentProblems(entry.runtimeArguments), ...argumentProblems(entry.packageArguments));
     if (entry.registryType === 'npm') {
       if (!entry.version) problems.push('npm package needs a version');
       if (entry.fileSha256 !== undefined) problems.push('npm package must not have fileSha256');
@@ -97,9 +138,12 @@ test('the offline checks catch what the registry refuses', () => {
   broken._meta.other = {};
   broken.packages[0].fileSha256 = PLACEHOLDER_SHA;
   broken.packages[1].identifier = 'https://example.com/wisply.mcpb';
+  broken.packages[0].runtimeArguments.push({ type: 'named', name: '--prefix /', value: '/' }, { type: 'named', name: '--cache', value: '--cache=/tmp' });
   assert.deepEqual(registryProblems(broken), [
     'version looks like a range',
     '_meta keys other than publisher-provided are dropped',
+    'named argument name "--prefix /"',
+    'named argument value starts with its name',
     'npm package must not have fileSha256',
     'mcpb identifier must be a GitHub release asset',
   ]);
@@ -120,6 +164,23 @@ test('ai.wisply/local: the DNS namespace, the npm package and its mcpName', () =
   assert.equal(npmPackage.runtimeHint, 'npx');
   assert.deepEqual(npmPackage.transport, { type: 'stdio' });
   assert.deepEqual(mcpbPackage.transport, { type: 'stdio' });
+});
+
+test('ai.wisply/local: a client that installs from the registry runs the standard entry (npx -y --prefix / and the exact version)', () => {
+  // Registry clients build the command themselves. Without runtimeArguments, VS Code's gallery would run
+  // `npx @wisply/mcp@<version>` in the open project, where a planted node_modules/@wisply/mcp or a project
+  // .npmrc could answer instead of npm and receive WISPLY_MCP_TOKEN (DIST-M1, lib/constants.mjs NPX_FLAGS).
+  assert.equal(npmPackage.runtimeHint, STANDARD_ENTRY.command);
+  assert.deepEqual(galleryCommand(npmPackage), { command: STANDARD_ENTRY.command, args: [...STANDARD_ENTRY.args] });
+  assert.deepEqual(npmPackage.runtimeArguments, [
+    { type: 'positional', value: '-y' },
+    { type: 'named', name: '--prefix', value: '/' },
+  ]);
+  assert.equal(Object.hasOwn(npmPackage, 'packageArguments'), false, 'the connector starts with no arguments');
+  assert.equal(Object.hasOwn(npmPackage, 'registryBaseUrl'), false, 'npm itself, never another registry');
+  // The builder sees what was missing: the old entry gave a command without --prefix /.
+  const { runtimeArguments, ...withoutArguments } = npmPackage;
+  assert.deepEqual(galleryCommand(withoutArguments).args, [`${PACKAGE_NAME}@${VERSION}`]);
 });
 
 test('ai.wisply/local: the token is an optional secret, and nothing sets its value', () => {
@@ -155,6 +216,15 @@ test('fileSha256 is the placeholder until the release, and the release gate refu
   }
 });
 
+test('the release gate (WISPLY_REGISTRY_RELEASE=1) needs the release asset itself (WISPLY_MCPB_FILE)', () => {
+  // From the second release on, fileSha256 holds the previous release's real hash until someone replaces it,
+  // and the registry never compares it with the file (mcpb.go only sends a HEAD request). Only this version's
+  // asset can tell a stale hash from the right one, so the gate doesn't pass without it.
+  if (process.env.WISPLY_REGISTRY_RELEASE !== '1') return;
+  assert.ok(process.env.WISPLY_MCPB_FILE,
+    `download the release asset and set WISPLY_MCPB_FILE to it (gh release download v${VERSION} --repo fal3/wisply-mcp --pattern '*.mcpb' --dir dist/check)`);
+});
+
 test('with WISPLY_MCPB_FILE, fileSha256 is that file\'s sha256 and the file is exactly the tag\'s bundle', { skip: process.env.WISPLY_MCPB_FILE ? false : 'WISPLY_MCPB_FILE not set' }, async () => {
   const file = resolve(process.env.WISPLY_MCPB_FILE);
   assert.ok(file.endsWith(`/${bundleFileName(VERSION)}`), `${file} is not ${bundleFileName(VERSION)}`);
@@ -165,12 +235,17 @@ test('with WISPLY_MCPB_FILE, fileSha256 is that file\'s sha256 and the file is e
     'the bundle must unpack to exactly the files of the release tag');
 });
 
-test('the release gate really fails on the placeholder', { skip: process.env.WISPLY_REGISTRY_RELEASE === '1' }, () => {
+test('the release gate really fails without the asset, whatever fileSha256 holds, and on the placeholder', { skip: process.env.WISPLY_REGISTRY_RELEASE === '1' }, () => {
   const env = { ...process.env, WISPLY_REGISTRY_RELEASE: '1' };
   delete env.NODE_TEST_CONTEXT;
   delete env.WISPLY_MCPB_FILE;
-  const result = spawnSync(process.execPath, ['--test', fileURLToPath(import.meta.url)], { cwd: ROOT, env, encoding: 'utf8' });
-  assert.equal(result.status === 0, mcpbPackage.fileSha256 !== PLACEHOLDER_SHA, result.stdout.slice(-2000));
+  const result = spawnSync(process.execPath, ['--test', '--test-reporter=tap', fileURLToPath(import.meta.url)], { cwd: ROOT, env, encoding: 'utf8' });
+  const output = result.stdout.slice(-4000);
+  assert.notEqual(result.status, 0, output);
+  // The asset check fails on its own, so a stale (non-zero) hash from an earlier release can't pass the gate.
+  assert.match(result.stdout, /not ok \d+ - the release gate \(WISPLY_REGISTRY_RELEASE=1\) needs the release asset itself/, output);
+  assert.match(result.stdout, /set WISPLY_MCPB_FILE/, output);
+  assert.equal(/not ok \d+ - fileSha256 is the placeholder until the release/.test(result.stdout), mcpbPackage.fileSha256 === PLACEHOLDER_SHA, output);
 });
 
 test('ai.wisply/cloud: the remote entry for Cloud Connect, with no package', () => {

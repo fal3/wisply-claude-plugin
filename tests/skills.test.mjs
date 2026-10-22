@@ -111,10 +111,20 @@ test('SKILL.md frontmatter follows the Agent Skills rules', () => {
   assert.match(data.description, /Use when/);
   assert.equal(data.license, 'MIT');
   assert.ok(data.compatibility.length <= 500);
-  // The design's exact text: it names the connector, not a command to run, so it carries neither npx's
-  // --prefix / nor a version and stays the same across releases (docs/design-differences.md, DIST-M3).
-  assert.ok(data.compatibility.includes(`npx -y ${PACKAGE_NAME}`), 'compatibility names the package');
+  // It names the connector's package, never a command to run: a model reads the skill and may repeat a
+  // command in it as the way to install, and a bare `npx -y @wisply/mcp` (no --prefix /, no version) is the
+  // form that can run a copy from the open project with the token (DIST-M1; docs/design-differences.md, DIST-M3).
+  // With no version, the skill stays the same across releases.
+  assert.ok(data.compatibility.includes(`(the ${PACKAGE_NAME} package, `), 'compatibility names the package');
   assert.deepEqual(data.metadata, { publisher: 'Wisply', homepage: 'https://www.wisply.ai/docs/mcp/install' });
+});
+
+test('SKILL.md, the Gemini commands and the Cursor extras tell no one to run npx or npm', () => {
+  // How to install is the README's and the app's job, with the pinned standard entry; text a model reads names
+  // no command it could run or relay as written (tests/manifests.test.mjs checks any npx form that slips in).
+  const files = ['skills/wisply-memos/SKILL.md', ...readdirSync(join(ROOT, 'commands/wisply')).map((name) => `commands/wisply/${name}`),
+    'extras/cursor/rules/wisply.mdc', 'extras/cursor/commands/wisply-recap.md'];
+  for (const file of files) assert.doesNotMatch(readText(file), /\bnpx\b|\bnpm (?:i|install|exec)\b/, file);
 });
 
 test('SKILL.md names only real tools, covers the read-only ones and keeps the safety rules', () => {

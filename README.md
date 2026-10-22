@@ -423,6 +423,9 @@ tools/mcpb/node_modules/.bin/mcpb validate mcpb/manifest.json
 The bundle holds the files git tracks in `bin/`, `lib/`, `contract/` and
 `clients/`, `LICENSE`, the manifest (its `tools` written from the contract:
 every tool but `setup_claude`, which the bundle never turns on) and the icon.
+Only regular files: a tracked symlink, or a path under a symlinked folder,
+stops the build rather than copying what it points to, and the manifest's
+`icon` must be `icon.png`.
 With the packer installed, `npm test` also runs `tests/mcpb-config.test.mjs`
 against the real library, as the CI job `mcpb` does.
 
@@ -447,5 +450,10 @@ new sha256: build the release asset once and never rebuild it.
 gh release download v0.1.0 --repo fal3/wisply-mcp --pattern '*.mcpb' --dir dist/check
 WISPLY_REGISTRY_RELEASE=1 WISPLY_MCPB_FILE=dist/check/wisply-mcp-0.1.0.mcpb npm test
 ```
+
+`WISPLY_REGISTRY_RELEASE=1` alone always fails: a hash left over from the
+previous release isn't the placeholder, so only the downloaded asset can show
+that `fileSha256` belongs to this version. When you bump the version, set
+`fileSha256` back to the placeholder (64 zeros) until the new bundle exists.
 
 Security reports: see [SECURITY.md](SECURITY.md). License: [MIT](LICENSE).

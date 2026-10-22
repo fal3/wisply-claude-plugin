@@ -126,8 +126,8 @@ test('the standard entry and every command people are told to run use npx\'s --p
   assert.deepEqual(JSON.parse(JSON.stringify(STANDARD_ENTRY)), { command: 'npx', args: ['-y', '--prefix', '/', PACKAGE_SPEC] });
 
   const escaped = PACKAGE_NAME.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
-  // Any npx run or global install of the package, in prose or in a JSON args array.
-  const npx = new RegExp(`\\bnpx((?: +-[\\w-]+(?: +/(?= ))?)*) +(${escaped}[^\\s\`"'),]*)`, 'g');
+  // Any npx run or global install of the package, in prose (also wrapped across lines) or in a JSON args array.
+  const npx = new RegExp(`\\bnpx((?:\\s+-[\\w-]+(?:\\s+/(?=\\s))?)*)\\s+(${escaped}[^\\s\`"'),]*)`, 'g');
   const args = new RegExp(`"args": \\[([^\\]]*)"(${escaped}[^"]*)"`, 'g');
   const install = new RegExp(`\\bnpm (?:i|install) -g +(${escaped}[^\\s\`"'),]*)`, 'g');
   for (const file of ['README.md', 'SECURITY.md', 'CHANGELOG.md', 'docs/design-differences.md']) {
@@ -136,7 +136,7 @@ test('the standard entry and every command people are told to run use npx\'s --p
     for (const match of text.matchAll(npx)) {
       seen += 1;
       // Gemini CLI's `gemini mcp add ... npx -- -y ...` puts dash arguments after `--` (the design's S1).
-      assert.ok(['-y --prefix /', '-- -y --prefix /'].includes(match[1].trim()), `${file}: ${match[0]}`);
+      assert.ok(['-y --prefix /', '-- -y --prefix /'].includes(match[1].replace(/\s+/g, ' ').trim()), `${file}: ${match[0]}`);
       // `@wisply/mcp@<version>` is how the docs write "this release's version" in general.
       assert.ok([PACKAGE_SPEC, `${PACKAGE_NAME}@<version>`].includes(match[2]), `${file}: ${match[0]}`);
     }
@@ -145,7 +145,7 @@ test('the standard entry and every command people are told to run use npx\'s --p
       assert.equal(match[2], PACKAGE_SPEC, `${file}: ${match[0]}`);
     }
     for (const match of text.matchAll(install)) assert.equal(match[1], PACKAGE_SPEC, `${file}: ${match[0]}`);
-    assert.doesNotMatch(text, new RegExp(`npx -y ${escaped}`), `${file}: npx without --prefix /`);
+    assert.doesNotMatch(text, new RegExp(`npx\\s+-y\\s+${escaped}`), `${file}: npx without --prefix /`);
     if (file === 'README.md') assert.ok(seen > 0);
   }
 

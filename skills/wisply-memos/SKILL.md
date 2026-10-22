@@ -2,7 +2,7 @@
 name: wisply-memos
 description: Answer questions about the user's Wisply recordings (meetings and voice memos), their summaries, action items, open questions, transcript excerpts and the recording in progress, using the Wisply MCP tools. Use when the user mentions Wisply, a meeting, a recording, a voice memo, what someone said, or follow-ups from a meeting.
 license: MIT
-compatibility: Needs the Wisply MCP connector (npx -y @wisply/mcp, or the Wisply plugin or extension for this app) on the Mac that runs Wisply, with Wisply's MCP server turned on.
+compatibility: Needs the Wisply MCP connector (the @wisply/mcp package, or the Wisply plugin or extension for this app) on the Mac that runs Wisply, with Wisply's MCP server turned on.
 metadata:
   publisher: Wisply
   homepage: https://www.wisply.ai/docs/mcp/install

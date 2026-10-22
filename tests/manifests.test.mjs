@@ -6,7 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import contract from '../lib/contract.mjs';
 import {
   MCP_NAME, NPX_COMMAND, NPX_FLAGS, PACKAGE_NAME, PACKAGE_RANGE, PACKAGE_SPEC, SERVER_KEY, STANDARD_ENTRY as ENTRY, VERSION,
@@ -222,24 +222,29 @@ test('no manifest, skill, command or install text can hold a token or an auth he
   }
 });
 
+/** Every file under these folders, relative to the repository and sorted. */
+const filesUnder = (...dirs) => dirs.flatMap((dir) => readdirSync(join(ROOT, dir), { recursive: true, withFileTypes: true })
+  .filter((entry) => entry.isFile())
+  .map((entry) => relative(ROOT, join(entry.parentPath ?? entry.path, entry.name)))).sort();
+
 test('every npm command and entry in these files runs npx with --prefix / and the exact version', () => {
   // DIST-M1: without --prefix /, npx resolves the package from the open project (a planted node_modules or
   // .npmrc) before npm. tests/pack.test.mjs holds the README, SECURITY.md, the CHANGELOG and the design notes to
-  // this; these are the rest of what this repository publishes. The skill keeps the design's text, which names
-  // the package without a command (docs/design-differences.md), and is checked in tests/skills.test.mjs.
+  // this; these are the rest of what this repository publishes: the manifests, llms-install.md and every file in
+  // skills/, commands/ and extras/ (the skill and the prompts are text a model reads and may repeat as a command).
   const escaped = PACKAGE_NAME.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
-  const npx = new RegExp(`\\bnpx((?: +-[\\w-]+(?: +/(?= ))?)*) +(${escaped}[^\\s\`"'),]*)`, 'g');
-  const files = [...MANIFESTS, 'llms-install.md', ...readdirSync(join(ROOT, 'commands/wisply')).map((name) => `commands/wisply/${name}`),
-    'extras/cursor/README.md', 'extras/cursor/rules/wisply.mdc', 'extras/cursor/commands/wisply-recap.md'];
+  const npx = new RegExp(`\\bnpx((?:\\s+-[\\w-]+(?:\\s+/(?=\\s))?)*)\\s+(${escaped}[^\\s\`"'),]*)`, 'g');
+  const files = [...MANIFESTS, 'llms-install.md', ...filesUnder('skills', 'commands', 'extras')];
+  assert.ok(files.includes('skills/wisply-memos/SKILL.md') && files.includes('extras/cursor/rules/wisply.mdc'), files.join(', '));
   let seen = 0;
   for (const file of files) {
     const text = readText(file);
     for (const match of text.matchAll(npx)) {
       seen += 1;
-      assert.equal(match[1].trim(), NPX_FLAGS.join(' '), `${file}: ${match[0]}`);
+      assert.equal(match[1].replace(/\s+/g, ' ').trim(), NPX_FLAGS.join(' '), `${file}: ${match[0]}`);
       assert.equal(match[2], PACKAGE_SPEC, `${file}: ${match[0]}`);
     }
-    assert.doesNotMatch(text, new RegExp(`npx -y ${escaped}`), `${file}: npx without --prefix /`);
+    assert.doesNotMatch(text, new RegExp(`npx\\s+-y\\s+${escaped}`), `${file}: npx without --prefix /`);
     assert.doesNotMatch(text, new RegExp(`"-y",\\s*"${escaped}`), `${file}: an entry without --prefix /`);
   }
   // server.json, gemini-extension.json, mcpb/manifest.json and llms-install.md (twice) name a command.

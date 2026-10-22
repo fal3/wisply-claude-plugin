@@ -18,7 +18,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -26,7 +26,7 @@ import contract from '../lib/contract.mjs';
 import { VERSION } from '../lib/constants.mjs';
 import { resolveToken } from '../lib/token.mjs';
 import {
-  ICON_PATH, MANIFEST_PATH, SUMS_FILE, STAGED_FILES, assertPacker, assertSafeStageDir, bundleFileName, isBundled, listFiles,
+  BUNDLE_ICON, BundleSourceError, ICON_PATH, MANIFEST_PATH, SUMS_FILE, STAGED_FILES, assertPacker, assertSafeStageDir, bundleFileName, isBundled, listFiles,
   packBundle, packerLib, refSource, releaseProblems, releaseTag, renderManifest, stageBundle, sumsLine, trackedSource,
   verifyBundle,
 } from '../scripts/build-mcpb.mjs';
@@ -172,6 +172,80 @@ test('a release build needs a clean checkout at tag v<version>, and stages the t
   git(root, 'commit', '--quiet', '--allow-empty', '-m', 'after the tag');
   assert.deepEqual(releaseProblems(root, VERSION), [`HEAD is not at tag ${releaseTag(VERSION)}`]);
   assert.deepEqual(releaseProblems(join(dirname(root), 'not-a-repo'), VERSION), ['git could not read this checkout']);
+});
+
+/** Commits everything in a tagRepo again and moves its release tag there. */
+function retag(root) {
+  git(root, 'add', '--all');
+  git(root, 'commit', '--quiet', '-m', 'retag');
+  git(root, 'tag', '--force', releaseTag(VERSION));
+}
+
+test('a tracked symlink never reaches a bundle: the working-tree build, the tag build and the gate all stop', async (t) => {
+  // readFileSync follows symlinks, so `lib/x.json -> ~/.npmrc` would copy that file's contents into a test
+  // bundle; at the tag, git stores the link text as a 120000 blob, which would be staged as a 0644 file.
+  const root = tagRepo(t);
+  const outside = join(dirname(root), 'outside-secret.json');
+  writeFileSync(outside, '{"secret": "not for the bundle"}\n');
+  symlinkSync(outside, join(root, 'lib', 'x.json'));
+  retag(root);
+  assert.ok(isBundled('lib/x.json'));
+  assert.match(git(root, 'ls-tree', releaseTag(VERSION), 'lib/x.json'), /^120000 blob /);
+  assert.throws(() => trackedSource(root), (error) => error instanceof BundleSourceError && /lib\/x\.json is not a regular file/.test(error.message));
+  const stageDir = join(dirname(root), 'stage');
+  assert.throws(() => stageBundle({ root, stageDir, contract, version: VERSION }), /lib\/x\.json is not a regular file/);
+  assert.equal(existsSync(stageDir), false, 'nothing is staged');
+  assert.throws(() => refSource(root, releaseTag(VERSION)), /lib\/x\.json at v[\d.]+ is not a regular file \(mode 120000, blob\)/);
+  // The gate names the symlink instead of claiming the tag is missing (refSource runs before the packer).
+  assert.deepEqual(await verifyBundle({ file: join(root, 'none.mcpb'), version: VERSION, lib: null, root }),
+    [`lib/x.json at ${releaseTag(VERSION)} is not a regular file (mode 120000, blob): the bundle takes regular files only`]);
+});
+
+test('a symlinked icon or manifest folder stops the build too', (t) => {
+  const iconRoot = tagRepo(t);
+  const icon = join(dirname(iconRoot), 'elsewhere.png');
+  copyFileSync(join(ROOT, ICON_PATH), icon);
+  rmSync(join(iconRoot, ICON_PATH));
+  symlinkSync(icon, join(iconRoot, ICON_PATH));
+  retag(iconRoot);
+  assert.throws(() => refSource(iconRoot, releaseTag(VERSION)).read(ICON_PATH), /mcpb\/icon\.png at v[\d.]+ is not a regular file \(mode 120000/);
+  assert.throws(() => stageBundle({ root: iconRoot, stageDir: join(dirname(iconRoot), 'stage'), contract, version: VERSION }),
+    /mcpb\/icon\.png is not a regular file/);
+
+  // The whole mcpb/ folder as a symlink: the file inside is regular, but it isn't at its own place.
+  const dirRoot = tagRepo(t);
+  const moved = join(dirname(dirRoot), 'mcpb-elsewhere');
+  cpSync(join(dirRoot, 'mcpb'), moved, { recursive: true });
+  rmSync(join(dirRoot, 'mcpb'), { recursive: true });
+  symlinkSync(moved, join(dirRoot, 'mcpb'));
+  assert.throws(() => stageBundle({ root: dirRoot, stageDir: join(dirname(dirRoot), 'stage'), contract, version: VERSION }),
+    /mcpb\/manifest\.json is not a regular file of the checkout/);
+});
+
+test('the manifest\'s icon must be icon.png, and no staged path lands outside the stage', (t) => {
+  assert.equal(BUNDLE_ICON, 'icon.png');
+  assert.equal(manifest.icon, BUNDLE_ICON);
+  const root = tagRepo(t);
+  const escaped = join(dirname(root), 'escape.png');
+  for (const icon of ['../escape.png', '/tmp/escape.png', 'img/icon.png', undefined]) {
+    const doc = structuredClone(manifest);
+    if (icon === undefined) delete doc.icon;
+    else doc.icon = icon;
+    writeFileSync(join(root, MANIFEST_PATH), `${JSON.stringify(doc, null, 2)}\n`);
+    const stageDir = join(dirname(root), 'stage');
+    assert.throws(() => stageBundle({ root, stageDir, contract, version: VERSION }),
+      (error) => error instanceof BundleSourceError && /"icon" must be "icon\.png"/.test(error.message), String(icon));
+    assert.equal(existsSync(escaped), false, String(icon));
+  }
+  // A source path that climbs out (git never lists one; the stage refuses it anyway, before emptying anything).
+  const real = trackedSource(ROOT);
+  const climbing = { ...real, paths: [...real.paths, '../outside.mjs'], read: (path) => (path === '../outside.mjs' ? Buffer.from('x') : real.read(path)), mode: () => 0o644 };
+  const stageDir = join(tempDir(t), 'stage');
+  mkdirSync(stageDir);
+  writeFileSync(join(stageDir, 'keep'), '');
+  assert.throws(() => stageBundle({ stageDir, contract, version: VERSION, source: climbing }), /\.\.\/outside\.mjs would be staged outside/);
+  assert.ok(existsSync(join(stageDir, 'keep')), 'the stage is untouched');
+  assert.equal(existsSync(join(dirname(stageDir), 'outside.mjs')), false);
 });
 
 test('release assets: the bundle, an unreleased name no gate accepts, and a SHA256SUMS line shasum -c reads', () => {
