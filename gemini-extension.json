@@ -14,7 +14,7 @@
   "settings": [
     {
       "name": "Wisply token",
-      "description": "Optional. Your read-only connector token (wspc_...) from Wisply > Settings > Integrations > MCP Server. A full-access token (wsp_...) also works here, but it lets this AI app start and stop recordings and propose follow-ups, so use wspc_. Leave empty if you ran npx -y @wisply/mcp setup.",
+      "description": "Optional. Your read-only connector token (wspc_...) from Wisply > Settings > Integrations > MCP Server. A full-access token (wsp_...) also works here, but it lets this AI app start and stop recordings and propose follow-ups, so use wspc_. Leave empty if you ran npx -y --prefix / @wisply/mcp@0.1.0 setup.",
       "envVar": "WISPLY_MCP_TOKEN",
       "sensitive": true
     }

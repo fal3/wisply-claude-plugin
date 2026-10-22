@@ -21,7 +21,8 @@ All notable changes to `@wisply/mcp` are listed here. Versions follow
   answering, identity check failed, Wisply too old, tool outside the scope,
   another platform), none of which contain the token or the app's response.
   Until the npm name is Wisply's (`PACKAGE_NAME_FINAL`), they point only at
-  `WISPLY_MCP_TOKEN`; from then on also at `npx -y @wisply/mcp@0.1.0 setup`.
+  `WISPLY_MCP_TOKEN`; from then on also at
+  `npx -y --prefix / @wisply/mcp@0.1.0 setup`.
 - A JSON-RPC error from Wisply keeps its code, with a fixed message from the
   connector in place of Wisply's own text.
 - `setup [--full-access]`: removes every "Wisply MCP token" item saved
@@ -49,12 +50,35 @@ All notable changes to `@wisply/mcp` are listed here. Versions follow
 - An argument or `WISPLY_MCP_PORT` that looks like a token is refused with a
   fixed message that shows none of it.
 - The setup, status and forget commands that messages and docs name run the
-  pinned version (`npx -y @wisply/mcp@0.1.0 setup`), like the snippets.
+  pinned version after npx's flags (`npx -y --prefix / @wisply/mcp@0.1.0 setup`),
+  like the snippets.
 - Without a usable `WISPLY_MCP_TOKEN`, the connector reads the Keychain item
   (macOS only, 2 s budget).
-- `print-config` and `install` answer "not in this build yet" (exit 1).
-- Snippets pin the exact version (`@wisply/mcp@0.1.0`); `@wisply/mcp@0` is an
-  opt-in for automatic 0.x updates.
+- `print-config [<app>] [--port <n>]`: the token-free setup for 20 AI apps
+  (Claude Code, Claude Desktop, Cursor, VS Code, Windsurf, Zed, JetBrains AI
+  Assistant, Codex, Gemini CLI, GitHub Copilot CLI, Warp, Cline, Roo Code,
+  Goose, LM Studio, Kiro, opencode, Amp, Factory, Grok CLI) from
+  `clients/mcp-clients.json`, the source the Wisply app and wisply.ai copy.
+  The snippet goes to stdout and where it goes to stderr; with no app, the
+  list. The file says `"published": false` until the package is on npm, and
+  its copies render nothing while it does.
+- `install <app> [--port <n>]`: runs `claude mcp add`, `codex mcp add`,
+  `gemini mcp add` (arguments after `--`) or `code --add-mcp`, found by
+  absolute path in `PATH`'s absolute folders, with a fixed argument list and
+  without the token or relative `PATH` entries in their environment. For
+  Cursor, Windsurf, Claude Desktop, the Cline CLI and GitHub Copilot CLI it
+  changes only the text of the `wisply` entry in their JSON settings (every
+  other byte of the file stays), after a one-time `<file>.wisply-backup`
+  (mode 0600, Wisply tokens masked), with an atomic write that follows
+  symlinks and gives up if the app wrote the file meanwhile. It refuses JSONC,
+  repeated keys and non-UTF-8 text (Zed's and VS Code's JSONC settings are
+  never edited), never reads or writes a token, and warns when the entry it
+  replaced held one in plain text.
+- Snippets and every command in the docs and messages run the exact version
+  with `npx -y --prefix / @wisply/mcp@0.1.0`: the version can't change under
+  you, and `--prefix /` stops npx from running a copy of the package (or
+  reading an `.npmrc`) from the project folder an app starts it in.
+  `@wisply/mcp@0` is an opt-in for automatic 0.x updates.
 - The token from `WISPLY_MCP_TOKEN`; empty values and unresolved `${...}`
   placeholders count as unset and fall through to the Keychain item.
 - `WISPLY_MCP_DEBUG=1`: one fixed-field line per request on stderr, never
@@ -65,7 +89,8 @@ All notable changes to `@wisply/mcp` are listed here. Versions follow
 
 - **Pinned commands.** The design's texts name the setup, status and forget
   commands with the bare package name, without a version. This package names
-  them with `PACKAGE_SPEC` (`npx -y @wisply/mcp@0.1.0 setup`), as it already
+  them with `PACKAGE_SPEC` after npx's flags
+  (`npx -y --prefix / @wisply/mcp@0.1.0 setup`), as it already
   does for every snippet, so the command that decides which token lands in
   the keychain never runs npm's newest release. The "Errors" texts are
   otherwise word for word.
@@ -190,7 +215,6 @@ These live in the repository, not in the package:
 - The contract is provisional (transcribed from Wisply's tool catalog), so
   `package.json` is `"private"` and npm refuses to publish it until the
   contract is re-vendored from wisply-ai.
-- `print-config` and `install`.
 - The bundle's `fileSha256` in `server.json` is a placeholder until the
   release asset exists; `WISPLY_REGISTRY_RELEASE=1 npm test` refuses it.
 - `setup_claude` (only with `--allow-claude-setup`): Wisply's answer includes

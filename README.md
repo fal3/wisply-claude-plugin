@@ -11,13 +11,12 @@ talking to Wisply before it uses your token, and needs no account.
 > doesn't exist yet). Its contract with the Wisply app is provisional
 > (transcribed from the app's tool catalog), so `package.json` is marked
 > `"private"`, which makes `npm publish` refuse it, and
-> `WISPLY_RELEASE=1 npm test` fails. The `print-config` and `install`
-> commands land before the first release; this build answers them with "not
-> in this build yet". Until the name is Wisply's on npm (`PACKAGE_NAME_FINAL`
-> in `lib/constants.mjs`), the connector's own messages never name it: errors
-> in your AI app point at `WISPLY_MCP_TOKEN`, and terminal messages say
-> `wisply-mcp setup` (from a checkout: `node bin/wisply-mcp.mjs setup`). The
-> `npx` commands below are what the first release will print.
+> `WISPLY_RELEASE=1 npm test` fails. Until the name is Wisply's on npm
+> (`PACKAGE_NAME_FINAL` in `lib/constants.mjs`), the connector's own messages
+> never name it: errors in your AI app point at `WISPLY_MCP_TOKEN`, and
+> terminal messages say `wisply-mcp setup` (from a checkout:
+> `node bin/wisply-mcp.mjs setup`). The `npx` commands below are what the
+> first release will print.
 
 ## What you need
 
@@ -32,52 +31,120 @@ talking to Wisply before it uses your token, and needs no account.
 Every client runs the same token-free entry:
 
 ```json
-{ "command": "npx", "args": ["-y", "@wisply/mcp@0.1.0"] }
+{ "command": "npx", "args": ["-y", "--prefix", "/", "@wisply/mcp@0.1.0"] }
 ```
 
 For example, in `~/.cursor/mcp.json`:
 
 ```json
-{ "mcpServers": { "wisply": { "command": "npx", "args": ["-y", "@wisply/mcp@0.1.0"] } } }
+{ "mcpServers": { "wisply": { "command": "npx", "args": ["-y", "--prefix", "/", "@wisply/mcp@0.1.0"] } } }
 ```
 
-or in Claude Code: `claude mcp add --scope user wisply -- npx -y @wisply/mcp@0.1.0`.
+or in Claude Code: `claude mcp add --scope user wisply -- npx -y --prefix / @wisply/mcp@0.1.0`.
 
 Install Wisply once per app. Two entries named `wisply` show the tools twice.
 One-click links, plugins and the setup for each app are under
 [Install in your AI app](#install-in-your-ai-app), and on
 [wisply.ai/docs/mcp/install](https://www.wisply.ai/docs/mcp/install).
 
+**Why `--prefix /`.** AI apps start the connector in the project you have
+open, and `npx` looks for a package in that folder (its `node_modules`, and
+its `.npmrc`, which can send the `@wisply` scope to another registry) before
+it asks npm. Without the flag, a cloned project could bring its own
+`@wisply/mcp` and have it run under the `wisply` entry you already trust.
+`--prefix /` makes `npx` resolve from `/`, the read-only system volume on
+macOS, so only the npm registry (through your own `~/.npmrc`) supplies the
+package. One side effect: npm then reads `/etc/npmrc` instead of the
+`etc/npmrc` of your Node installation; settings in `~/.npmrc` still apply.
+The commands below use the same flags.
+
+### Every app's setup, from the connector
+
+`npx -y --prefix / @wisply/mcp@0.1.0 print-config <app>` prints the setup for
+one app (on stdout, so `| pbcopy` copies just the snippet) and says where it
+goes (on stderr). `npx -y --prefix / @wisply/mcp@0.1.0 print-config` lists the
+apps. Add `--port <n>` if Wisply uses another port.
+
+`npx -y --prefix / @wisply/mcp@0.1.0 install <app>` adds the same entry for
+you, for the apps marked "yes" below. Quit the app first: an app that is open
+can write its settings back over the change. `install` either runs the app's
+own command, found by its full path in your `PATH` (folders given as relative
+paths, such as `.`, are skipped), with a fixed argument list and no shell; or,
+for apps with a plain JSON settings file, it changes the text of the `wisply`
+entry and nothing else. Every other byte of the file stays as it was (its
+layout, number spellings and other servers). A file with comments, a key that
+appears twice or text that isn't UTF-8 is left alone, and you get the snippet
+to paste. Before the
+first change it saves the file as `<file>.wisply-backup`, readable only by
+you, with any Wisply token in it masked as `wsp...`. It replaces the file in
+one step, following a symlink to a dotfiles copy, and only if nothing else
+wrote the file while it worked. It never reads the token or the Keychain item,
+and never writes a token or passes one on: the app's command starts without
+`WISPLY_MCP_TOKEN` in its environment. For the other apps it prints the
+snippet to paste.
+
+| App | `<app>` | Where the setup goes | `install` |
+|---|---|---|---|
+| Claude Code | `claude-code` | `claude mcp add --scope user wisply -- npx ...` | yes |
+| Claude Desktop | `claude-desktop` | `~/Library/Application Support/Claude/claude_desktop_config.json` | yes |
+| Cursor | `cursor` | `~/.cursor/mcp.json` | yes |
+| VS Code | `vscode` | user `mcp.json`, through `code --add-mcp`; `vscode-inputs` keeps the token in VS Code's secret storage instead | yes |
+| Windsurf | `windsurf` | `~/.codeium/windsurf/mcp_config.json` | yes |
+| Zed | `zed` | Zed `settings.json` (`context_servers`; **zed: open settings**). The file usually has comments, so `install` doesn't edit it | |
+| JetBrains AI Assistant | `jetbrains` | Settings > Tools > AI Assistant > Model Context Protocol (MCP) | |
+| Codex | `codex` | `codex mcp add wisply -- npx ...`, or `~/.codex/config.toml` | yes |
+| Gemini CLI | `gemini-cli` | `gemini mcp add --scope user wisply npx -- ...` | yes |
+| GitHub Copilot CLI | `copilot-cli` | `~/.copilot/mcp-config.json` (or `$COPILOT_HOME`) | yes |
+| Warp | `warp` | Settings > AI > Manage MCP Servers, or `/add-mcp` | |
+| Cline | `cline` | `cline_mcp_settings.json`. `install` sets up the Cline CLI (`~/.cline/data/settings/`, or `CLINE_MCP_SETTINGS_PATH`); for the Cline extension, add the entry in Cline: MCP Servers > Configure > Configure MCP Servers | yes |
+| Roo Code | `roo-code` | global MCP settings, or `.roo/mcp.json` | |
+| Goose | `goose` | `~/.config/goose/config.yaml` | |
+| LM Studio | `lm-studio` | Program > Install > Edit mcp.json | |
+| Kiro | `kiro` | `~/.kiro/settings/mcp.json` | |
+| opencode | `opencode` | `~/.config/opencode/opencode.json` | |
+| Amp | `amp` | `amp mcp add wisply -- npx ...` | |
+| Factory | `factory` | `droid mcp add wisply "npx ..."` | |
+| Grok CLI | `grok-cli` | `grok mcp add wisply -- npx ...` | |
+
+The setups come from [`clients/mcp-clients.json`](clients/mcp-clients.json),
+checked against each app's documentation on the date in its `verified_on`
+field. Wisply's own Settings and the guide on
+[wisply.ai/docs/mcp/install](https://www.wisply.ai/docs/mcp/install) use
+copies of the same file. None of the setups contains a token.
+
 **Don't paste a token into a config file.** Config files end up in Settings
-Sync, dotfile repositories and backups. Run `npx -y @wisply/mcp@0.1.0 setup`
-once to keep the token in your login keychain (next section), or let the
-app's own secret storage set `WISPLY_MCP_TOKEN` (Wisply's VS Code extension,
-Claude Desktop bundle and Gemini CLI extension, which come with the first
-release, work this way).
+Sync, dotfile repositories and backups. Run
+`npx -y --prefix / @wisply/mcp@0.1.0 setup` once to keep the token in your
+login keychain (next section), or let the app's own
+secret storage set `WISPLY_MCP_TOKEN` (Wisply's VS Code extension, Claude
+Desktop bundle and Gemini CLI extension, which come with the first release,
+work this way).
 
 Three notes:
 
 - **GUI apps and `npx`.** Apps started from the Dock may not see a Node
   installed through nvm. Install Node from nodejs.org or Homebrew; or run
-  `npm i -g @wisply/mcp@0.1.0` and use `"command": "wisply-mcp"`; or use the
-  Claude Desktop bundle or the VS Code extension, which bring their own Node.
+  `npm i -g @wisply/mcp@0.1.0` and use the full path that `which wisply-mcp`
+  prints as the `"command"` (with no `"args"`), which also never resolves
+  anything from a project folder; or use the Claude Desktop bundle or the VS
+  Code extension, which bring their own Node.
 - **Remote windows.** In a VS Code Remote-SSH or Dev Container window, add
   Wisply to your **local** user configuration. A server started on the remote
   machine can't reach Wisply on your Mac.
-- **Versions.** The snippets name one exact version (`@wisply/mcp@0.1.0`).
-  npm never changes a published version, so your app runs the same connector
-  until you change the version in its settings (the guide on wisply.ai and
-  Wisply's own snippets will show the newest one). If you'd rather get every 0.x
-  release on its own, write `@wisply/mcp@0`: `npx` then fetches the newest 0.x
-  release each time your app starts the connector, which means a bad release
-  would run the same way.
+- **Versions.** The snippets, and every command in this README, name one
+  exact version (`@wisply/mcp@0.1.0`). npm never changes a published version,
+  so your app runs the same connector until you change the version in its
+  settings (the guide on wisply.ai and Wisply's own snippets will show the
+  newest one). If you'd rather get every 0.x release on its own, write
+  `@wisply/mcp@0`: `npx` then fetches the newest 0.x release each time your app
+  starts the connector, which means a bad release would run the same way.
 
 ## Keep the token in your login keychain
 
 Run this once in Terminal:
 
 ```bash
-npx -y @wisply/mcp@0.1.0 setup
+npx -y --prefix / @wisply/mcp@0.1.0 setup
 ```
 
 The setup, status and forget commands run the same exact version as the
@@ -93,10 +160,11 @@ output. If you cancel at that point, the token saved before is already gone,
 and setup says so. Setup then reads the item back once:
 
 - A full-access token (`wsp_...`) is removed again unless you run
-  `npx -y @wisply/mcp@0.1.0 setup --full-access`. Use the read-only connector
-  token: a full-access token in the keychain gives full access (recording
-  control and follow-ups) to every AI app on this Mac that starts the
-  connector without its own `WISPLY_MCP_TOKEN`, and setup and status say so.
+  `npx -y --prefix / @wisply/mcp@0.1.0 setup --full-access`. Use the read-only
+  connector token: a full-access token in the keychain gives full access
+  (recording control and follow-ups) to every AI app on this Mac that starts
+  the connector without its own `WISPLY_MCP_TOKEN`, and setup and status say
+  so.
 - Anything that isn't a Wisply token is removed again.
 - A kept token gets the identity check, and setup says what it found:
   "Stored. Wisply answered on 127.0.0.1:51771 and proved it holds this token
@@ -111,22 +179,23 @@ From then on, every AI app that starts the connector without
 `WISPLY_MCP_TOKEN` uses the saved token, so none of their configs holds a
 secret. Two more commands:
 
-- `npx -y @wisply/mcp@0.1.0 status` shows where the token comes from, its
-  scope, the port, whether Wisply answered and proved it holds the token, and
-  the tools your apps get. It never prints the token. It takes the
+- `npx -y --prefix / @wisply/mcp@0.1.0 status` shows where the token comes
+  from, its scope, the port, whether Wisply answered and proved it holds the
+  token, and the tools your apps get. It never prints the token. It takes the
   connector's `--port`, `--read-only` and `--allow-claude-setup` options.
-- `npx -y @wisply/mcp@0.1.0 forget` removes the saved token, every copy of it
-  in your keychains. It ignores `WISPLY_MCP_PORT`. Connectors that are already
-  running keep the token until their app restarts them; regenerating the
-  token in Wisply cuts every app off at once. On another system there is no
-  saved token (setup only saves one on a Mac), so forget says so and
-  succeeds.
+- `npx -y --prefix / @wisply/mcp@0.1.0 forget` removes the saved token, every
+  copy of it in your keychains. It ignores `WISPLY_MCP_PORT`. Connectors that
+  are already running keep the token until their app restarts them;
+  regenerating the token in Wisply cuts every app off at once. On another
+  system there is no saved token (setup only saves one on a Mac), so forget
+  says so and succeeds.
 
 The commands exit 0 when they're done (status: a token was found and Wisply
-proved it holds it), 1 when something needs your attention (no token, Wisply
-isn't answering, or setup or status on a computer that isn't a Mac; the
-message says which), and 2 for a usage mistake, such as an unknown option or a
-token passed as an argument.
+proved it holds it; install: the entry was added or was already there), 1
+when something needs your attention (no token, Wisply isn't answering, or
+setup or status on a computer that isn't a Mac; the message says which), and
+2 for a usage mistake, such as an unknown option or a token passed as an
+argument.
 
 What the keychain protects: it keeps the token out of config files, Settings
 Sync, dotfile repositories and backups. It doesn't stop another program
@@ -140,18 +209,18 @@ running.
 
 ## Install in your AI app
 
-Run `npx -y @wisply/mcp setup` once (above), then add Wisply to each app in
+Run `npx -y --prefix / @wisply/mcp@0.1.0 setup` once (above), then add Wisply to each app in
 one of the ways below. None of them holds a token: they all use the token
 saved by `setup`, or the one your app keeps in its own secret storage.
 
 ### One click
 
-[<img src="https://cursor.com/deeplink/mcp-install-dark.svg" alt="Add Wisply to Cursor" height="32">](https://cursor.com/en/install-mcp?name=wisply&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkB3aXNwbHkvbWNwQDAuMS4wIl19)
-[<img src="https://img.shields.io/badge/VS_Code-VS_Code?style=flat-square&label=Install%20Wisply&color=0098FF" alt="Install Wisply in VS Code">](https://insiders.vscode.dev/redirect?url=vscode%3Amcp%2Finstall%3F%257B%2522name%2522%253A%2522wisply%2522%252C%2522command%2522%253A%2522npx%2522%252C%2522args%2522%253A%255B%2522-y%2522%252C%2522%2540wisply%252Fmcp%25400.1.0%2522%255D%257D)
-[<img src="https://img.shields.io/badge/VS_Code_Insiders-VS_Code_Insiders?style=flat-square&label=Install%20Wisply&color=24bfa5" alt="Install Wisply in VS Code Insiders">](https://insiders.vscode.dev/redirect?url=vscode-insiders%3Amcp%2Finstall%3F%257B%2522name%2522%253A%2522wisply%2522%252C%2522command%2522%253A%2522npx%2522%252C%2522args%2522%253A%255B%2522-y%2522%252C%2522%2540wisply%252Fmcp%25400.1.0%2522%255D%257D)
-[<img src="https://block.github.io/goose/img/extension-install-dark.svg" alt="Install Wisply in Goose" height="32">](https://block.github.io/goose/extension?cmd=npx&arg=-y&arg=%40wisply%2Fmcp%400.1.0&id=wisply&name=Wisply&description=Your%20Wisply%20meeting%20notes%20from%20the%20Wisply%20app%20on%20this%20Mac&timeout=300)
-[<img src="https://files.lmstudio.ai/deeplink/mcp-install-light.svg" alt="Add Wisply to LM Studio" height="32">](https://lmstudio.ai/install-mcp?name=wisply&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkB3aXNwbHkvbWNwQDAuMS4wIl19)
-[<img src="https://kiro.dev/images/add-to-kiro.svg" alt="Add Wisply to Kiro" height="32">](https://kiro.dev/launch/mcp/add?name=wisply&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40wisply%2Fmcp%400.1.0%22%5D%7D)
+[<img src="https://cursor.com/deeplink/mcp-install-dark.svg" alt="Add Wisply to Cursor" height="32">](https://cursor.com/en/install-mcp?name=wisply&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIi0tcHJlZml4IiwiLyIsIkB3aXNwbHkvbWNwQDAuMS4wIl19)
+[<img src="https://img.shields.io/badge/VS_Code-VS_Code?style=flat-square&label=Install%20Wisply&color=0098FF" alt="Install Wisply in VS Code">](https://insiders.vscode.dev/redirect?url=vscode%3Amcp%2Finstall%3F%257B%2522name%2522%253A%2522wisply%2522%252C%2522command%2522%253A%2522npx%2522%252C%2522args%2522%253A%255B%2522-y%2522%252C%2522--prefix%2522%252C%2522%252F%2522%252C%2522%2540wisply%252Fmcp%25400.1.0%2522%255D%257D)
+[<img src="https://img.shields.io/badge/VS_Code_Insiders-VS_Code_Insiders?style=flat-square&label=Install%20Wisply&color=24bfa5" alt="Install Wisply in VS Code Insiders">](https://insiders.vscode.dev/redirect?url=vscode-insiders%3Amcp%2Finstall%3F%257B%2522name%2522%253A%2522wisply%2522%252C%2522command%2522%253A%2522npx%2522%252C%2522args%2522%253A%255B%2522-y%2522%252C%2522--prefix%2522%252C%2522%252F%2522%252C%2522%2540wisply%252Fmcp%25400.1.0%2522%255D%257D)
+[<img src="https://block.github.io/goose/img/extension-install-dark.svg" alt="Install Wisply in Goose" height="32">](https://block.github.io/goose/extension?cmd=npx&arg=-y&arg=--prefix&arg=%2F&arg=%40wisply%2Fmcp%400.1.0&id=wisply&name=Wisply&description=Your%20Wisply%20meeting%20notes%20from%20the%20Wisply%20app%20on%20this%20Mac&timeout=300)
+[<img src="https://files.lmstudio.ai/deeplink/mcp-install-light.svg" alt="Add Wisply to LM Studio" height="32">](https://lmstudio.ai/install-mcp?name=wisply&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIi0tcHJlZml4IiwiLyIsIkB3aXNwbHkvbWNwQDAuMS4wIl19)
+[<img src="https://kiro.dev/images/add-to-kiro.svg" alt="Add Wisply to Kiro" height="32">](https://kiro.dev/launch/mcp/add?name=wisply&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22--prefix%22%2C%22%2F%22%2C%22%40wisply%2Fmcp%400.1.0%22%5D%7D)
 
 These buttons add the standard entry, which runs `@wisply/mcp@0.1.0` from npm
 each time your app starts the connector (see "Versions" above).
@@ -198,28 +267,28 @@ and again at each update.
 ### Every app
 
 The package is `@wisply/mcp@0.1.0`; the standard entry is
-`{"command": "npx", "args": ["-y", "@wisply/mcp@0.1.0"]}`.
+`{"command": "npx", "args": ["-y", "--prefix", "/", "@wisply/mcp@0.1.0"]}`.
 
 | App | One click or one command | Or add it by hand |
 |---|---|---|
-| Claude Code | `claude mcp add --scope user wisply -- npx -y @wisply/mcp@0.1.0`, or the Claude Code plugin (above) | — |
-| Claude Desktop | The bundle (above) | `~/Library/Application Support/Claude/claude_desktop_config.json`: `{"mcpServers":{"wisply":{"command":"npx","args":["-y","@wisply/mcp@0.1.0"]}}}` |
-| Cursor | **Add to Cursor** (above), or the Agent Plugin | `~/.cursor/mcp.json`: `{"mcpServers":{"wisply":{"command":"npx","args":["-y","@wisply/mcp@0.1.0"]}}}` |
-| VS Code | **Install in VS Code** (above), the Agent Plugin, or `code --add-mcp '{"name":"wisply","type":"stdio","command":"npx","args":["-y","@wisply/mcp@0.1.0"]}'` | **MCP: Open User Configuration**: `{"servers":{"wisply":{"type":"stdio","command":"npx","args":["-y","@wisply/mcp@0.1.0"]}}}` |
-| Windsurf / Devin Desktop | — | `~/.codeium/windsurf/mcp_config.json`: `{"mcpServers":{"wisply":{"command":"npx","args":["-y","@wisply/mcp@0.1.0"]}}}`, then Refresh in the MCP panel |
-| Zed | — | `settings.json`: `{"context_servers":{"wisply":{"command":"npx","args":["-y","@wisply/mcp@0.1.0"],"env":{}}}}`. In a remote-development window keep the default `"remote": false`, so the connector runs on your Mac |
-| JetBrains AI Assistant / Junie | — | Settings > Tools > AI Assistant > Model Context Protocol (MCP) > Add > STDIO: `{"mcpServers":{"wisply":{"command":"npx","args":["-y","@wisply/mcp@0.1.0"]}}}`. Junie: the same in `.junie/mcp/mcp.json` |
-| Codex | `codex mcp add wisply -- npx -y @wisply/mcp@0.1.0`, or the Agent Plugin | `~/.codex/config.toml`: `[mcp_servers.wisply]`, `command = "npx"`, `args = ["-y", "@wisply/mcp@0.1.0"]` |
-| Gemini CLI | The extension (above), or `gemini mcp add --scope user wisply npx -- -y @wisply/mcp@0.1.0` (arguments that start with `-` go after `--`) | — |
-| GitHub Copilot CLI | `copilot plugin install fal3/wisply-mcp`, or `/mcp add` | `~/.copilot/mcp-config.json`: `{"mcpServers":{"wisply":{"type":"local","command":"npx","args":["-y","@wisply/mcp@0.1.0"],"tools":["*"]}}}` |
+| Claude Code | `claude mcp add --scope user wisply -- npx -y --prefix / @wisply/mcp@0.1.0`, or the Claude Code plugin (above) | — |
+| Claude Desktop | The bundle (above) | `~/Library/Application Support/Claude/claude_desktop_config.json`: `{"mcpServers":{"wisply":{"command":"npx","args":["-y","--prefix","/","@wisply/mcp@0.1.0"]}}}` |
+| Cursor | **Add to Cursor** (above), or the Agent Plugin | `~/.cursor/mcp.json`: `{"mcpServers":{"wisply":{"command":"npx","args":["-y","--prefix","/","@wisply/mcp@0.1.0"]}}}` |
+| VS Code | **Install in VS Code** (above), the Agent Plugin, or `code --add-mcp '{"name":"wisply","type":"stdio","command":"npx","args":["-y","--prefix","/","@wisply/mcp@0.1.0"]}'` | **MCP: Open User Configuration**: `{"servers":{"wisply":{"type":"stdio","command":"npx","args":["-y","--prefix","/","@wisply/mcp@0.1.0"]}}}` |
+| Windsurf / Devin Desktop | — | `~/.codeium/windsurf/mcp_config.json`: `{"mcpServers":{"wisply":{"command":"npx","args":["-y","--prefix","/","@wisply/mcp@0.1.0"]}}}`, then Refresh in the MCP panel |
+| Zed | — | `settings.json`: `{"context_servers":{"wisply":{"command":"npx","args":["-y","--prefix","/","@wisply/mcp@0.1.0"],"env":{}}}}`. In a remote-development window keep the default `"remote": false`, so the connector runs on your Mac |
+| JetBrains AI Assistant / Junie | — | Settings > Tools > AI Assistant > Model Context Protocol (MCP) > Add > STDIO: `{"mcpServers":{"wisply":{"command":"npx","args":["-y","--prefix","/","@wisply/mcp@0.1.0"]}}}`. Junie: the same in `.junie/mcp/mcp.json` |
+| Codex | `codex mcp add wisply -- npx -y --prefix / @wisply/mcp@0.1.0`, or the Agent Plugin | `~/.codex/config.toml`: `[mcp_servers.wisply]`, `command = "npx"`, `args = ["-y", "--prefix", "/", "@wisply/mcp@0.1.0"]` |
+| Gemini CLI | The extension (above), or `gemini mcp add --scope user wisply npx -- -y --prefix / @wisply/mcp@0.1.0` (arguments that start with `-` go after `--`) | — |
+| GitHub Copilot CLI | `copilot plugin install fal3/wisply-mcp`, or `/mcp add` | `~/.copilot/mcp-config.json`: `{"mcpServers":{"wisply":{"type":"local","command":"npx","args":["-y","--prefix","/","@wisply/mcp@0.1.0"],"tools":["*"]}}}` |
 | Warp | `/add-mcp`, then paste the standard entry | Settings > AI > Manage MCP Servers > + Add |
-| Cline | Cline MCP Marketplace, once it's listed ([llms-install.md](llms-install.md)) | `cline_mcp_settings.json`: `{"mcpServers":{"wisply":{"type":"stdio","command":"npx","args":["-y","@wisply/mcp@0.1.0"],"disabled":false,"autoApprove":[]}}}` |
-| Roo Code | — | `.roo/mcp.json` or the global MCP settings: `{"mcpServers":{"wisply":{"command":"npx","args":["-y","@wisply/mcp@0.1.0"]}}}` |
-| Goose | **Install in Goose** (above) | `~/.config/goose/config.yaml`: `extensions: {wisply: {name: Wisply, cmd: npx, args: ["-y", "@wisply/mcp@0.1.0"], enabled: true, type: stdio, timeout: 300}}` |
+| Cline | Cline MCP Marketplace, once it's listed ([llms-install.md](llms-install.md)) | `cline_mcp_settings.json`: `{"mcpServers":{"wisply":{"type":"stdio","command":"npx","args":["-y","--prefix","/","@wisply/mcp@0.1.0"],"disabled":false,"autoApprove":[]}}}` |
+| Roo Code | — | `.roo/mcp.json` or the global MCP settings: `{"mcpServers":{"wisply":{"command":"npx","args":["-y","--prefix","/","@wisply/mcp@0.1.0"]}}}` |
+| Goose | **Install in Goose** (above) | `~/.config/goose/config.yaml`: `extensions: {wisply: {name: Wisply, cmd: npx, args: ["-y", "--prefix", "/", "@wisply/mcp@0.1.0"], enabled: true, type: stdio, timeout: 300}}` |
 | LM Studio | **Add to LM Studio** (above) | Program > Install > Edit mcp.json: the standard entry under `mcpServers.wisply` |
-| Kiro | **Add to Kiro** (above) | `.kiro/settings/mcp.json`: `{"mcpServers":{"wisply":{"command":"npx","args":["-y","@wisply/mcp@0.1.0"]}}}` |
-| opencode | — | `~/.config/opencode/opencode.json`: `{"$schema":"https://opencode.ai/config.json","mcp":{"wisply":{"type":"local","command":["npx","-y","@wisply/mcp@0.1.0"],"enabled":true}}}` |
-| Amp, Factory, Grok CLI | `amp mcp add wisply -- npx -y @wisply/mcp@0.1.0`, `droid mcp add wisply "npx -y @wisply/mcp@0.1.0"`, `grok mcp add wisply -- npx -y @wisply/mcp@0.1.0` | — |
+| Kiro | **Add to Kiro** (above) | `.kiro/settings/mcp.json`: `{"mcpServers":{"wisply":{"command":"npx","args":["-y","--prefix","/","@wisply/mcp@0.1.0"]}}}` |
+| opencode | — | `~/.config/opencode/opencode.json`: `{"$schema":"https://opencode.ai/config.json","mcp":{"wisply":{"type":"local","command":["npx","-y","--prefix","/","@wisply/mcp@0.1.0"],"enabled":true}}}` |
+| Amp, Factory, Grok CLI | `amp mcp add wisply -- npx -y --prefix / @wisply/mcp@0.1.0`, `droid mcp add wisply "npx -y --prefix / @wisply/mcp@0.1.0"`, `grok mcp add wisply -- npx -y --prefix / @wisply/mcp@0.1.0` | — |
 | Any other MCP client | — | The standard entry, as a stdio server named `wisply` |
 
 ### Skills
@@ -290,10 +359,12 @@ allows, and Wisply enforces the same rule.
 - **No dependencies, no install scripts, no telemetry.** The package has zero
   runtime dependencies and no lifecycle scripts. It sends nothing anywhere
   except `127.0.0.1`.
-- **Pinned versions.** The npm snippets run one exact, unchangeable npm
-  version, so a new release reaches your app only when you choose it.
-  Installs from this repository are pinned only when they name a release tag
-  (`--ref v0.1.0`); the others follow `main` (see [SECURITY.md](SECURITY.md)).
+- **A pinned version, from npm only.** The npm snippets run one exact,
+  unchangeable npm version, so a new release reaches your app only when you
+  choose it, and `--prefix /` keeps `npx` from taking the package (or an
+  `.npmrc`) from the project folder your app starts it in. Installs from this
+  repository are pinned only when they name a release tag (`--ref v0.1.0`);
+  the others follow `main` (see [SECURITY.md](SECURITY.md)).
 
 ## Privacy
 
@@ -312,22 +383,23 @@ with Wisply's own switches and your confirmation in Wisply.
 The connector answers with a plain message instead of a result:
 
 - **"Wisply MCP token is not set"**: copy the connector token from Wisply >
-  Settings > Integrations > MCP Server and run `npx -y @wisply/mcp@0.1.0 setup`,
-  or give it to your app's secret storage (see above).
+  Settings > Integrations > MCP Server and run
+  `npx -y --prefix / @wisply/mcp@0.1.0 setup`, or give it to your app's secret storage
+  (see above).
 - **"Wisply isn't answering on 127.0.0.1:51771"**: open Wisply and turn on the
   MCP server.
 - **"Wisply identity check failed"**: the program on the port couldn't prove
   it holds your token, so the token wasn't sent. If you regenerated the token
-  in Wisply, run `npx -y @wisply/mcp@0.1.0 setup` again (or update it in your
+  in Wisply, run `npx -y --prefix / @wisply/mcp@0.1.0 setup` again (or update it in your
   app). Otherwise quit whatever uses that port.
 - **"Wisply couldn't run ..."**: Wisply answered the call with an error. The
   connector passes on Wisply's error code but never Wisply's own error text.
 - **"This version of Wisply has no identity check"**: update Wisply.
 - **"... isn't available with your ... token"**: the tool needs another token.
 
-`npx -y @wisply/mcp@0.1.0 status` runs the same checks and says which one failed.
-On other platforms the connector explains that it needs Wisply for Mac on the
-same computer.
+`npx -y --prefix / @wisply/mcp@0.1.0 status` runs the same checks and says which one
+failed. On other platforms the connector explains that it needs Wisply for
+Mac on the same computer.
 
 ## Development
 
@@ -344,9 +416,30 @@ WISPLY_AI_DIR=../wisply-ai WISPLY_PLUGIN_DIR=../wisply-claude-plugin npm test
   and `lib/identity.mjs` from `wisply-claude-plugin`, both by
   `npm run sync-vendor` (see `scripts/sync-vendor.mjs`), which records their
   sha256 in `contract/SOURCE.json`. Don't edit them by hand.
-- `contract/mcp-contract.mjs` is generated by `npm run gen-data`.
+- `contract/mcp-contract.mjs` and `clients/mcp-clients.mjs` are generated by
+  `npm run gen-data`.
+- `clients/mcp-clients.json` is the source of every app setup (`print-config`,
+  `install`). wisply-ai keeps a byte-identical copy at `Docs/mcp-clients.json`
+  (the upstream test compares them once it exists) and wisply-web a hashed
+  one, so change it here first and copy it on. Its templates may use only the
+  `{{args_list}}` and `{{args_cli}}` placeholders; `tests/clients.test.mjs`
+  refuses anything that could carry a token, and any entry without
+  `--prefix /` in front of the exact version.
+- Its `"published": false` says the package name isn't on npm yet. The copies
+  in wisply-ai and wisply-web render nothing from the file while it is false
+  (their own tests check that), because anyone could still register the name
+  and be what `npx -y` runs. It turns `true` in the release change, together
+  with removing `"private"` from `package.json` (`tests/clients.test.mjs` ties
+  the two, and `WISPLY_RELEASE=1 npm test` requires `true`).
+- Every release updates the version in `package.json`, `lib/constants.mjs`
+  and every `@wisply/mcp@<version>` in `clients/mcp-clients.json`
+  (`package_spec`, `standard_entry` and the `vscode-inputs` text); the tests
+  fail while one is behind.
 - `tests/fixtures/fake-wisply.mjs` is a synthetic Wisply for local runs:
   `node tests/fixtures/fake-wisply.mjs` prints its port and synthetic tokens.
+- `install` is tested against a temporary `HOME` and a temporary `PATH`
+  folder with a stand-in for every app's command; no test runs a real
+  `claude`, `codex`, `gemini` or `code`, or touches your own app settings.
 - No test touches a real keychain. The Keychain code is tested with spies and
   plain `node` children standing in for `/usr/bin/security`; on a Mac, the few
   tests that would run the real `security` are skipped. `setup`, `status` and

@@ -8,8 +8,8 @@ import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import contract from '../lib/contract.mjs';
-import { PACKAGE_NAME, PACKAGE_RANGE, PACKAGE_SPEC, SERVER_KEY, VERSION } from '../lib/constants.mjs';
-import { SETUP_COMMAND } from '../lib/messages.mjs';
+import { clientsFile } from '../lib/clients.mjs';
+import { NPX_COMMAND, NPX_FLAGS, PACKAGE_NAME, PACKAGE_RANGE, PACKAGE_SPEC, SERVER_KEY, VERSION } from '../lib/constants.mjs';
 import { toolsFor } from '../lib/scopes.mjs';
 import {
   MCPB_NAME, MCPB_VERSION, PACKER_DIR, bundleFileName, jsonText as buildJsonText, mcpbTools, releaseTag, renderManifest,
@@ -30,7 +30,13 @@ const readme = readText('README.md');
 const AGENT_PLUGIN_SCHEMA = 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json';
 const AGENT_MCP_SCHEMA = 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json';
 const REPO_URL = 'https://github.com/fal3/wisply-mcp';
-const STANDARD_ENTRY = { command: 'npx', args: ['-y', PACKAGE_SPEC] };
+/** The token-free entry every npx setup uses (clients/mcp-clients.json "standard_entry", DIST-M4). */
+const STANDARD_ENTRY = { command: 'npx', args: [...NPX_FLAGS, PACKAGE_SPEC] };
+/**
+ * The setup command as the manifests and docs name it: pinned, after npx's flags. The connector's own
+ * messages say `wisply-mcp setup` until the package name is final (lib/messages.mjs COMMAND_PREFIX).
+ */
+const SETUP_COMMAND = `${NPX_COMMAND} setup`;
 const MANIFESTS = ['plugin.json', 'mcp.json', '.agents/plugins/marketplace.json', 'gemini-extension.json', 'mcpb/manifest.json',
   'glama.json', 'server.json', 'registry/cloud.server.json'];
 const schema = (path) => readJson(`tests/schemas/${path}`);
@@ -44,6 +50,8 @@ test('every manifest is canonical JSON (two-space indent, final newline)', () =>
 
 test('names, versions and the package agree with package.json and lib/constants.mjs', () => {
   assert.equal(pkg.name, PACKAGE_NAME);
+  // The README's one-click links and llms-install.md use the clients file's standard entry (DIST-M4).
+  assert.deepEqual(clientsFile.standard_entry, STANDARD_ENTRY);
   assert.equal(pkg.version, VERSION);
   assert.equal(plugin.name, SERVER_KEY);
   assert.equal(plugin.version, VERSION);
@@ -359,7 +367,7 @@ test('README covers every client the guide lists, and its JSON snippets parse', 
     assert.doesNotMatch(text, /WISPLY_MCP_TOKEN/);
   }
   // The Gemini command keeps -y after --, or Gemini reads it as its own flag.
-  assert.ok(readme.includes(`gemini mcp add --scope user wisply npx -- -y ${PACKAGE_SPEC}`));
+  assert.ok(readme.includes(`gemini mcp add --scope user wisply npx -- ${NPX_FLAGS.join(' ')} ${PACKAGE_SPEC}`));
 });
 
 test('README names the plugin, extension and bundle installs from this repository', () => {

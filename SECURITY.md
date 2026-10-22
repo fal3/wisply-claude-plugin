@@ -63,8 +63,8 @@ the connector's stderr in its log files.
 
 **The token at rest.** Don't put a token in an AI app's config file: those
 files end up in Settings Sync, dotfile repositories and backups. Run
-`npx -y @wisply/mcp@0.1.0 setup`, which keeps it in your login keychain, or let
-the app's secret storage pass it as `WISPLY_MCP_TOKEN`.
+`npx -y --prefix / @wisply/mcp@0.1.0 setup`, which keeps it in your login keychain, or
+let the app's secret storage pass it as `WISPLY_MCP_TOKEN`.
 
 - The item is a generic password: service `ai.wisply.mcp`, account `token`,
   label "Wisply MCP token", trusting `/usr/bin/security` only (`-T`, never
@@ -97,6 +97,32 @@ The Keychain item keeps the token out of config files, sync and backups. It
 does **not** stop another program running as you on this Mac from reading it,
 because the item trusts `/usr/bin/security`. Use the read-only connector
 token, and regenerate it in Wisply if you suspect malware.
+
+**Setting up apps.** The app setups (`print-config`, `install`, and the
+copies in Wisply and on wisply.ai, all from `clients/mcp-clients.json`) hold
+no token and can't: their only placeholders are the connector's arguments,
+and `tests/clients.test.mjs` refuses token prefixes, `Bearer`,
+`Authorization`, headers and direct HTTP to the port. `install` never reads
+the token or the Keychain item, and never writes a token anywhere.
+
+- An app's own command (`claude`, `codex`, `gemini`, `code`) is found in
+  `PATH`'s absolute folders only (an empty or relative entry such as `.`
+  would pick up a program from the folder install runs in, a cloned project
+  for example) and started by that absolute path with `execFile`, a fixed
+  argument list and no shell, in an environment without `WISPLY_MCP_TOKEN`,
+  any other value shaped like a token, or relative `PATH` entries.
+- In a JSON settings file, install reads the file but changes only the text of
+  the `wisply` entry: every other byte stays, so other servers' values (and
+  any secrets in them) are kept exactly. It refuses JSONC (comments), repeated
+  keys and text that isn't UTF-8, and gives up if the file changes while it
+  works (an app saving its settings).
+- The one-time backup `<file>.wisply-backup` is a new file with mode 0600,
+  and every Wisply token in it is masked (`wsp...`), so install never makes a
+  second copy of a token, even next to a file in a dotfiles repository. When
+  the old `wisply` entry held a Wisply token in plain text (as the direct-HTTP
+  setups that Wisply's own Copy buttons produce until a release switches them
+  to this connector do), install replaces it and says so: regenerate the token
+  if the file was ever synced or shared.
 
 **What your AI app does with what it reads.** Whatever the AI app reads from
 Wisply goes to the AI service that app uses, under that service's terms.
@@ -139,6 +165,23 @@ it was installed:
   push to `main` reaches them. Only the npm snippets and tag-pinned installs
   are version-pinned; for the rest, the guard is the `main` ruleset under
   "Release controls".
+**Where npx finds the package.** `npx` uses a copy of the package that is
+already in the folder it starts in (its `node_modules`) before it asks the
+registry, and it reads that folder's `.npmrc`, which can point the `@wisply`
+scope at another registry. AI apps (Claude Code, Cursor, VS Code and others)
+start stdio servers in the project you have open, and they start an entry
+from your user settings without asking again. So a cloned repository holding
+`node_modules/@wisply/mcp` at the pinned version, or such an `.npmrc`, would
+run its own code as the connector as soon as you opened it, with access to
+the Keychain item (which trusts `/usr/bin/security`, see above) and your
+transcripts. Every setup and every command in these docs therefore runs
+`npx -y --prefix / @wisply/mcp@<version>`: with `--prefix /`, npx resolves the
+package and reads the project config from `/`, the read-only system volume
+on macOS, and gets the package from the registry in your own `~/.npmrc`
+(`tests/clients.test.mjs` refuses any setup without it). The strongest setup
+skips npx: `npm i -g @wisply/mcp@<version>` once, then the absolute path of
+`wisply-mcp` as the app's command. Whether each app starts `npx --prefix /`
+cleanly is part of the Mac QA before the release.
 
 Until the contract with Wisply is final, `package.json` is marked `"private"`,
 so `npm publish` refuses the package. Until the npm name is Wisply's
@@ -153,8 +196,8 @@ is told to `npx` a name someone else could register first.
 1. In Wisply, open **Settings > Integrations > MCP Server** and regenerate the
    token (connector, recording or full access). Every client using the old
    token stops working at once.
-2. Run `npx -y @wisply/mcp@0.1.0 setup` again with the new token, or give it
-   to the AI apps that keep it themselves. `npx -y @wisply/mcp@0.1.0 forget`
+2. Run `npx -y --prefix / @wisply/mcp@0.1.0 setup` again with the new token, or give it
+   to the AI apps that keep it themselves. `npx -y --prefix / @wisply/mcp@0.1.0 forget`
    removes the saved token if you don't need it any more.
 3. Turn the MCP server off in Wisply if you don't use it. Wisply stops
    answering MCP requests at once; if Wisply Companion is set up, the same
@@ -170,7 +213,8 @@ package has never been published.
    organization `wisply` exists, with two-factor authentication required for
    every member, and the unscoped fallback name `wisply-mcp` is held by the
    same owner, so nobody else can register either name and be what `npx -y`
-   runs.
+   runs. Until then `clients/mcp-clients.json` says `"published": false`, and
+   its copies in wisply-ai and wisply-web render nothing from it.
 2. **Before the repository is public** (git installs need it public): a
    ruleset on `main` (changes only through pull requests with the `ci` checks
    passing; no force-push and no deletion; signed commits required, or at
@@ -178,10 +222,12 @@ package has never been published.
    update and no deletion), and immutable releases turned on.
 3. **Before the first publish:** the contract is re-vendored from wisply-ai
    (`contract/SOURCE.json` no longer provisional, `WISPLY_RELEASE=1 npm test`
-   passes), `"private": true` is removed from `package.json` and
-   `PACKAGE_NAME_FINAL` becomes `true` in the same change
-   (`tests/pack.test.mjs` ties all three), `setup`, `status` and `forget` have
-   passed the manual Keychain QA on a Mac (below), and a test on a Mac has
+   passes), `"private": true` is removed from `package.json`,
+   `PACKAGE_NAME_FINAL` becomes `true` and `"published"` becomes `true` in
+   `clients/mcp-clients.json` in the same change (`tests/pack.test.mjs` and
+   `tests/clients.test.mjs` tie all four), `setup`, `status` and `forget` have
+   passed the manual Keychain QA on a Mac (below), each app in the install
+   list has started `npx -y --prefix / ...` on a Mac, and a test on a Mac has
    shown that no second socket can listen on Wisply's port while Wisply runs.
 
    Manual Keychain QA, from a checkout (`node bin/wisply-mcp.mjs ...`):
@@ -209,11 +255,14 @@ package has never been published.
 6. **Every release** bumps `version` in `package.json` and `VERSION` in
    `lib/constants.mjs` together, with the versions in `plugin.json`,
    `gemini-extension.json`, `mcpb/manifest.json` and `server.json` (its
-   bundle URL included) and the README's links and `--ref` tags
-   (`tests/manifests.test.mjs` and `tests/registry.test.mjs` fail until they
-   agree). The snippets follow
-   `PACKAGE_SPEC`; update the wisply.ai guide and Wisply's snippets to the
-   new version.
+   bundle URL and its setup command included), the README's links and
+   `--ref` tags, and every `@wisply/mcp@<version>` in
+   `clients/mcp-clients.json` (`package_spec`, `standard_entry` and the
+   `vscode-inputs` text) (`tests/manifests.test.mjs`,
+   `tests/registry.test.mjs` and `tests/clients.test.mjs` fail until they
+   agree). The snippets follow `PACKAGE_SPEC`; copy the clients file on to
+   wisply-ai and wisply-web, so the wisply.ai guide and Wisply's snippets name
+   the new version.
 7. **The Claude Desktop bundle** is built once, in a fresh clone of the
    release tag, with the pinned packer (`npm ci --ignore-scripts --prefix
    tools/mcpb`, from its committed lockfile; never `npx`). `npm run

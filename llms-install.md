@@ -25,7 +25,7 @@ Wisply app on the same Mac, at 127.0.0.1. It needs no account and no API key.
    when macOS asks for it (twice):
 
    ```bash
-   npx -y @wisply/mcp setup
+   npx -y --prefix / @wisply/mcp@0.1.0 setup
    ```
 
    It stores the token in the login keychain as "Wisply MCP token" and checks
@@ -40,7 +40,7 @@ Wisply app on the same Mac, at 127.0.0.1. It needs no account and no API key.
        "wisply": {
          "type": "stdio",
          "command": "npx",
-         "args": ["-y", "@wisply/mcp@0.1.0"],
+         "args": ["-y", "--prefix", "/", "@wisply/mcp@0.1.0"],
          "disabled": false,
          "autoApprove": []
        }
@@ -52,7 +52,7 @@ Wisply app on the same Mac, at 127.0.0.1. It needs no account and no API key.
 4. Check it: the server `wisply` lists `list_memos`, `search_transcripts`,
    `get_live_transcript` and `get_action_items`. Ask "List my latest Wisply
    memos." If a tool answers "Wisply MCP token is not set" or "Wisply isn't
-   answering", relay its steps to the user. `npx -y @wisply/mcp status`
+   answering", relay its steps to the user. `npx -y --prefix / @wisply/mcp@0.1.0 status`
    (run by the user) says which check failed, without printing the token.
 
 ## Good to know

@@ -10,7 +10,7 @@ import { spawn as nodeSpawn } from 'node:child_process';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import contract from '../lib/contract.mjs';
-import { KEYCHAIN_MAX_COPIES, PACKAGE_NAME, PLANNED_COMMANDS, VERSION } from '../lib/constants.mjs';
+import { KEYCHAIN_MAX_COPIES, PACKAGE_SPEC, PLANNED_COMMANDS, VERSION } from '../lib/constants.mjs';
 import { CLI_COMMANDS, parseCliArgs, runCli } from '../lib/cli.mjs';
 import { createLoopback } from '../lib/loopback.mjs';
 import * as messages from '../lib/messages.mjs';
@@ -558,7 +558,7 @@ test('forget ignores WISPLY_MCP_PORT, so a stale value never keeps the item', as
     assert.equal(h.keychain.deletes, 2);
   }
   assert.deepEqual(parseCliArgs(['forget'], { WISPLY_MCP_PORT: 'eighty' }), {
-    options: { command: 'forget', port: 51771, fullAccess: false, readOnly: false, allowClaudeSetup: false },
+    options: { command: 'forget', port: 51771, fullAccess: false, readOnly: false, allowClaudeSetup: false, app: null },
   });
   // setup and status, which use the port, still refuse a bad one (exit 2).
   for (const command of ['setup', 'status']) {
@@ -582,7 +582,7 @@ test('forget runs delete-generic-password through the real function', async () =
 });
 
 test('arguments: each command takes only its own flags; --help; bad ports exit 2', async () => {
-  assert.deepEqual(CLI_COMMANDS, ['setup', 'status', 'forget']);
+  assert.deepEqual(CLI_COMMANDS, ['setup', 'status', 'forget', 'print-config', 'install']);
   for (const command of CLI_COMMANDS) assert.ok(!PLANNED_COMMANDS.includes(command));
   const refused = [
     ['setup', '--read-only'], ['setup', '--allow-claude-setup'], ['setup', 'extra'], ['status', '--full-access'],
@@ -607,10 +607,10 @@ test('arguments: each command takes only its own flags; --help; bad ports exit 2
     assert.equal(h.keychain.writes + h.keychain.reads + h.keychain.deletes, 0);
   }
   assert.deepEqual(parseCliArgs(['status', '--port=51772', '--read-only'], {}), {
-    options: { command: 'status', port: 51772, fullAccess: false, readOnly: true, allowClaudeSetup: false },
+    options: { command: 'status', port: 51772, fullAccess: false, readOnly: true, allowClaudeSetup: false, app: null },
   });
   assert.deepEqual(parseCliArgs(['setup', '--full-access'], { WISPLY_MCP_PORT: ' 51779 ', WISPLY_MCP_ALLOW_CLAUDE_SETUP: '1' }), {
-    options: { command: 'setup', port: 51779, fullAccess: true, readOnly: false, allowClaudeSetup: false },
+    options: { command: 'setup', port: 51779, fullAccess: true, readOnly: false, allowClaudeSetup: false, app: null },
   });
   assert.ok('error' in parseCliArgs(['serve'], {}));
 });
@@ -668,7 +668,7 @@ test('every CLI text is ASCII, holds no token, and names only commands this buil
     assert.equal(text.search(/[^\x00-\x7f]/), -1, text);
     assert.doesNotMatch(text, TOKEN_SHAPE);
     for (const command of PLANNED_COMMANDS) {
-      assert.ok(!text.includes(`${PACKAGE_NAME} ${command}`) && !text.includes(`wisply-mcp ${command}`), `${command}: ${text}`);
+      assert.ok(!text.includes(`${PACKAGE_SPEC} ${command}`) && !text.includes(`wisply-mcp ${command}`), `${command}: ${text}`);
     }
   }
   assert.equal(messages.FORGET_COMMAND, `${messages.COMMAND_PREFIX} forget`);

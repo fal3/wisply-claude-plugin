@@ -2,7 +2,7 @@
 // Rewrites the generated data modules from their JSON sources:
 //
 //   contract/mcp-contract.json -> contract/mcp-contract.mjs
-//   clients/mcp-clients.json   -> clients/mcp-clients.mjs   (once DIST-M4 adds it)
+//   clients/mcp-clients.json   -> clients/mcp-clients.mjs
 //
 // lib/ imports the .mjs files, not the JSON: a static import works on every
 // Node 20 and survives a single-file bundle (the VS Code extension's), while

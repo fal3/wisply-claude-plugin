@@ -7,7 +7,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import contract from '../lib/contract.mjs';
-import { PACKAGE_NAME, PACKAGE_NAME_FINAL, PACKAGE_RANGE, PACKAGE_SPEC, VERSION } from '../lib/constants.mjs';
+import { NPX_COMMAND, PACKAGE_NAME, PACKAGE_NAME_FINAL, PACKAGE_RANGE, PACKAGE_SPEC, VERSION } from '../lib/constants.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
@@ -32,7 +32,8 @@ test('the tarball holds only bin, lib, contract, clients, README, LICENSE and pa
   const allowed = /^(bin\/[^/]+\.mjs|lib\/[^/]+\.mjs|contract\/[^/]+\.(json|mjs)|clients\/[^/]+\.(json|mjs)|README\.md|LICENSE|package\.json)$/;
   for (const file of files) assert.match(file, allowed);
   for (const required of ['bin/wisply-mcp.mjs', 'lib/bridge.mjs', 'lib/identity.mjs', 'lib/contract.mjs', 'lib/messages.mjs',
-    'contract/mcp-contract.json', 'contract/mcp-contract.mjs', 'contract/SOURCE.json', 'README.md', 'LICENSE', 'package.json']) {
+    'lib/cli.mjs', 'lib/clients.mjs', 'contract/mcp-contract.json', 'contract/mcp-contract.mjs', 'contract/SOURCE.json',
+    'clients/mcp-clients.json', 'clients/mcp-clients.mjs', 'README.md', 'LICENSE', 'package.json']) {
     assert.ok(files.includes(required), required);
   }
   for (const file of files) {
@@ -58,17 +59,25 @@ test('the package name is final exactly when package.json is no longer private',
 
 test('every npx or npm install of the package in the docs and messages runs the pinned version', () => {
   // The exact version, as every snippet. The 0.x range is only ever a version to write, never a command.
+  // (tests/clients.test.mjs also requires npx's --prefix / before the package.)
   const escaped = PACKAGE_NAME.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
-  const command = new RegExp(`\\b(?:npx(?: -y)?|npm (?:i|install) -g) (${escaped}[^\\s\`"'),]*)`, 'g');
+  const command = new RegExp(`\\b(?:npx(?: -y)?(?: --prefix /)?|npm (?:i|install) -g) (${escaped}[^\\s\`"'),]*)`, 'g');
   for (const file of ['README.md', 'SECURITY.md', 'CHANGELOG.md']) {
     const text = readFileSync(join(ROOT, file), 'utf8');
-    for (const match of text.matchAll(command)) assert.equal(match[1], PACKAGE_SPEC, `${file}: ${match[0]}`);
+    for (const match of text.matchAll(command)) {
+      // `@wisply/mcp@<version>` is how the docs write "this release's version" in general.
+      assert.ok([PACKAGE_SPEC, `${PACKAGE_NAME}@<version>`].includes(match[1]), `${file}: ${match[0]}`);
+    }
   }
-  // In messages.mjs, npx appears once: COMMAND_PREFIX, with the pinned spec, and only once the name is final.
+  // In messages.mjs, npx reaches a text only through COMMAND_PREFIX (NPX_COMMAND: npx's flags and the pinned
+  // spec), and only once the name is final.
   const source = readFileSync(join(ROOT, 'lib/messages.mjs'), 'utf8');
-  assert.deepEqual([...source.matchAll(/npx -y \$\{(\w+)\}/g)].map((match) => match[1]), ['PACKAGE_SPEC']);
-  assert.match(source, /PACKAGE_NAME_FINAL \? `npx -y \$\{PACKAGE_SPEC\}` : 'wisply-mcp'/);
+  const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/^import .*$/gm, '');
+  assert.equal(code.split('NPX_COMMAND').length - 1, 1, 'NPX_COMMAND is used once, in COMMAND_PREFIX');
+  assert.match(code, /export const COMMAND_PREFIX = PACKAGE_NAME_FINAL \? NPX_COMMAND : 'wisply-mcp';/);
+  assert.doesNotMatch(code, /\$\{(PACKAGE_SPEC|PACKAGE_NAME)\}|\bnpx\b/);
   assert.doesNotMatch(source, /npx -y @wisply/);
+  assert.equal(NPX_COMMAND, `npx -y --prefix / ${PACKAGE_SPEC}`);
 });
 
 test('no dependencies and no lifecycle scripts', () => {
@@ -99,12 +108,12 @@ test('package.json, the constants and the README agree', () => {
   assert.match(readFileSync(join(ROOT, 'LICENSE'), 'utf8'), /^MIT License/);
 
   const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
-  assert.ok(readme.includes(`"args": ["-y", "${PACKAGE_SPEC}"]`), 'README shows the standard entry');
-  assert.ok(readme.includes(`npx -y ${PACKAGE_SPEC}`));
+  assert.ok(readme.includes(`"args": ["-y", "--prefix", "/", "${PACKAGE_SPEC}"]`), 'README shows the standard entry');
+  assert.ok(readme.includes(NPX_COMMAND));
   for (const tool of contract.tools) assert.ok(readme.includes(`\`${tool}\``), `README names ${tool}`);
   assert.ok(!readme.includes('@wisply/mcp@latest'));
   // The range appears only in the opt-in note, never in a snippet.
-  assert.ok(!readme.includes(`"${PACKAGE_RANGE}"`) && !readme.includes(`npx -y ${PACKAGE_RANGE} `) && !readme.includes(`npx -y ${PACKAGE_RANGE}\``),
+  assert.ok(!readme.includes(`"${PACKAGE_RANGE}"`) && !readme.includes(`/ ${PACKAGE_RANGE} `) && !readme.includes(`/ ${PACKAGE_RANGE}\``),
     'README snippets run the exact version');
 });
 
