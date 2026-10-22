@@ -111,6 +111,27 @@ Not shipped in the npm package.
   byte with `provisional: false`. The re-vendor itself is a follow-up PR from
   the wisply-ai `main` commit that has both ("Re-vendoring the contract" in
   SECURITY.md).
+- **Drift fails on `main`, and is listed on an unmerged branch.** The
+  fixture follows wisply-ai's `main` (DIST-M4's 4727f5a, carried here for
+  DIST-A1). When `WISPLY_AI_DIR` is a branch `origin/main` doesn't have (a
+  lane's worktree, such as raycast PR 1's or DIST-A1's), the contract and
+  catalog checks compare the commit where it left `main` too: drift found
+  only on the branch is listed and the test is skipped, since it reaches the
+  fixture through the re-vendor once it is merged; drift `main` already has
+  fails. The descriptors are compared with the Swift catalog at the
+  transcription commit (885cc75), not the checkout, and a separate test
+  reports when the checkout's sources have moved on (raycast PR 1's
+  `tail_words`, DIST-A1's per-tool `destructiveHint`). A wisply-ai contract
+  with `tool_descriptors` but without raycast PR 1's keys (DIST-A1 alone),
+  which `sync-vendor` refuses, is compared key by key (scope by scope,
+  descriptor by descriptor); one the connector can load asks for the
+  re-vendor.
+- **wisply-ai's copy is pinned, not mirrored.** wisply-ai pins
+  `Docs/mcp-clients.json` to a commit of `clients/mcp-clients.json`
+  (`MCPClientSnippetsTests.vendoredClients`), so the upstream test accepts
+  the file as of any commit here while the copy says `"published": false`
+  (Wisply renders nothing from it), reports it as a TODO, and fails for a
+  copy no commit here has, or a published copy that isn't the current file.
 - **Staged publishing.** The design's last step is `npm publish --provenance
   --access public`. npm's trusted publishing now has "allowed actions", and a
   trusted publisher created after 2026-09-03 allows only `npm stage publish`
