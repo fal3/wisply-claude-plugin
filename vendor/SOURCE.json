@@ -81,6 +81,23 @@
       }
     }
   ],
+  "skill": {
+    "repository": "github:fal3/wisply-mcp",
+    "commit": "f0d3a4d0466950d8f7cb72413699c6279484294f",
+    "ref": "claude/distribution-4",
+    "files": {
+      "vendor/skills/wisply-memos/SKILL.md": {
+        "upstream": "skills/wisply-memos/SKILL.md",
+        "sha256": "ebdc6102875f4989d7a461ec1fd0c7f595993a339ef4e1ac44bebb022890c48e"
+      }
+    },
+    "packaged": {
+      "path": "skills/wisply-memos/SKILL.md",
+      "from": "vendor/skills/wisply-memos/SKILL.md",
+      "overlay": "compatibility",
+      "sha256": "379100130b8629251f04e54dc5a45a8702439af4c4c5ac5a67cfc3f3e05d6fdd"
+    }
+  },
   "bundle": {
     "path": "server/wisply-mcp.mjs",
     "entry": "vendor/wisply-mcp/bin/wisply-mcp.mjs",

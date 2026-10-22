@@ -1,7 +1,7 @@
 // package.json, the lockfile and the build settings.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { COMMANDS } from '../out/test/extension.mjs';
 import { PROVIDER_ID, SERVER_LABEL } from '../out/test/provider.mjs';
 
@@ -51,7 +51,7 @@ test('@types/vscode equals the engine floor (vsce refuses newer typings)', () =>
 test('dev dependencies are exact; there are no runtime dependencies', () => {
   assert.equal(manifest.dependencies, undefined);
   assert.deepEqual(Object.keys(manifest.devDependencies).sort(),
-    ['@types/node', '@types/vscode', '@vscode/vsce', 'esbuild', 'typescript']);
+    ['@types/node', '@types/vscode', '@vscode/test-electron', '@vscode/vsce', 'esbuild', 'typescript']);
   for (const [name, version] of Object.entries(manifest.devDependencies)) assert.match(version, SEMVER, name);
   assert.equal(manifest.devDependencies['@vscode/vsce'], '4.0.0');
   assert.match(manifest.devDependencies['@types/node'], /^22\./);
@@ -80,6 +80,10 @@ test('npm runs no install scripts here; only vsce\'s prepublish hook exists', ()
   assert.doesNotMatch(JSON.stringify(manifest.scripts), /WISPLY_DEV_PACKAGE/);
   assert.equal(manifest.scripts['package:release'], 'vsce package --no-dependencies');
   assert.match(manifest.scripts.check, /typecheck.*test.*build.*npm run package$/);
+  // The VS Code integration test needs a real editor (a Mac or public CI), so check never runs it.
+  assert.equal(manifest.scripts['test:integration'], 'node test/integration/run.mjs');
+  assert.doesNotMatch(manifest.scripts.check, /integration/);
+  assert.doesNotMatch(manifest.scripts.test, /integration/);
 });
 
 test('runs on the Mac side, at startup, from the bundle', () => {
@@ -94,16 +98,41 @@ test('the MCP provider contribution matches the code', () => {
   assert.deepEqual(manifest.contributes.mcpServerDefinitionProviders, [{ id: PROVIDER_ID, label: SERVER_LABEL }]);
 });
 
+test('the skill contribution points at the packaged SKILL.md, in a folder named after the skill', () => {
+  assert.deepEqual(manifest.contributes.chatSkills, [{ path: './skills/wisply-memos/SKILL.md' }]);
+  assert.ok(existsSync(new URL('../skills/wisply-memos/SKILL.md', import.meta.url)));
+});
+
+/** Width and height from a PNG's IHDR chunk. */
+function pngSize(bytes) {
+  assert.deepEqual([...bytes.subarray(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 'a PNG signature');
+  assert.equal(bytes.subarray(12, 16).toString('latin1'), 'IHDR');
+  return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20), colorType: bytes[25] };
+}
+
+test('the icon is a 256x256 PNG with transparency (vsce refuses SVG; the stores want at least 128x128)', () => {
+  assert.equal(manifest.icon, 'media/icon.png');
+  const { width, height, colorType } = pngSize(readFileSync(new URL('../media/icon.png', import.meta.url)));
+  assert.deepEqual({ width, height }, { width: 256, height: 256 });
+  assert.equal(colorType, 6, 'RGBA');
+});
+
 test('commands: the palette shows "Wisply: …" for each one the extension registers', () => {
   const titles = Object.fromEntries(manifest.contributes.commands.map((command) => [command.command, `${command.category}: ${command.title}`]));
   assert.deepEqual(titles, {
     [COMMANDS.setToken]: 'Wisply: Set Token…',
     [COMMANDS.forgetToken]: 'Wisply: Forget Token',
+    [COMMANDS.insertQuote]: 'Wisply: Insert Transcript Quote',
     [COMMANDS.checkConnection]: 'Wisply: Check Connection',
     [COMMANDS.storeTokenInKeychain]: 'Wisply: Store Token in the Mac Keychain…',
     [COMMANDS.openSetupGuide]: 'Wisply: Open Setup Guide',
+    [COMMANDS.statusMenu]: 'Wisply: Show Menu',
   });
-  assert.deepEqual(manifest.contributes.menus.commandPalette, [{ command: COMMANDS.storeTokenInKeychain, when: 'isMac' }]);
+  // The status bar item's menu repeats the other commands, so the palette doesn't list it.
+  assert.deepEqual(manifest.contributes.menus.commandPalette, [
+    { command: COMMANDS.storeTokenInKeychain, when: 'isMac' },
+    { command: COMMANDS.statusMenu, when: 'false' },
+  ]);
 });
 
 test('TypeScript is strict and only type-checks', () => {
@@ -113,8 +142,22 @@ test('TypeScript is strict and only type-checks', () => {
   assert.deepEqual(config.include, ['src/**/*.ts']);
 });
 
+test('no source, test, script or document holds an invisible or text-direction character (they are written as escapes)', () => {
+  const root = new URL('..', import.meta.url);
+  const files = ['package.json', 'README.md', 'CHANGELOG.md', 'SECURITY.md', 'DEVELOPMENT.md', 'PUBLISHING.md',
+    'skills/wisply-memos/SKILL.md'];
+  for (const dir of ['src', 'test', 'test/fixtures', 'test/integration', 'scripts']) {
+    for (const name of readdirSync(new URL(`${dir}/`, root))) {
+      if (/\.(ts|mjs|cjs|py)$/.test(name)) files.push(`${dir}/${name}`);
+    }
+  }
+  const hidden = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/u;
+  for (const path of files) assert.doesNotMatch(read(path), hidden, path);
+});
+
 test('nothing in the repository looks like a real token', () => {
-  for (const path of ['package.json', 'package-lock.json', 'README.md', 'vendor/SOURCE.json', 'test/fork-versions.json']) {
+  for (const path of ['package.json', 'package-lock.json', 'README.md', 'CHANGELOG.md', 'SECURITY.md', 'DEVELOPMENT.md',
+    'PUBLISHING.md', 'vendor/SOURCE.json', 'test/fork-versions.json', 'skills/wisply-memos/SKILL.md']) {
     assert.doesNotMatch(read(path), /wsp[cr]?_[0-9a-f]{64}/, path);
   }
 });

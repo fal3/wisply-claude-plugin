@@ -7,10 +7,13 @@
 // - Else a one-time notice offers the token-free config to paste: the
 //   bundled connector, like the other two, never an npm package.
 //
-// Commands: Set Token…, Forget Token, Check Connection, Store Token in the Mac
-// Keychain…, Open Setup Guide. The token lives in SecretStorage
-// (src/token.ts); the extension's own reads go through the read-only sidecar
-// (src/sidecar.ts), so extension-host code never sends the token.
+// Commands: Set Token…, Forget Token, Insert Transcript Quote, Check
+// Connection, Store Token in the Mac Keychain…, Open Setup Guide, and the
+// menu the status bar item opens. The token lives in SecretStorage
+// (src/token.ts); the extension's own reads (Check Connection, the status bar
+// item in src/status.ts, Insert Transcript Quote in src/quote.ts) go through
+// the read-only sidecar (src/sidecar.ts), so extension-host code never sends
+// the token.
 //
 // Only activate() touches the real `vscode` module; activateExtension() takes
 // it as an argument, so tests drive it with a fake.
@@ -22,9 +25,12 @@ import { storeTokenInKeychain } from './keychain';
 import { getMcpApi } from './mcp-api';
 import { PROVIDER_ID, createProvider, serverLaunch, stringEnv } from './provider';
 import type { Launch, WisplyProvider } from './provider';
-import { affectsWisply, readSettings, sameSettings } from './settings';
+import { insertQuote } from './quote';
+import { KEYS, affectsWisply, readSettings, sameServerSettings, sameSettings, updateUserSetting } from './settings';
 import { CHECK_ARGUMENTS, CHECK_TIMEOUT_MS, CHECK_TOOL, createSidecar, describeConnection } from './sidecar';
 import type { ConnectionReport, SidecarDeps } from './sidecar';
+import { createStatusController, pickMenuAction } from './status';
+import type { MenuAction, StatusDeps } from './status';
 import { createTokenStore, promptForToken, scopeTitle } from './token';
 import type { UsableScope } from './token';
 
@@ -34,9 +40,12 @@ export const SETUP_GUIDE_URL = 'https://www.wisply.ai/docs/mcp/install#vscode';
 export const COMMANDS = Object.freeze({
   setToken: 'wisply.setToken',
   forgetToken: 'wisply.forgetToken',
+  insertQuote: 'wisply.insertQuote',
   checkConnection: 'wisply.checkConnection',
   storeTokenInKeychain: 'wisply.storeTokenInKeychain',
   openSetupGuide: 'wisply.openSetupGuide',
+  /** The status bar item's menu (hidden from the Command Palette). */
+  statusMenu: 'wisply.statusMenu',
 });
 
 /** globalState keys for the one-time notices. */
@@ -51,6 +60,7 @@ export const BUTTONS = Object.freeze({
   copyConfig: 'Copy Config',
   openSetupGuide: 'Open Setup Guide',
   storeInKeychain: 'Store Token in the Mac Keychain…',
+  undo: 'Undo',
 });
 
 export const TEXT = Object.freeze({
@@ -72,6 +82,8 @@ export const TEXT = Object.freeze({
     'token everywhere, regenerate it in Wisply > Settings > Integrations > MCP Server.',
   nothingToForget: "No Wisply token is stored in this editor's secret storage.",
   checking: 'Checking Wisply…',
+  statusHidden: "Wisply's status bar item is hidden. To show it again, turn on Wisply › Status Bar: Enabled in " +
+    'your user settings.',
 });
 
 /**
@@ -99,6 +111,9 @@ export interface ActivationDeps {
   readonly platform?: string;
   readonly hostEnv?: SidecarDeps['hostEnv'];
   readonly spawn?: SidecarDeps['spawn'];
+  /** For tests: the status bar item's timers and clock. */
+  readonly timers?: StatusDeps['timers'];
+  readonly now?: StatusDeps['now'];
 }
 
 type VscodeModule = typeof vscode;
@@ -124,6 +139,20 @@ export function activateExtension(vs: VscodeModule, context: vscode.ExtensionCon
     clientVersion: extVersion,
   });
   subscriptions.push({ dispose: () => sidecar.dispose() });
+
+  // --- Status bar item (macOS only: elsewhere there's no Wisply to show) ---
+  const status = createStatusController({
+    window: vs.window,
+    ThemeColor: vs.ThemeColor,
+    alignment: vs.StatusBarAlignment.Right,
+    command: COMMANDS.statusMenu,
+    call: (tool, args, timeoutMs) => sidecar.call(tool, args, timeoutMs),
+    getPort: () => settings.port,
+    isEnabled: () => settings.statusBarEnabled && platform === 'darwin',
+    ...(deps.timers ? { timers: deps.timers } : {}),
+    ...(deps.now ? { now: deps.now } : {}),
+  });
+  subscriptions.push(status);
 
   // --- MCP registration ---
   let mode: Mode = 'manual';
@@ -214,6 +243,38 @@ export function activateExtension(vs: VscodeModule, context: vscode.ExtensionCon
     await show(await check(), TEXT.saved(entered.scope));
   }
 
+  async function quote() {
+    await insertQuote({
+      window,
+      call: (tool, args, timeoutMs) => sidecar.call(tool, args, timeoutMs),
+      getSettings: () => settings,
+      platform,
+      presentProblem: (report) => show({ report, stored: null }),
+      onLiveAnswer: (answer) => status.report(answer),
+      progressLocation: vs.ProgressLocation.Notification,
+    });
+  }
+
+  async function hideStatusItem() {
+    await updateUserSetting(vs, KEYS.statusBarEnabled, false);
+    const choice = await window.showInformationMessage(TEXT.statusHidden, BUTTONS.undo);
+    if (choice === BUTTONS.undo) await updateUserSetting(vs, KEYS.statusBarEnabled, true);
+  }
+
+  const menuActions: Record<MenuAction, () => unknown> = {
+    insertQuote: quote,
+    checkConnection,
+    setToken,
+    storeTokenInKeychain: storeInKeychain,
+    openSetupGuide,
+    hideStatusItem,
+  };
+
+  async function statusMenu() {
+    const action = await pickMenuAction(window, platform);
+    if (action) await menuActions[action]();
+  }
+
   async function forgetToken() {
     const had = await tokens.get();
     await tokens.forget();
@@ -225,32 +286,41 @@ export function activateExtension(vs: VscodeModule, context: vscode.ExtensionCon
   };
   register(COMMANDS.setToken, setToken);
   register(COMMANDS.forgetToken, forgetToken);
+  register(COMMANDS.insertQuote, quote);
   register(COMMANDS.checkConnection, checkConnection);
   register(COMMANDS.storeTokenInKeychain, storeInKeychain);
   register(COMMANDS.openSetupGuide, openSetupGuide);
+  register(COMMANDS.statusMenu, statusMenu);
 
   // --- Changes ---
   // Every token change (here or in another window) gives the definition a
   // new version, so the editor offers to restart a running server, which
   // still has the old token in its environment.
   subscriptions.push(tokens.onDidChange(() => {
-    void sidecar.sync();
+    void sidecar.sync().catch(() => undefined).then(() => status.refresh());
     void provider?.tokenChanged();
   }));
   subscriptions.push(vs.workspace.onDidChangeConfiguration((event) => {
     if (!affectsWisply(event)) return;
     const next = readSettings(vs);
     if (sameSettings(next, settings)) return;
+    const serverChanged = !sameServerSettings(next, settings);
     settings = next;
-    void sidecar.sync();
-    provider?.refresh();
-    if (cursorMcp && cursorRegistration) {
-      cursorRegistration.dispose();
-      try {
-        cursorRegistration = registerWithCursor(cursorMcp, launch());
-      } catch {
-        cursorRegistration = null;
+    if (serverChanged) {
+      // The status bar item follows the port once the sidecar has.
+      void sidecar.sync().catch(() => undefined).then(() => status.settingsChanged());
+      provider?.refresh();
+      if (cursorMcp && cursorRegistration) {
+        cursorRegistration.dispose();
+        try {
+          cursorRegistration = registerWithCursor(cursorMcp, launch());
+        } catch {
+          cursorRegistration = null;
+        }
       }
+    } else {
+      // Only the display settings: the status bar item may be turned on or off.
+      void status.settingsChanged();
     }
   }));
 
@@ -283,6 +353,9 @@ export function activateExtension(vs: VscodeModule, context: vscode.ExtensionCon
   }
   const noticesDone = notices().catch(() => { /* a notice never breaks activation */ });
 
+  // The first status poll (when the window is focused; otherwise once it is).
+  void status.refresh();
+
   let disposed = false;
   return {
     mode,
@@ -312,4 +385,13 @@ export function activate(context: vscode.ExtensionContext): void {
 export function deactivate(): void {
   current?.dispose();
   current = null;
+}
+
+/**
+ * How the running activation registered the connector, or null before
+ * activation. Not part of the extension's API (activate returns nothing);
+ * test/integration/suite.cjs reads it from this module.
+ */
+export function activeMode(): Mode | null {
+  return current?.mode ?? null;
 }

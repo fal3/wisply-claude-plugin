@@ -1,4 +1,5 @@
-// vendor/ and server/wisply-mcp.mjs against vendor/SOURCE.json, and, with
+// vendor/ and server/wisply-mcp.mjs against vendor/SOURCE.json (the skill's
+// own checks are in test/skill.test.mjs), and, with
 // WISPLY_MCP_DIR and WISPLY_PLUGIN_DIR set, against the source repositories.
 // With WISPLY_RELEASE=1 everything the release gate refuses fails here too
 // (scripts/release-gate.mjs: a provisional contract, a branch other than
@@ -15,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { EDITOR_MESSAGES, VENDORED_MESSAGES } from '../esbuild.mjs';
 import { releaseProblems } from '../scripts/release-gate.mjs';
 import {
-  MCP_DIR, MCP_REMOTE, MCP_REMOTE_RE, MCP_REPOSITORY, PLUGIN_FILES, PLUGIN_REPOSITORY, SOURCE_FILE, VENDOR_SCHEMA, isOnRef,
+  MCP_DIR, MCP_REMOTE, MCP_REMOTE_RE, MCP_REPOSITORY, PLUGIN_FILES, PLUGIN_REPOSITORY, SOURCE_FILE, VENDOR_SCHEMA, checkRef, isOnRef,
   isVendoredMcpPath, validRef, verifyOnUpstreamMain,
 } from '../scripts/sync-vendor.mjs';
 
@@ -41,7 +42,7 @@ test('SOURCE.json names both sources at full commits', () => {
 });
 
 test('every vendored file matches its recorded sha256, and every file in vendor/ is recorded', () => {
-  const recorded = { ...mcp.files, ...plugin.files };
+  const recorded = { ...mcp.files, ...plugin.files, ...source.skill.files };
   for (const [path, entry] of Object.entries(recorded)) assert.equal(sha256(path), entry.sha256, path);
   const onDisk = walk('vendor').filter((path) => path !== SOURCE_FILE).sort();
   assert.deepEqual(onDisk, Object.keys(recorded).sort());
@@ -199,6 +200,16 @@ test('verifyOnUpstreamMain: only a commit on GitHub\'s main counts, never the ch
   assert.throws(() => verifyOnUpstreamMain(work, localOnly, { env }), /is not on https:\/\/github\.com\/fal3\/wisply-mcp main/,
     '...but GitHub\'s main doesn\'t');
   assert.deepEqual(verifyOnUpstreamMain(work, pushed, { env }), { remote: MCP_REMOTE, mainTip: pushed });
+
+  // checkRef is what sync-vendor records for the connector and for a skill
+  // from another commit: main only as checked against GitHub, a branch only
+  // when it holds the commit, nothing without a ref.
+  assert.deepEqual(checkRef(work, pushed, 'main', 'skill commit', { env }), { remote: MCP_REMOTE, remote_main: pushed });
+  assert.throws(() => checkRef(work, localOnly, 'main', 'skill commit', { env }), /is not on https:\/\/github\.com\/fal3\/wisply-mcp main/);
+  git(work, 'branch', 'side', pushed);
+  assert.equal(checkRef(work, pushed, 'side', 'skill commit', { env }), null);
+  assert.throws(() => checkRef(work, localOnly, 'side', 'skill commit', { env }), /is not on side in .*the skill commit is on/);
+  assert.equal(checkRef(work, localOnly, undefined, 'skill commit', { env }), null);
 
   // A checkout of another repository, or none at all, is refused before any fetch.
   git(work, 'remote', 'set-url', 'origin', 'https://github.com/fal3/wisply-claude-plugin');

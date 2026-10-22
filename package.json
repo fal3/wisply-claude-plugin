@@ -43,13 +43,17 @@
     "onStartupFinished"
   ],
   "main": "./dist/extension.js",
+  "icon": "media/icon.png",
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": "limited",
       "description": "In Restricted Mode, Wisply reads its settings only from your user settings.",
       "restrictedConfigurations": [
         "wisply.port",
-        "wisply.mcp.allowClaudeSetup"
+        "wisply.mcp.allowClaudeSetup",
+        "wisply.statusBar.enabled",
+        "wisply.quote.words",
+        "wisply.quote.format"
       ]
     },
     "virtualWorkspaces": true
@@ -61,6 +65,11 @@
         "label": "Wisply (this Mac)"
       }
     ],
+    "chatSkills": [
+      {
+        "path": "./skills/wisply-memos/SKILL.md"
+      }
+    ],
     "commands": [
       {
         "command": "wisply.setToken",
@@ -70,6 +79,11 @@
       {
         "command": "wisply.forgetToken",
         "title": "Forget Token",
+        "category": "Wisply"
+      },
+      {
+        "command": "wisply.insertQuote",
+        "title": "Insert Transcript Quote",
         "category": "Wisply"
       },
       {
@@ -86,6 +100,11 @@
         "command": "wisply.openSetupGuide",
         "title": "Open Setup Guide",
         "category": "Wisply"
+      },
+      {
+        "command": "wisply.statusMenu",
+        "title": "Show Menu",
+        "category": "Wisply"
       }
     ],
     "menus": {
@@ -93,6 +112,10 @@
         {
           "command": "wisply.storeTokenInKeychain",
           "when": "isMac"
+        },
+        {
+          "command": "wisply.statusMenu",
+          "when": "false"
         }
       ]
     },
@@ -114,6 +137,34 @@
           "scope": "application",
           "ignoreSync": true,
           "markdownDescription": "Offer Wisply's `setup_claude` tool to AI chat when a full-access token is set with **Wisply: Set Token**. The tool can replace the Anthropic API key saved in Wisply, so it is off by default. Wisply reads this setting only from your user settings on this computer: not from a workspace, a dev container or a remote machine, and Settings Sync doesn't copy it to your other computers."
+        },
+        "wisply.statusBar.enabled": {
+          "type": "boolean",
+          "default": true,
+          "scope": "application",
+          "markdownDescription": "Show Wisply's recording state in the status bar. While the window is focused, the extension asks Wisply for it every 10 seconds during a recording and every 30 seconds otherwise. Wisply reads this setting only from your user settings."
+        },
+        "wisply.quote.words": {
+          "type": "integer",
+          "default": 80,
+          "minimum": 10,
+          "maximum": 400,
+          "scope": "application",
+          "markdownDescription": "How many of the last words of the recording in progress **Wisply: Insert Transcript Quote** inserts (10 to 400). Wisply reads this setting only from your user settings."
+        },
+        "wisply.quote.format": {
+          "type": "string",
+          "default": "markdown",
+          "enum": [
+            "markdown",
+            "plain"
+          ],
+          "enumDescriptions": [
+            "A Markdown block quote that ends with a line naming Wisply, the memo title and the date.",
+            "One line: the quote in double quotes, then Wisply, the memo title and the date in parentheses."
+          ],
+          "scope": "application",
+          "markdownDescription": "How **Wisply: Insert Transcript Quote** formats a quote. Wisply reads this setting only from your user settings."
         }
       }
     }
@@ -121,6 +172,7 @@
   "scripts": {
     "build": "node esbuild.mjs",
     "test": "node esbuild.mjs --tests && node --test \"test/*.test.mjs\"",
+    "test:integration": "node test/integration/run.mjs",
     "typecheck": "tsc --noEmit",
     "package": "node scripts/package-dev.mjs",
     "package:release": "vsce package --no-dependencies",
@@ -131,6 +183,7 @@
   "devDependencies": {
     "@types/node": "22.20.5",
     "@types/vscode": "1.93.0",
+    "@vscode/test-electron": "3.1.0",
     "@vscode/vsce": "4.0.0",
     "esbuild": "0.28.2",
     "typescript": "5.9.3"

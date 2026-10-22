@@ -11,9 +11,8 @@ import { fileURLToPath } from 'node:url';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const VSCE = join(ROOT, 'node_modules/@vscode/vsce/vsce');
 
-const REQUIRED = ['LICENSE', 'README.md', 'dist/extension.js', 'package.json', 'server/wisply-mcp.mjs', 'vendor/SOURCE.json'];
-/** Files DIST-V2 adds; allowed, not required yet. */
-const LATER = ['CHANGELOG.md', 'SECURITY.md', 'media/icon.png', 'skills/wisply-memos/SKILL.md'];
+const REQUIRED = ['CHANGELOG.md', 'LICENSE', 'README.md', 'SECURITY.md', 'dist/extension.js', 'media/icon.png', 'package.json',
+  'server/wisply-mcp.mjs', 'skills/wisply-memos/SKILL.md', 'vendor/SOURCE.json'];
 
 const listed = execFileSync(process.execPath, [VSCE, 'ls', '--no-dependencies'], {
   cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
@@ -21,12 +20,12 @@ const listed = execFileSync(process.execPath, [VSCE, 'ls', '--no-dependencies'],
 
 test('the package holds exactly the runtime files and the store documents', () => {
   for (const file of REQUIRED) assert.ok(listed.includes(file), `${file} missing (run npm run build first)`);
-  for (const file of listed) assert.ok(REQUIRED.includes(file) || LATER.includes(file), `unexpected file in the .vsix: ${file}`);
+  for (const file of listed) assert.ok(REQUIRED.includes(file), `unexpected file in the .vsix: ${file}`);
 });
 
 test('no sources, tests, fixtures, scripts, vendored sources, dependencies or maps', () => {
   for (const file of listed) {
-    assert.doesNotMatch(file, /^(src|test|scripts|out|node_modules|vendor\/wisply-mcp)\//, file);
+    assert.doesNotMatch(file, /^(src|test|scripts|out|node_modules|vendor\/wisply-mcp|vendor\/skills)\//, file);
     assert.doesNotMatch(file, /\.map$|fixtures|\.vsix$|tsconfig|esbuild\.mjs|package-lock|\.npmrc/, file);
   }
 });

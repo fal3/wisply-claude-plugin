@@ -8,7 +8,6 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -16,10 +15,10 @@ import * as esbuild from 'esbuild';
 import { ROOT as BUILD_ROOT, buildServerBundle, editorMessagesPlugin } from '../esbuild.mjs';
 import { createProvider, serverLaunch, stringEnv } from '../out/test/provider.mjs';
 import { CONNECTION_TEXT, createSidecar, describeConnection } from '../out/test/sidecar.mjs';
-import { expectedProof } from '../vendor/wisply-mcp/lib/identity.mjs';
 import * as vendoredMessages from '../vendor/wisply-mcp/lib/messages.mjs';
 import * as messages from '../src/editor-messages.mjs';
 import { FAKE_TOKENS, FakeEventEmitter, FakeMcpStdioServerDefinition } from './fixtures/fake-vscode.mjs';
+import { startFakeWisply } from './fixtures/fake-wisply.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const BUNDLE = join(ROOT, 'server/wisply-mcp.mjs');
@@ -192,47 +191,6 @@ test('dist/extension.js has no network code: only vscode and child_process are r
   assert.doesNotMatch(text, /\bfetch\(|XMLHttpRequest|WebSocket\(/);
   assert.doesNotMatch(text, /wsp[cr]?_[0-9a-f]{64}/);
 });
-
-/** What Wisply answers the identity check with when it can read none of its tokens (MCPServer+Identity.swift). */
-const WISPLY_KEYCHAIN_503 = 'MCP tokens are unavailable. Check Keychain access in Wisply.';
-
-/**
- * A synthetic Wisply on a system-assigned port. `impostor` proves the wrong
- * token; `keychainFailure` answers the identity check as a Wisply that
- * couldn't read its tokens from the Keychain.
- */
-async function startFakeWisply(t, { impostor = false, keychainFailure = false } = {}) {
-  const seen = { challenges: [], calls: [] };
-  const server = http.createServer(async (req, res) => {
-    const url = new URL(req.url, 'http://127.0.0.1');
-    const port = server.address().port;
-    if (url.pathname === '/mcp/identity') {
-      const nonce = url.searchParams.get('nonce');
-      seen.challenges.push({ authorization: req.headers.authorization });
-      if (keychainFailure) {
-        res.writeHead(503, { 'Content-Type': 'text/plain' });
-        res.end(WISPLY_KEYCHAIN_503);
-        return;
-      }
-      const proven = impostor ? `wspc_${'99'.repeat(32)}` : FAKE_TOKENS.connector;
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ server: 'wisply', scheme: 'wisply-mcp-identity-v1', port, nonce,
-        proofs: { connector: expectedProof(proven, port, nonce).toString('hex') } }));
-      return;
-    }
-    let body = '';
-    for await (const chunk of req) body += chunk;
-    const message = JSON.parse(body);
-    seen.calls.push({ authorization: req.headers.authorization, message });
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ jsonrpc: '2.0', id: message.id, result: {
-      content: [{ type: 'text', text: '{"memos":[]}' }], structuredContent: { memos: [], count: 0 }, isError: false,
-    } }));
-  });
-  await new Promise((resolve) => { server.listen(0, '127.0.0.1', resolve); });
-  t.after(() => new Promise((resolve) => { server.close(resolve); }));
-  return { port: server.address().port, seen };
-}
 
 test('end to end: sidecar -> bundle -> Wisply, identity first, then the bearer', async (t) => {
   const wisply = await startFakeWisply(t);

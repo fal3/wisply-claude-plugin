@@ -1,6 +1,6 @@
 // The sidecar: the bundled connector as a child process, read-only, for the
-// extension's own reads (Check Connection now; the status bar and Insert
-// Transcript Quote in DIST-V2). Spec D20.
+// extension's own reads: Check Connection, the status bar item
+// (src/status.ts) and Insert Transcript Quote (src/quote.ts). Spec D20.
 //
 // Why a child process: the extension host patches Node's http module to
 // follow the editor's proxy settings (http.proxySupport, default
@@ -24,6 +24,7 @@ import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import contract from '../vendor/wisply-mcp/lib/contract.mjs';
 import { toolsFor } from '../vendor/wisply-mcp/lib/scopes.mjs';
 import * as messages from './editor-messages.mjs';
+import { toolText } from './results';
 import { scopeTitle } from './token';
 import type { UsableScope } from './token';
 
@@ -371,10 +372,6 @@ export type ConnectionReport =
   | { readonly kind: 'ok'; readonly text: string }
   | { readonly kind: 'setup'; readonly text: string }
   | { readonly kind: 'problem'; readonly text: string };
-
-const toolText = (result: ToolResult) =>
-  result.content.filter((block) => block?.type === 'text' && typeof block.text === 'string')
-    .map((block) => block.text).join(' ').trim();
 
 /**
  * What Check Connection tells the user. `stored` is the token in

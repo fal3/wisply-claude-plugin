@@ -12,7 +12,7 @@ npm run check            # typecheck, tests, build, development package
 npm run package:release  # wisply-<version>.vsix, through the release gate
 ```
 
-`npm run package:release` stops with "Not releasable" until every item in `scripts/release-gate.mjs` is final (README, "Packaging and the release gate"). Publish only the `wisply-<version>.vsix` it writes. `wisply-dev.vsix` from `npm run package` is a different extension (`wisply.wisply-dev`, version `0.1.0-dev`). The Marketplace and `vsce publish` refuse its prerelease version, and Open VSX would list it on its own, so it can't replace or use up a release.
+`npm run package:release` stops with "Not releasable" until every item in `scripts/release-gate.mjs` is final ([DEVELOPMENT.md](DEVELOPMENT.md), "Packaging and the release gate"). Publish only the `wisply-<version>.vsix` it writes. `wisply-dev.vsix` from `npm run package` is a different extension (`wisply.wisply-dev`, version `0.1.0-dev`). The Marketplace and `vsce publish` refuse its prerelease version, and Open VSX would list it on its own, so it can't replace or use up a release.
 
 ## VS Code Marketplace (manual upload, spec D7)
 
@@ -40,12 +40,16 @@ Keep the bundle unminified (`esbuild.mjs` sets `minify: false`) so reviewers can
 
 ### Note for store reviewers
 
-Fill in the version and the commit from `vendor/SOURCE.json` (`sources[0].commit`) before you send it.
+Fill in the version and the commits from `vendor/SOURCE.json` (`sources[0].commit` for the connector, `skill.commit` for the skill) before you send it.
 
 > Wisply for VS Code (`wisply.wisply`, version `<version>`) connects the editor's AI chat to the Wisply app on the same Mac. It runs a bundled MCP connector, `server/wisply-mcp.mjs`, with the editor's own Node (`process.execPath` with `ELECTRON_RUN_AS_NODE=1`), so nothing is downloaded at runtime.
 >
 > The connector touches exactly one Keychain item: generic password, service `ai.wisply.mcp`, account `token`, label "Wisply MCP token". It reads it with `/usr/bin/security find-generic-password -s ai.wisply.mcp -a token -w`, only when the user has stored no token in the editor's secret storage, and a token from there gets only the read-only memo tools. The user creates the item with the extension's "Store Token in the Mac Keychain" command. It opens a terminal that runs the connector's `setup`, which removes an earlier copy (`delete-generic-password`) and creates the item (`add-generic-password ... -T /usr/bin/security -w`, where macOS asks for the token in the terminal), so the token never passes through the extension. No other Keychain item is read or changed.
 >
+> The extension starts the same connector a second time, as a read-only child process (`--read-only`), for its status bar item, its "Insert Transcript Quote" command and "Check Connection". It stops after two minutes without use. The status bar item asks only while the editor window is focused.
+>
 > The connector connects only to 127.0.0.1, to the Wisply app on the user's Mac, and sends the token only after the app proves it holds the same token (an HMAC over a fresh nonce). It has no other network code, and the extension itself (`dist/extension.js`) has none. Nothing is collected or sent anywhere else.
 >
-> Source: https://github.com/fal3/wisply-vscode (the extension) and https://github.com/fal3/wisply-mcp at commit `<commit>` (the connector; `vendor/SOURCE.json` in the package records the commit and the sha256 of every vendored file and of the bundle).
+> `skills/wisply-memos/SKILL.md` is a text-only chat skill (`contributes.chatSkills`): instructions for the AI model on how to use the connector's tools safely. It contains no code.
+>
+> Source: https://github.com/fal3/wisply-vscode (the extension) and https://github.com/fal3/wisply-mcp at commit `<commit>` (the connector and the skill; `vendor/SOURCE.json` in the package records the commits and the sha256 of every vendored file, of the bundle and of the packaged skill).

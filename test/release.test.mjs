@@ -1,9 +1,10 @@
 // scripts/release-gate.mjs: vsce and ovsx run it (vscode:prepublish) before
 // they package or publish. It refuses this tree until the vendored connector
-// comes from fal3/wisply-mcp main (checked against GitHub's main) with a
-// final contract, every placeholder is final and README.md is the store
-// README. It can't be turned into a warning. scripts/package-dev.mjs builds
-// the development package, which no store takes as this extension.
+// and the skill come from fal3/wisply-mcp main (checked against GitHub's
+// main) with a final contract, every placeholder is final and README.md is
+// the store README with nothing left to fill in. It can't be turned into a
+// warning. scripts/package-dev.mjs builds the development package, which no
+// store takes as this extension.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -12,7 +13,9 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DRAFT_MARKERS, FINAL, MCP_REMOTE, draftMarkers, releaseProblems } from '../scripts/release-gate.mjs';
+import {
+  DRAFT_MARKERS, FINAL, MCP_REMOTE, checkedAgainstGitHub, draftMarkers, placeholders, releaseProblems,
+} from '../scripts/release-gate.mjs';
 import { DEV_DISPLAY_SUFFIX, DEV_PACKAGE_FILE, DEV_SUFFIX, devManifest, packageDev } from '../scripts/package-dev.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -23,25 +26,27 @@ const manifest = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
 const ALL_FINAL = Object.freeze({ publisher: true, setupGuide: true, repositories: true, support: true });
 const STORE_README = '# Wisply for VS Code\n\nUse your Wisply meeting notes in your editor\'s AI chat.\n';
 const MAIN_TIP = 'a'.repeat(40);
+const FROM_GITHUB_MAIN = Object.freeze({ ref: 'main', remote: MCP_REMOTE, remote_main: MAIN_TIP });
 
 const withMcp = (base, change) => ({
   ...base,
   sources: base.sources.map((entry) => (entry.repository === 'github:fal3/wisply-mcp' ? change(entry) : entry)),
 });
-const releasable = () => withMcp({ ...source, provisional: false },
-  (entry) => ({ ...entry, ref: 'main', remote: MCP_REMOTE, remote_main: MAIN_TIP, contract_provisional: false }));
+const releasable = () => withMcp({ ...source, provisional: false, skill: { ...source.skill, ...FROM_GITHUB_MAIN } },
+  (entry) => ({ ...entry, ...FROM_GITHUB_MAIN, contract_provisional: false }));
 const ready = (overrides = {}) => releaseProblems({ source: releasable(), final: ALL_FINAL, readme: STORE_README, ...overrides });
 
-test('this tree is not releasable: provisional, not from main, every placeholder, and a draft README', () => {
+test('this tree is not releasable: provisional, connector and skill not from main, every placeholder, unfilled README', () => {
   const problems = releaseProblems({ source, readme });
-  assert.equal(problems.length, 7, problems.join('\n'));
+  assert.equal(problems.length, 8, problems.join('\n'));
   assert.match(problems[0], /provisional/);
-  assert.match(problems[1], /not main/);
-  assert.match(problems[2], /publisher/);
-  assert.match(problems[3], /setup guide/);
-  assert.match(problems[4], /fal3\/wisply-vscode and github\.com\/fal3\/wisply-mcp/);
-  assert.match(problems[5], /support page and mailbox/);
-  assert.match(problems[6], /README\.md is the store page/);
+  assert.match(problems[1], /^The connector .*not main/);
+  assert.match(problems[2], /^The skill .*not main/);
+  assert.match(problems[3], /publisher/);
+  assert.match(problems[4], /setup guide/);
+  assert.match(problems[5], /fal3\/wisply-vscode and github\.com\/fal3\/wisply-mcp/);
+  assert.match(problems[6], /support page and mailbox/);
+  assert.equal(problems[7], 'README.md still has {READ_MIN}, {RECORDING_MIN}: fill them in from App Store Connect.');
   assert.deepEqual({ ...FINAL }, { publisher: false, setupGuide: false, repositories: false, support: false });
 });
 
@@ -57,7 +62,20 @@ test('each check on its own', () => {
   for (const key of Object.keys(ALL_FINAL)) {
     assert.equal(ready({ final: { ...ALL_FINAL, [key]: false } }).length, 1, key);
   }
-  assert.match(ready({ source: { sources: [] } })[0], /no github:fal3\/wisply-mcp source/);
+  assert.match(ready({ source: { ...releasable(), sources: [] } })[0], /no github:fal3\/wisply-mcp source/);
+  assert.match(ready({ source: { ...releasable(), skill: { ...releasable().skill, ref: 'claude/distribution-4' } } })[0],
+    /^The skill was vendored from claude\/distribution-4, not main/);
+  const { skill: _skill, ...noSkill } = releasable();
+  assert.match(ready({ source: noSkill })[0], /has no skill/);
+  assert.match(ready({ source: { ...releasable(), skill: { ...releasable().skill, repository: 'github:someone/else' } } })[0],
+    /has no skill from github:fal3\/wisply-mcp/);
+});
+
+test('the store README can\'t keep a {PLACEHOLDER}', () => {
+  assert.deepEqual(ready({ readme: `${STORE_README}Wisply 3.4 or later; {"json": 1}; \${x}\n` }), []);
+  assert.equal(ready({ readme: `${STORE_README}Wisply {READ_MIN} or later\n` }).length, 1);
+  assert.deepEqual(placeholders('{A} {B_2} {A} {lower} {} {"k": 1}'), ['{A}', '{B_2}']);
+  assert.deepEqual(placeholders(readme), ['{READ_MIN}', '{RECORDING_MIN}']);
 });
 
 test('"main" counts only as checked against GitHub\'s main (sync-vendor records the remote and its tip)', () => {
@@ -68,6 +86,12 @@ test('"main" counts only as checked against GitHub\'s main (sync-vendor records 
   assert.match(ready({ source: localMain })[0], /wasn't checked against https:\/\/github\.com\/fal3\/wisply-mcp/);
   assert.equal(ready({ source: withMcp(releasable(), (entry) => ({ ...entry, remote: 'https://github.com/someone/fork' })) }).length, 1);
   assert.equal(ready({ source: withMcp(releasable(), (entry) => ({ ...entry, remote_main: 'main' })) }).length, 1);
+  // The skill is held to the same rule.
+  const { remote: _remote, remote_main: _tip, ...localSkill } = releasable().skill;
+  assert.match(ready({ source: { ...releasable(), skill: localSkill } })[0], /^The skill's main wasn't checked against/);
+  assert.equal(ready({ source: { ...releasable(), skill: { ...releasable().skill, remote_main: 'main' } } }).length, 1);
+  assert.equal(checkedAgainstGitHub({ remote: MCP_REMOTE, remote_main: MAIN_TIP }), true);
+  assert.equal(checkedAgainstGitHub(undefined), false);
   assert.equal(MCP_REMOTE, 'https://github.com/fal3/wisply-mcp');
 });
 
@@ -78,8 +102,8 @@ test('the store page can\'t be a draft', () => {
     assert.equal(ready({ readme: `${STORE_README}${draft}\n` }).length, 1, draft);
   }
   assert.ok(DRAFT_MARKERS.length >= 4);
-  // This README is the DIST-V1 draft; DIST-V2's store README replaces it.
-  assert.equal(draftMarkers(readme).length, 4);
+  // This README is the store README: no draft text, only the two versions to fill in.
+  assert.deepEqual(draftMarkers(readme), []);
 });
 
 test('as vscode:prepublish: refuses, and there is no environment variable that turns it into a warning', () => {

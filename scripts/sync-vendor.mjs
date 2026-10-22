@@ -4,6 +4,7 @@
 // vendor/SOURCE.json.
 //
 //   node scripts/sync-vendor.mjs --mcp <wisply-mcp dir> --mcp-commit <rev> [--mcp-ref <branch>]
+//                                [--skill-commit <rev> [--skill-ref <branch>]]
 //                                --plugin <wisply-claude-plugin dir> --plugin-commit <rev>
 //
 // Files are read with `git show <commit>:<path>`, so what lands here is the
@@ -18,6 +19,10 @@
 //     origin/main tip it checked against.
 //   - any other branch (interim snapshots, which the gate refuses anyway):
 //     `git merge-base --is-ancestor` against that branch in the checkout.
+// The skill comes from the same wisply-mcp commit and ref unless
+// --skill-commit names another one (until the connector and the skill are on
+// one branch); --skill-ref is checked the same way, and a skill "main" records
+// its own remote and origin/main tip.
 // Refs and commits must look like git names (REF_RE): nothing that starts
 // with "-" reaches git as an option.
 //
@@ -29,6 +34,10 @@
 //                        lib/scopes.mjs, lib/messages.mjs, lib/contract.mjs and
 //                        the clients data from here; esbuild inlines them.
 //   vendor/shared.mjs    the plugin's lib/shared.mjs (no imports), byte for byte
+//   vendor/skills/wisply-memos/SKILL.md   wisply-mcp's portable skill, byte for byte
+//   skills/wisply-memos/SKILL.md          the packaged skill (contributes.chatSkills):
+//                        the vendored one with its compatibility line for this
+//                        editor (scripts/skill.mjs editorSkill)
 //   server/wisply-mcp.mjs  the single-file bundle of vendor/wisply-mcp/bin, with
 //                        the editor texts of src/editor-messages.mjs
 //                        (esbuild.mjs serverBundleOptions)
@@ -46,6 +55,7 @@ import {
   EDITOR_MESSAGES, ROOT, SERVER_BUNDLE, SERVER_ENTRY, SOURCE_FILE, VENDORED_MESSAGES, buildServerBundle,
 } from '../esbuild.mjs';
 import { MCP_REMOTE, MCP_REPOSITORY } from './release-gate.mjs';
+import { SKILL_OVERLAY, SKILL_PACKAGED, SKILL_UPSTREAM, SKILL_VENDORED, editorSkill } from './skill.mjs';
 
 export { MCP_REMOTE, MCP_REPOSITORY, SOURCE_FILE };
 export const VENDOR_SCHEMA = 'wisply-vscode-vendor-v1';
@@ -124,6 +134,30 @@ export function verifyOnUpstreamMain(dir, commit, { env = process.env } = {}) {
   return { remote: MCP_REMOTE, mainTip };
 }
 
+/**
+ * The check behind a recorded ref (see the top of this file), for the
+ * connector and the skill alike: for main, the remote and the origin/main tip
+ * it was checked against; for another branch, null after
+ * `git merge-base --is-ancestor`; null when no ref is recorded. Throws when
+ * the commit isn't on the ref.
+ * @param {string} dir a wisply-mcp checkout
+ * @param {string} commit a full commit
+ * @param {string | undefined} ref
+ * @param {string} what what the commit is, for the error ("commit", "skill commit")
+ * @param {{env?: NodeJS.ProcessEnv}} [options]
+ * @returns {{remote: string, remote_main: string} | null}
+ */
+export function checkRef(dir, commit, ref, what, { env = process.env } = {}) {
+  if (ref === 'main') {
+    const { remote, mainTip } = verifyOnUpstreamMain(dir, commit, { env });
+    return { remote, remote_main: mainTip };
+  }
+  if (ref && !isOnRef(dir, commit, ref, { env })) {
+    throw new Error(`${commit.slice(0, 7)} is not on ${ref} in ${dir}: pass the branch the ${what} is on`);
+  }
+  return null;
+}
+
 function writeVendored(local, bytes) {
   const target = join(ROOT, local);
   mkdirSync(dirname(target), { recursive: true });
@@ -138,6 +172,8 @@ async function main(argv) {
       mcp: { type: 'string' },
       'mcp-commit': { type: 'string' },
       'mcp-ref': { type: 'string' },
+      'skill-commit': { type: 'string' },
+      'skill-ref': { type: 'string' },
       plugin: { type: 'string' },
       'plugin-commit': { type: 'string' },
     },
@@ -147,21 +183,18 @@ async function main(argv) {
     if (!values[name]) throw new Error(`--${name} is required`);
   }
 
-  for (const name of ['mcp-commit', 'mcp-ref', 'plugin-commit']) {
+  for (const name of ['mcp-commit', 'mcp-ref', 'skill-commit', 'skill-ref', 'plugin-commit']) {
     if (values[name] !== undefined) checkedRef(name, values[name]);
+  }
+  if (values['skill-ref'] !== undefined && values['skill-commit'] === undefined) {
+    throw new Error('--skill-ref needs --skill-commit (without it, the skill comes from --mcp-commit and --mcp-ref)');
   }
 
   // wisply-mcp: a clean copy of the vendored files at the commit.
   const mcpCommit = fullCommit(values.mcp, values['mcp-commit']);
   const mcpRef = values['mcp-ref'];
   /** For main: the remote and the origin/main tip the commit was checked against. */
-  let upstream = null;
-  if (mcpRef === 'main') {
-    const { remote, mainTip } = verifyOnUpstreamMain(values.mcp, mcpCommit);
-    upstream = { remote, remote_main: mainTip };
-  } else if (mcpRef && !isOnRef(values.mcp, mcpCommit, mcpRef)) {
-    throw new Error(`${mcpCommit.slice(0, 7)} is not on ${mcpRef} in ${values.mcp}: pass the branch the commit is on`);
-  }
+  const upstream = checkRef(values.mcp, mcpCommit, mcpRef, 'commit');
   const paths = git(values.mcp, ['ls-tree', '-r', '--name-only', mcpCommit]).toString('utf8')
     .split('\n').filter(isVendoredMcpPath).sort();
   if (!paths.includes('bin/wisply-mcp.mjs') || !paths.includes('contract/mcp-contract.mjs')) {
@@ -175,6 +208,16 @@ async function main(argv) {
   }
   const upstreamSource = JSON.parse(readFileSync(join(ROOT, MCP_DIR, 'contract/SOURCE.json'), 'utf8'));
   const contractProvisional = upstreamSource.provisional !== false;
+
+  // The portable skill: from the connector's commit unless --skill-commit says otherwise.
+  const skillCommit = values['skill-commit'] ? fullCommit(values.mcp, values['skill-commit']) : mcpCommit;
+  const skillRef = values['skill-commit'] ? values['skill-ref'] : mcpRef;
+  const skillUpstream = values['skill-commit'] ? checkRef(values.mcp, skillCommit, skillRef, 'skill commit') : upstream;
+  rmSync(join(ROOT, 'vendor/skills'), { recursive: true, force: true });
+  const skillBytes = git(values.mcp, ['show', `${skillCommit}:${SKILL_UPSTREAM}`]);
+  const skillFiles = { [SKILL_VENDORED]: { upstream: SKILL_UPSTREAM, ...writeVendored(SKILL_VENDORED, skillBytes) } };
+  const packaged = Buffer.from(editorSkill(skillBytes.toString('utf8')), 'utf8');
+  const packagedEntry = writeVendored(SKILL_PACKAGED, packaged);
 
   // The plugin's shared helpers.
   const pluginCommit = fullCommit(values.plugin, values['plugin-commit']);
@@ -201,6 +244,14 @@ async function main(argv) {
       mcpSource,
       { repository: PLUGIN_REPOSITORY, commit: pluginCommit, files: pluginFiles },
     ],
+    skill: {
+      repository: MCP_REPOSITORY,
+      commit: skillCommit,
+      ...(skillRef ? { ref: skillRef } : {}),
+      ...(skillUpstream ?? {}),
+      files: skillFiles,
+      packaged: { path: SKILL_PACKAGED, from: SKILL_VENDORED, overlay: SKILL_OVERLAY, ...packagedEntry },
+    },
     bundle: {
       path: SERVER_BUNDLE,
       entry: SERVER_ENTRY,
@@ -212,6 +263,7 @@ async function main(argv) {
   writeFileSync(join(ROOT, SOURCE_FILE), `${JSON.stringify(source, null, 2)}\n`);
   process.stdout.write(`vendored ${paths.length} files from ${MCP_REPOSITORY}@${mcpCommit.slice(0, 7)}` +
     ` and ${Object.keys(pluginFiles).length} from ${PLUGIN_REPOSITORY}@${pluginCommit.slice(0, 7)}\n`);
+  process.stdout.write(`vendored ${SKILL_UPSTREAM} from ${MCP_REPOSITORY}@${skillCommit.slice(0, 7)} and wrote ${SKILL_PACKAGED}\n`);
   process.stdout.write(`wrote ${SERVER_BUNDLE} and ${SOURCE_FILE}${contractProvisional ? ' (contract provisional)' : ''}\n`);
 }
 
