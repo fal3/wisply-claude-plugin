@@ -11,6 +11,16 @@
 // checkout's origin/main, and WISPLY_RELEASE=1 refuses "on_main": false
 // (tests/vendor.test.mjs).
 //
+// "on_main" and the sha256 values are what the tree says about itself, so
+// the maintainer's release check can't take them on trust: with
+// WISPLY_RELEASE=1 outside GitHub Actions, both checkouts are required (a
+// missing one fails, it isn't skipped), each must have github.com/fal3/<repo>
+// as its origin and an origin/main, and each recorded commit must be on that
+// origin/main ("on_main": true checked, the plugin commit too). The release
+// workflow can't check out the private wisply-ai, so there these checks
+// skip and "on_main" is the reviewed tree's claim (SECURITY.md, "Release
+// controls").
+//
 // The checkout's contract must be the vendored one. When WISPLY_AI_DIR is an
 // unmerged branch (a lane's worktree), a difference that only the branch's own
 // commits bring is listed and the test is skipped: it reaches this repository
@@ -22,19 +32,22 @@
 // instead; those tests skip once it isn't.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import contract, { contractProblems } from '../lib/contract.mjs';
 import { MAX_RESPONSE_BYTES, PROTOCOL_VERSIONS } from '../lib/constants.mjs';
-import { MAIN_REF } from '../scripts/sync-vendor.mjs';
+import { MAIN_REF, originMatches, originOf } from '../scripts/sync-vendor.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const SOURCE = JSON.parse(readFileSync(join(ROOT, 'contract/SOURCE.json'), 'utf8'));
 const PLUGIN_DIR = process.env.WISPLY_PLUGIN_DIR;
 const APP_DIR = process.env.WISPLY_AI_DIR;
+const RELEASE = process.env.WISPLY_RELEASE === '1';
+/** The release workflow: the one place the release check runs without the private wisply-ai checked out. */
+const IN_RELEASE_WORKFLOW = process.env.GITHUB_ACTIONS === 'true';
 const sourceFor = (repository) => SOURCE.sources.find((source) => source.repository === repository);
 const local = (path) => readFileSync(join(ROOT, path));
 /** git's stdout, or null when git fails (or exits 1, as `merge-base --is-ancestor` does for "no"). */
@@ -161,6 +174,118 @@ test('app: "on_main" in contract/SOURCE.json says whether wisply-ai\'s origin/ma
     t.todo(`${VENDORED_AT} isn't on origin/main yet ("on_main": false, vendored from an unmerged branch): once it is ` +
       'merged, run npm run sync-vendor again from the main commit. WISPLY_RELEASE=1 refuses the contract until then.');
   }
+});
+
+// --- The maintainer's release check against real checkouts --------------------
+
+/**
+ * What the maintainer's release check (WISPLY_RELEASE=1 outside GitHub Actions) finds wrong with the vendored
+ * sources, judged against real checkouts; [] when nothing is. A checkout: the variable that names it, the
+ * repository, commit, "provisional" and "on_main" contract/SOURCE.json records, and what git says there (its origin
+ * URL, whether it has an origin/main, and whether that has the commit). The bytes are the tests above (they run
+ * whenever the variables are set); a provisional source and "on_main": false are tests/vendor.test.mjs's to refuse,
+ * so neither is named twice.
+ * @param {{ variable: string, dir?: string, repository: string, commit: string, provisional?: boolean,
+ *   claimsOnMain?: boolean, origin?: string | null, hasMain?: boolean, onMain?: boolean }[]} checkouts
+ * @returns {string[]}
+ */
+function releaseSourceProblems(checkouts) {
+  const problems = [];
+  for (const checkout of checkouts) {
+    const where = checkout.repository.replace(/^github:/, 'github.com/');
+    if (checkout.provisional) continue;
+    if (!checkout.dir) {
+      problems.push(`${checkout.variable} isn't set: the release check compares the vendored files and the recorded ` +
+        `commit with a checkout of ${where} (git fetch origin main there first): ${checkout.variable}=<checkout> ` +
+        'WISPLY_RELEASE=1 npm test');
+    } else if (!originMatches(checkout.origin, checkout.repository)) {
+      problems.push(`${checkout.variable}: the checkout's origin isn't ${where} (git remote get-url origin), so its ` +
+        'origin/main says nothing about that repository');
+    } else if (!checkout.hasMain) {
+      problems.push(`${checkout.variable}: the checkout has no origin/main: git fetch origin main`);
+    } else if (!checkout.onMain && checkout.claimsOnMain !== false) {
+      const short = String(checkout.commit).slice(0, 7);
+      problems.push(checkout.claimsOnMain === true
+        ? `contract/SOURCE.json says "on_main": true, but origin/main in ${checkout.variable} doesn't have ${short}: ` +
+          'git fetch origin main there, or re-vendor from a main commit (npm run sync-vendor)'
+        : `${where} ${short} (contract/SOURCE.json) isn't on origin/main in ${checkout.variable}: git fetch origin ` +
+          'main there, or re-vendor from a main commit (npm run sync-vendor)');
+    }
+  }
+  return problems;
+}
+
+/** What git says about a checkout, for releaseSourceProblems. */
+function checkoutFacts(variable, dir, source) {
+  const facts = { variable, dir, repository: source.repository, commit: source.commit, provisional: source.provisional,
+    claimsOnMain: source.on_main };
+  if (!dir) return facts;
+  return {
+    ...facts,
+    origin: originOf(dir),
+    hasMain: gitLine(dir, ['rev-parse', '--verify', '-q', `${MAIN_REF}^{commit}`]) !== null,
+    onMain: /^[0-9a-f]{40}$/.test(source.commit) && git(dir, ['merge-base', '--is-ancestor', source.commit, MAIN_REF]) !== null,
+  };
+}
+
+const RELEASE_SOURCES_TEST = 'the release check compares the vendored sources with real checkouts of wisply-ai and the plugin';
+
+test(`${RELEASE_SOURCES_TEST} (WISPLY_RELEASE=1)`, {
+  skip: !RELEASE ? 'WISPLY_RELEASE is not 1'
+    : IN_RELEASE_WORKFLOW ? 'the release workflow can\'t check out the private wisply-ai: the maintainer\'s release ' +
+      'check with WISPLY_AI_DIR and WISPLY_PLUGIN_DIR, before the tag, compares the sources (SECURITY.md, "Release controls")'
+      : false,
+}, () => {
+  const problems = releaseSourceProblems([
+    checkoutFacts('WISPLY_AI_DIR', APP_DIR, appSource),
+    checkoutFacts('WISPLY_PLUGIN_DIR', PLUGIN_DIR, sourceFor('github:fal3/wisply-claude-plugin')),
+  ]);
+  assert.deepEqual(problems, [], `not releasable:\n- ${problems.join('\n- ')}`);
+});
+
+test('releaseSourceProblems: real checkouts on main pass, and each missing piece is named once', () => {
+  const app = {
+    variable: 'WISPLY_AI_DIR', dir: '/wisply-ai', repository: 'github:fal3/wisply-ai', commit: 'a'.repeat(40), provisional: false,
+    claimsOnMain: true, origin: 'https://github.com/fal3/wisply-ai.git', hasMain: true, onMain: true,
+  };
+  const plugin = { ...app, variable: 'WISPLY_PLUGIN_DIR', dir: '/plugin', repository: 'github:fal3/wisply-claude-plugin',
+    commit: 'b'.repeat(40), claimsOnMain: undefined, origin: 'git@github.com:fal3/wisply-claude-plugin.git' };
+  assert.deepEqual(releaseSourceProblems([app, plugin]), []);
+  const cases = [
+    [{ dir: undefined }, /^WISPLY_AI_DIR isn't set: the release check compares/],
+    [{ origin: 'https://github.com/someone/wisply-ai.git' }, /^WISPLY_AI_DIR: the checkout's origin isn't github\.com\/fal3\/wisply-ai/],
+    [{ origin: null }, /origin isn't github\.com\/fal3\/wisply-ai/],
+    [{ hasMain: false, onMain: false }, /^WISPLY_AI_DIR: the checkout has no origin\/main: git fetch origin main$/],
+    // A hand-flipped "on_main", or one written from a stale or forged origin/main.
+    [{ onMain: false }, /^contract\/SOURCE\.json says "on_main": true, but origin\/main in WISPLY_AI_DIR doesn't have aaaaaaa/],
+  ];
+  for (const [change, expected] of cases) {
+    const problems = releaseSourceProblems([{ ...app, ...change }, plugin]);
+    assert.equal(problems.length, 1, `${JSON.stringify(change)}: ${problems.join(' | ')}`);
+    assert.match(problems[0], expected);
+  }
+  // The plugin records no "on_main": its commit must be on its main all the same.
+  assert.deepEqual(releaseSourceProblems([app, { ...plugin, onMain: false }]),
+    [`github.com/fal3/wisply-claude-plugin bbbbbbb (contract/SOURCE.json) isn't on origin/main in WISPLY_PLUGIN_DIR: git fetch ` +
+      'origin main there, or re-vendor from a main commit (npm run sync-vendor)']);
+  assert.equal(releaseSourceProblems([app, { ...plugin, dir: '' }]).length, 1);
+  // tests/vendor.test.mjs refuses these; named once, there.
+  assert.deepEqual(releaseSourceProblems([{ ...app, claimsOnMain: false, onMain: false }, plugin]), []);
+  assert.deepEqual(releaseSourceProblems([{ ...app, provisional: true, dir: undefined }, plugin]), []);
+});
+
+test('without both checkouts the maintainer\'s release check fails and names them; the release workflow skips it', { skip: RELEASE }, () => {
+  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('GITHUB_') &&
+    !['WISPLY_AI_DIR', 'WISPLY_PLUGIN_DIR', 'NODE_TEST_CONTEXT'].includes(name)));
+  const run = (extra) => spawnSync(process.execPath, ['--test', `--test-name-pattern=${RELEASE_SOURCES_TEST}`,
+    fileURLToPath(import.meta.url)], { cwd: ROOT, env: { ...env, WISPLY_RELEASE: '1', ...extra }, encoding: 'utf8' });
+  const local = run({});
+  assert.notEqual(local.status, 0, local.stdout.slice(-2000));
+  assert.match(local.stdout, /WISPLY_AI_DIR isn't set/);
+  assert.match(local.stdout, /WISPLY_PLUGIN_DIR isn't set/);
+  const workflow = run({ GITHUB_ACTIONS: 'true' });
+  assert.equal(workflow.status, 0, workflow.stdout.slice(-2000));
+  assert.match(workflow.stdout, /# SKIP the release workflow can't check out the private wisply-ai/);
 });
 
 const isJSONObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);

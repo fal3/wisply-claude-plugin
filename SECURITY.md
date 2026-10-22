@@ -277,7 +277,14 @@ package has never been published. Parts of items 1, 3 and 4 are also
 machine-checked: `WISPLY_RELEASE=1 npm test` passes only on the tree to
 publish and lists every step still missing, each once. It fails while the
 contract is provisional or wasn't vendored from a commit on wisply-ai's
-`main` (`"on_main"` in `contract/SOURCE.json`; `tests/vendor.test.mjs`); until
+`main` (`"on_main"` in `contract/SOURCE.json`; `tests/vendor.test.mjs`);
+on the maintainer's machine (outside GitHub Actions), unless
+`WISPLY_AI_DIR` and `WISPLY_PLUGIN_DIR` name checkouts of
+`github.com/fal3/wisply-ai` and `github.com/fal3/wisply-claude-plugin`
+whose `origin/main` has the recorded commits (`tests/upstream.test.mjs`,
+which then also compares the vendored bytes with those commits); while the
+checkout has changes or untracked files, or npm would pack anything but the
+committed files (`tests/pack.test.mjs`); until
 `docs/release-checks.json` records the port, registry and npm-name checks,
 while `PACKAGE_NAME_FINAL` is false or `package.json` is still `"private"`,
 and while the contract leaves `setup_claude` non-destructive
@@ -286,6 +293,13 @@ and while the contract leaves `setup_claude` non-destructive
 names this version everywhere and dates the CHANGELOG's version heading, and,
 in the release workflow, the run is for the tag `v<version>`
 (`tests/release.test.mjs`).
+
+`"on_main"` and the sha256 values in `contract/SOURCE.json` are what the
+tree says about itself. Only the maintainer's run with both checkouts checks
+them against wisply-ai and the plugin. The release workflow can't check out
+the private wisply-ai, so there they are the claim of a tree that came
+through a reviewed pull request, and the maintainer's run on the tagged
+commit, before the tag is pushed, is the check (item 6).
 
 1. **Before anything public names the package** (the wisply.ai guide,
    Wisply's snippets, catalog listings, the connector's own messages, and this
@@ -306,7 +320,28 @@ in the release workflow, the run is for the tag `v<version>`
    ruleset on `main` (changes only through pull requests with the `ci` checks
    passing; no force-push and no deletion; signed commits required, or at
    least preferred), a ruleset on `v*` tags (only the owner creates them; no
-   update and no deletion), and immutable releases turned on.
+   update and no deletion), and immutable releases turned on. A release tag
+   is created only on a `main` commit whose `ci` run is green (the release
+   workflow refuses a tag that isn't on `main`, but it can't see `ci`).
+   Also create the GitHub environment `release` now, before any tag
+   (Settings > Environments > New environment, `release`):
+   - **Required reviewers:** Alex. Leave "Prevent self-review" off while he
+     is the only maintainer (it would stop him approving his own tag's run);
+     turn it on once a second maintainer can approve.
+   - **Deployment branches and tags:** "Selected branches and tags", with one
+     tag rule, `v*`, and no branch rule, so no branch run can use the
+     environment (npm's trusted publisher checks only the workflow file's
+     name and the environment's name, not the ref).
+   - **Allow administrators to bypass configured protection rules:** off.
+
+   A workflow run that names an environment that doesn't exist creates it,
+   unprotected, so it must exist with these rules before the first tag.
+   Check it with
+   `gh api repos/fal3/wisply-mcp/environments/release`: `protection_rules`
+   has a `required_reviewers` entry, `deployment_branch_policy` says
+   `"custom_branch_policies": true`, `can_admins_bypass` is `false`, and
+   `gh api repos/fal3/wisply-mcp/environments/release/deployment-branch-policies`
+   lists exactly one policy, `"name": "v*"` with `"type": "tag"`.
 3. **Before the first publish:** the contract is re-vendored from wisply-ai
    ("Re-vendoring the contract", below), Wisply owns the npm name and
    `PACKAGE_NAME_FINAL` is `true` (item 1), and the release change removes
@@ -368,23 +403,53 @@ in the release workflow, the run is for the tag `v<version>`
    publish, together with the `name` of `server.json`
    (`tests/manifests.test.mjs` and `tests/registry.test.mjs` tie them).
 5. **The first publish** is by hand, by the organization owner, with
-   two-factor authentication.
+   two-factor authentication, from a fresh clone of the release tag (never
+   a working checkout: the version it publishes has no provenance and no
+   staged review):
+
+   ```bash
+   git clone --branch v0.1.0 https://github.com/fal3/wisply-mcp && cd wisply-mcp
+   (cd <wisply-ai checkout> && git fetch origin main)
+   (cd <wisply-claude-plugin checkout> && git fetch origin main)
+   WISPLY_AI_DIR=<wisply-ai checkout> WISPLY_PLUGIN_DIR=<wisply-claude-plugin checkout> WISPLY_RELEASE=1 npm test
+   npm pack --dry-run --json      # review the file list against tests/pack.test.mjs
+   npm publish --access public --ignore-scripts
+   ```
+
+   The release check refuses a clone with changes or untracked files, a
+   tarball that isn't exactly the committed files under `"files"`, and a
+   missing checkout of either repository.
 6. **From the second release,** only the release workflow
    (`.github/workflows/release.yml`) publishes, through npm trusted
    publishing (OIDC: no npm token exists anywhere). It runs only for a pushed
-   `v*` tag, only while the repository is public and the repository variable
-   `NPM_TRUSTED_PUBLISHING` is `on`, and only after the required reviewer
-   approves the `release` environment. It checks out without credentials,
-   installs npm 11.21.0 without scripts, runs `npm run check` and
-   `WISPLY_RELEASE=1 npm test` (which also requires the tag to be
-   `v<version>`), and then **stages** the version with provenance
-   (`npm stage publish --provenance --access public --ignore-scripts`). A
-   staged version goes live only when a maintainer approves it with two-factor
-   authentication: `npm stage list @wisply/mcp`, `npm stage download <id>` to
-   inspect the tarball if you like, then `npm stage approve <id>` (or
-   npmjs.com > Staged Packages > Approve); `npm stage reject <id>` drops it.
+   `v*` tag and only while the repository is public and the repository
+   variable `NPM_TRUSTED_PUBLISHING` is `on`, in two jobs. `verify` can only
+   read the code: it checks out the whole history without credentials,
+   refuses a tagged commit that isn't on `main` (`git merge-base
+   --is-ancestor HEAD refs/remotes/origin/main`), installs npm 11.21.0
+   without scripts, and runs `npm run check` and `WISPLY_RELEASE=1 npm test`
+   (which also requires the tag to be `v<version>`). Only after it passes,
+   and after the required reviewer approves the `release` environment,
+   `publish`, the only job with `id-token: write`, checks out, installs the
+   same npm and **stages** the version with provenance
+   (`npm stage publish --provenance --access public --ignore-scripts`). It
+   runs nothing but npm itself, so no test, git command or tool can ask for
+   the publish-capable OIDC token. A staged version goes live only when a
+   maintainer approves it with two-factor authentication:
+   `npm stage list @wisply/mcp`, `npm stage download <id>` to inspect the
+   tarball if you like, then `npm stage approve <id>` (or npmjs.com > Staged
+   Packages > Approve); `npm stage reject <id>` drops it. In the workflow,
+   `"on_main"` is the reviewed tree's claim (see above), so run the
+   maintainer's release check
+   (`WISPLY_AI_DIR=... WISPLY_PLUGIN_DIR=... WISPLY_RELEASE=1 npm test`, as in
+   item 5) on the commit before you tag it.
+
    Setting it up, in one session (npm drops a trusted publisher that hasn't
    published within two days):
+   - first, check that the `release` environment exists with its rules
+     (item 2: Alex as required reviewer, `v*` tags only, no administrator
+     bypass), with the `gh api` commands there. If it doesn't, stop and
+     create it: a run would otherwise create it unprotected;
    - on npmjs.com, add the trusted publisher for `fal3/wisply-mcp`, workflow
      filename `release.yml`, environment `release`. Leave its allowed actions
      at the default, `npm stage publish` only: the workflow never runs
@@ -396,13 +461,22 @@ in the release workflow, the run is for the tag `v<version>`
      publishing access to "Require two-factor authentication and disallow
      tokens".
 
+   Every later release goes in this order: approve the `release`
+   environment's run, then `npm stage approve <id>`, and only then the
+   bundle and the registry entry (item 8; README, "Releasing the bundle";
+   for the first release, the steps after the npm publish). `mcp-publisher`
+   reads `mcpName` from the live npm version, so a version still waiting in
+   the stage can't be published to the registry, and a rejected one must
+   never get a bundle or a registry entry.
+
    `tests/manifests.test.mjs` pins the workflow step by step: tag trigger
-   only, `permissions: {}` at the top and `id-token: write` on the one job,
-   the `release` environment, every action pinned to the same full commit
-   SHA as in `ci.yml`, no caches, no secrets, no expressions in shell lines.
-   npm makes provenance only for a public repository, which is also the only
-   time the workflow runs. `npx` doesn't check provenance, so it is an audit
-   trail, not a guard.
+   only, `permissions: {}` at the top, `contents: read` alone on `verify`,
+   `id-token: write` only on `publish`, which needs `verify` and alone names
+   the `release` environment, the ancestry check, every action pinned to the
+   same full commit SHA as in `ci.yml`, no caches, no secrets, no
+   expressions in shell lines. npm makes provenance only for a public
+   repository, which is also the only time the workflow runs. `npx` doesn't
+   check provenance, so it is an audit trail, not a guard.
 7. **Every release** bumps `version` in `package.json` and `VERSION` in
    `lib/constants.mjs` together, with the versions in `plugin.json`,
    `gemini-extension.json`, `mcpb/manifest.json` and `server.json` (its
@@ -436,6 +510,13 @@ in the release workflow, the run is for the tag `v<version>`
    regular files only: a tracked symlink or a path under a symlinked folder
    stops it, and the manifest's `icon` must be `icon.png`. A rebuilt bundle
    has a different sha256, so never rebuild a released one.
+   The packer's dependency tree is pinned by `tools/mcpb/package-lock.json`;
+   Dependabot raises security updates for it (`.github/dependabot.yml`; turn
+   on Dependabot alerts and security updates in the repository's settings
+   when it goes public), and before each bundle build run
+   `npm audit --prefix tools/mcpb` and update the lockfile in a reviewed
+   change if it reports anything. Version updates stay off: the packer's
+   version moves only on purpose.
 
 ## Re-vendoring the contract (maintainers)
 
@@ -455,8 +536,10 @@ Swift source on `main` (`MCPContractDescriptorTests`,
 `MCPRaycastContractTests`). The re-vendor that clears it:
 
 1. Wait until a wisply-ai `main` commit has both PRs (DIST-A1 merged after
-   raycast PR 1) and its Mac CI is green. Fetch it, so the checkout's
-   `origin/main` has it.
+   raycast PR 1) and its Mac CI is green. Fetch it (`git fetch origin
+   main`), so the checkout's `origin/main` has it. The checkout's `origin`
+   must be `github.com/fal3/wisply-ai`: sync-vendor writes `"on_main":
+   false` for any other origin.
 2. From a clean checkout of this repository:
 
    ```bash

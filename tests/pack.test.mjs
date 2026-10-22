@@ -47,6 +47,59 @@ test('the tarball holds only bin, lib, contract, clients, README, LICENSE and pa
   }
 });
 
+const git = (...args) => execFileSync('git', ['-C', ROOT, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+
+/**
+ * Why this checkout isn't the tree to publish, or []: a release packs exactly the committed files, from a checkout
+ * with no changes and no untracked files. The allowlist above accepts any lib/*.mjs or contract/*.json, so without
+ * this a scratch file in the maintainer's checkout would ship in the hand-made first publish, the one version with
+ * no provenance and no staged review.
+ * @param {{status: string, packed: string[], tracked: string[]}} tree git status --porcelain --untracked-files=all,
+ *   what npm would pack, and what git tracks under package.json "files" (plus package.json)
+ * @returns {string[]}
+ */
+function cleanTreeProblems({ status, packed, tracked }) {
+  const problems = [];
+  const changes = status.split('\n').filter((line) => line.trim() !== '');
+  if (changes.length > 0) {
+    problems.push(`the checkout has changes or untracked files (${changes.slice(0, 5).map((line) => line.trim()).join('; ')}` +
+      `${changes.length > 5 ? '; ...' : ''}): publish from a fresh clone of the release tag`);
+  }
+  const extra = packed.filter((file) => !tracked.includes(file));
+  const missing = tracked.filter((file) => !packed.includes(file));
+  if (extra.length > 0) problems.push(`npm would pack files git doesn't track: ${extra.join(', ')}`);
+  if (missing.length > 0) problems.push(`npm wouldn't pack tracked files: ${missing.join(', ')}`);
+  return problems;
+}
+
+test('a release packs exactly the committed files, from a clean checkout (WISPLY_RELEASE=1)', {
+  skip: process.env.WISPLY_RELEASE === '1' ? false : 'WISPLY_RELEASE is not 1',
+}, () => {
+  const tracked = git('ls-files', '-z', '--', ...pkg.files, 'package.json').split('\0').filter(Boolean).sort();
+  const problems = cleanTreeProblems({ status: git('status', '--porcelain', '--untracked-files=all'), packed: packedFiles(), tracked });
+  assert.deepEqual(problems, [], `not releasable:\n- ${problems.join('\n- ')}`);
+});
+
+test('cleanTreeProblems: a clean checkout that packs its tracked files passes; changes and strays are named', () => {
+  const tracked = ['LICENSE', 'README.md', 'bin/wisply-mcp.mjs', 'lib/bridge.mjs', 'package.json'];
+  assert.deepEqual(cleanTreeProblems({ status: '', packed: [...tracked], tracked }), []);
+  assert.deepEqual(cleanTreeProblems({ status: '\n', packed: [...tracked], tracked }), []);
+  const cases = [
+    [{ status: '?? lib/debug.mjs\n', packed: [...tracked, 'lib/debug.mjs'] },
+      [/^the checkout has changes or untracked files \(\?\? lib\/debug\.mjs\): publish from a fresh clone/, /^npm would pack files git doesn't track: lib\/debug\.mjs$/]],
+    [{ status: ' M lib/bridge.mjs\n' }, [/\(M lib\/bridge\.mjs\)/]],
+    // An ignored file in a "files" folder: git status doesn't show it, npm would still pack it.
+    [{ packed: [...tracked, 'contract/local.json'] }, [/^npm would pack files git doesn't track: contract\/local\.json$/]],
+    [{ packed: tracked.filter((file) => file !== 'lib/bridge.mjs') }, [/^npm wouldn't pack tracked files: lib\/bridge\.mjs$/]],
+    [{ status: Array.from({ length: 7 }, (_, index) => `?? scratch-${index}`).join('\n') }, [/scratch-4; \.\.\.\): publish/]],
+  ];
+  for (const [change, expected] of cases) {
+    const problems = cleanTreeProblems({ status: '', packed: [...tracked], tracked, ...change });
+    assert.equal(problems.length, expected.length, `${JSON.stringify(change)}: ${problems.join(' | ')}`);
+    expected.forEach((pattern, index) => assert.match(problems[index], pattern));
+  }
+});
+
 /**
  * What is wrong with a state's "private" flag; [] when it is right. npm publish refuses a private package without
  * running any script, so a plain `npm publish` can't ship a contract that isn't final or an npm name nobody owns

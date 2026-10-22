@@ -4,3 +4,13 @@ updates:
     directory: /
     schedule:
       interval: weekly
+  # The dev-only MCPB packer (tools/mcpb, pinned with its lockfile, never part
+  # of the package): security updates only. Version updates stay off because
+  # the packer is pinned on purpose (tests/manifests.test.mjs); security PRs
+  # need Dependabot alerts and security updates turned on in the repository's
+  # settings (SECURITY.md, "Release controls" item 8).
+  - package-ecosystem: npm
+    directory: /tools/mcpb
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0

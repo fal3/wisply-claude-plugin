@@ -561,11 +561,88 @@ spec text. Not shipped in the npm package.
   goes live only when a maintainer approves it with two-factor
   authentication (`npm stage approve <id>`, or npmjs.com > Staged Packages):
   a second human gate after the `release` environment, which npm recommends
-  together with "disallow tokens".
+  together with "disallow tokens". Re-checked on 2026-10-22 in a clone of
+  npm/documentation at 7e98ab4 (`trusted-publishers.mdx`: "Configurations
+  created after Sep 03, 2026 are automatically set to allow `npm stage
+  publish`"; the GitHub fields are owner, repository, workflow filename,
+  optional environment and allowed actions, with no ref). So the design's
+  Alex action 4 ("step 4 is the release workflow run that Alex approves")
+  needs one more step for every later release: approve the environment's
+  run, then `npm stage approve <id>`, and only then the draft release, the
+  bundle, the `fileSha256` PR and `mcp-publisher publish` (steps 6 to 10;
+  `mcp-publisher` reads `mcpName` from the live npm version, and a rejected
+  stage must never get a bundle or a registry entry). SECURITY.md item 6
+  and the README say so.
 - **More hardening than the design's YAML.** `package-manager-cache: false`
   on setup-node (npm's and setup-node's advice for release builds),
   `timeout-minutes`, `--ignore-scripts` on the publish, and comments. The
   publish job's `if` and permissions are the design's.
+- **Two jobs, and only a tag on `main` (DIST-M5 review).** The design has
+  one job that runs the checks and the publish with `id-token: write`, so
+  every test, git command and `npm pack` could request the publish-capable
+  OIDC token. Here a `verify` job with `contents: read` alone checks out the
+  whole history (`fetch-depth: 0`), refuses a tagged commit that isn't on
+  `main` (`git merge-base --is-ancestor HEAD refs/remotes/origin/main`), and
+  runs `npm run check` and `WISPLY_RELEASE=1 npm test`. `publish` has
+  `needs: verify`, the `release` environment and `id-token: write`, and runs
+  only checkout, setup-node, the npm install and `npm stage publish`. Both
+  jobs keep the design's `if`. The ci run itself can't be seen from the
+  workflow, so SECURITY.md item 2 says release tags are made only on `main`
+  commits whose ci is green.
+- **The `release` environment, set up before the first tag, with more rules
+  than a reviewer.** The design's Alex action 1 creates it with Alex as the
+  required reviewer. SECURITY.md item 2 now also sets "Deployment branches
+  and tags" to one tag rule, `v*`, turns off the administrator bypass, and
+  gives the `gh api` checks; item 6 starts by checking them. GitHub creates
+  a missing environment, unprotected, on the first run that names it, and
+  npm's trusted publisher doesn't bind to a ref, so without the tag rule a
+  writer's branch with an edited `release.yml` could ask for the OIDC token,
+  held back only by the reviewer. "Prevent self-review" stays off while Alex
+  is the only maintainer.
+- **The maintainer's release check reads real checkouts (DIST-M5 review).**
+  `"on_main"` and the sha256 values are the tree's claims about itself, and
+  `tests/upstream.test.mjs` used to skip without `WISPLY_AI_DIR`, so a
+  hand-flipped `"on_main": true` passed `WISPLY_RELEASE=1 npm test`. Now,
+  with `WISPLY_RELEASE=1` outside GitHub Actions, a missing `WISPLY_AI_DIR`
+  or `WISPLY_PLUGIN_DIR` fails; each checkout's `origin` must be
+  `github.com/fal3/<repository>` (HTTPS or SSH), it must have an
+  `origin/main`, and that must have the recorded commit (`"on_main": true`
+  checked; the plugin commit, which records no `"on_main"`, too). The bytes
+  are the existing upstream tests, which run whenever the variables are set.
+  `npm run sync-vendor` also writes `"on_main": true` only for a checkout
+  whose `origin` is wisply-ai and says why otherwise. The release workflow
+  can't check out the private wisply-ai, so there `"on_main"` is the
+  reviewed tree's claim; the workflow, SECURITY.md and the README say so and
+  ask for the maintainer's run on the commit before it is tagged. A local
+  `git update-ref` can still forge `origin/main`; `git fetch origin main`
+  before the run is the advice, not a check.
+- **A clean checkout for every release.** The design's Alex action 4 has
+  "a clean clone" in prose only. With `WISPLY_RELEASE=1`,
+  `tests/pack.test.mjs` now refuses a checkout with changes or untracked
+  files (`git status --porcelain --untracked-files=all`) and a tarball that
+  isn't exactly `git ls-files` under package.json `"files"` plus
+  `package.json`, so a scratch file can't ship in the hand-made 0.1.0, the
+  one version with no provenance and no staged review. SECURITY.md item 5
+  spells out the procedure: a fresh clone of the tag, the release check with
+  both checkouts, `npm pack --dry-run --json`, then
+  `npm publish --access public --ignore-scripts`.
+- **Dependabot for the packer.** The design pins the MCPB packer but leaves
+  it out of Dependabot. `.github/dependabot.yml` now has an `npm` entry for
+  `/tools/mcpb` with `open-pull-requests-limit: 0`: security updates only,
+  so the deliberate pin moves only in a reviewed change. Security updates
+  need Dependabot alerts and security updates turned on in the repository's
+  settings; SECURITY.md item 8 adds `npm audit --prefix tools/mcpb` before
+  each bundle build.
+- **DIST-M5 stays open until the re-vendor from `main`.** The design's
+  done-criterion is a contract re-vendored "from DIST-A1's merge commit".
+  This branch vendors DIST-A1's unmerged branch commit 5e4d308
+  (`"on_main": false`, refused by the release gate), and on 2026-10-22
+  wisply-ai's `main` is still 1a1f655 without it. One more
+  `npm run sync-vendor` from the main commit that merges DIST-A1 remains: a
+  follow-up (DIST-M5b) rather than a finished DIST-M5. A squash or rebase
+  merge gives a different commit than 5e4d308, so the follow-up must name
+  the main commit. The design's "Provisional contract" section should take
+  both this early vendor and `"on_main"` (the first bullet above).
 - **"private" is two facts.** The design ties `"private"` to the
   provisional contract alone, so the re-vendor would have made the package
   publishable under an npm name nobody owns yet. `"private"` stays exactly

@@ -471,55 +471,78 @@ test('release.yml runs only for pushed v* tags, and grants nothing at the top le
   // No branches, pull requests, manual runs or other workflows: a tag that only the owner can create (ruleset).
   assert.deepEqual(release.on, { push: { tags: ['v*'] } });
   assert.deepEqual(release.permissions, {});
-  assert.deepEqual(Object.keys(release.jobs), ['publish']);
+  assert.deepEqual(Object.keys(release.jobs), ['verify', 'publish']);
   assert.doesNotMatch(releaseCode, /pull_request|workflow_dispatch|workflow_call|workflow_run|schedule:|branches/);
 });
 
-test('release.yml: one job, skipped unless the repository is public and trusted publishing is on, behind the release environment', () => {
-  const job = release.jobs.publish;
-  assert.deepEqual(Object.keys(job), ['if', 'runs-on', 'timeout-minutes', 'environment', 'permissions', 'steps']);
-  assert.equal(job.if, RELEASE_GATE);
-  // npm trusted publishing works from GitHub-hosted runners only.
-  assert.equal(job['runs-on'], 'ubuntu-latest');
-  assert.ok(Number.isInteger(job['timeout-minutes']) && job['timeout-minutes'] <= 30);
-  assert.equal(job.environment, 'release');
-  // id-token: write (OIDC for npm) on this job only; nothing else beyond reading the code.
-  assert.deepEqual(job.permissions, { contents: 'read', 'id-token': 'write' });
+test('release.yml: verify reads the code only; publish runs after it, behind the release environment, with the one id-token', () => {
+  const { verify, publish } = release.jobs;
+  assert.deepEqual(Object.keys(verify), ['if', 'runs-on', 'timeout-minutes', 'permissions', 'steps']);
+  assert.deepEqual(Object.keys(publish), ['needs', 'if', 'runs-on', 'timeout-minutes', 'environment', 'permissions', 'steps']);
+  for (const job of [verify, publish]) {
+    // Skipped unless the repository is public and trusted publishing is on.
+    assert.equal(job.if, RELEASE_GATE);
+    // npm trusted publishing works from GitHub-hosted runners only.
+    assert.equal(job['runs-on'], 'ubuntu-latest');
+    assert.ok(Number.isInteger(job['timeout-minutes']) && job['timeout-minutes'] <= 30);
+  }
+  // The checks (tests, npm pack, git) run where no OIDC token can be requested; publish only after they pass.
+  assert.deepEqual(verify.permissions, { contents: 'read' });
+  assert.equal(publish.needs, 'verify');
+  assert.equal(publish.environment, 'release');
+  // id-token: write (OIDC for npm) on the publish job only; nothing else beyond reading the code.
+  assert.deepEqual(publish.permissions, { contents: 'read', 'id-token': 'write' });
   assert.equal(releaseCode.split('id-token').length - 1, 1, 'id-token appears once, in the publish job');
+  assert.equal(releaseCode.split('environment:').length - 1, 1, 'the environment is the publish job\'s');
   // No secrets: trusted publishing needs no npm token, and nothing may reintroduce one.
   assert.doesNotMatch(releaseText, /secrets\.|NODE_AUTH_TOKEN|NPM_TOKEN|_authToken|GITHUB_TOKEN/);
   assert.doesNotMatch(releaseCode, /\benv:/, 'no step or job sets environment variables');
+  // The environment's own rules (reviewer, v* tags only, no bypass) live in GitHub's settings: the header says so.
+  assert.match(releaseText, /must already exist with its rules before the\n# {3}first tag/);
 });
 
-test('release.yml steps: pinned checkout and setup-node without credentials or caches, npm, the checks, a staged publish', () => {
+test('release.yml steps: the tag must be on main, then the checks; the publish job runs npm only, staged', () => {
   const pins = Object.fromEntries(actionPins(releaseText).map((pin) => [pin.action, pin.ref]));
-  assert.deepEqual(release.jobs.publish.steps, [
-    { uses: `actions/checkout@${pins['actions/checkout']}`, with: { 'persist-credentials': false } },
-    {
-      uses: `actions/setup-node@${pins['actions/setup-node']}`,
-      // 22.x is the newest Node 22 (trusted publishing needs 22.14.0 or later); the npm registry for OIDC; no cache,
-      // as npm's and setup-node's docs advise for release builds.
-      with: { 'node-version': '22.x', 'registry-url': 'https://registry.npmjs.org', 'package-manager-cache': false },
-    },
-    { run: `npm install -g npm@${RELEASE_NPM} --ignore-scripts` },
+  const checkout = (extra = {}) => ({ uses: `actions/checkout@${pins['actions/checkout']}`, with: { 'persist-credentials': false, ...extra } });
+  const node = (extra = {}) => ({
+    uses: `actions/setup-node@${pins['actions/setup-node']}`,
+    // 22.x is the newest Node 22 (trusted publishing needs 22.14.0 or later); no cache, as npm's and setup-node's
+    // docs advise for release builds.
+    with: { 'node-version': '22.x', ...extra, 'package-manager-cache': false },
+  });
+  const npm = { run: `npm install -g npm@${RELEASE_NPM} --ignore-scripts` };
+  assert.deepEqual(release.jobs.verify.steps, [
+    // The whole history and every branch (refs/remotes/origin/*), so the ancestry check sees main.
+    checkout({ 'fetch-depth': 0 }),
+    // A tag on a side branch or an unmerged commit is never released.
+    { run: 'git merge-base --is-ancestor HEAD refs/remotes/origin/main' },
+    node(),
+    npm,
     { run: 'npm run check' },
     { run: 'WISPLY_RELEASE=1 npm test' },
+  ]);
+  assert.deepEqual(release.jobs.publish.steps, [
+    checkout(),
+    // The npm registry for OIDC.
+    node({ 'registry-url': 'https://registry.npmjs.org' }),
+    npm,
     // Staged: the version goes live only after a maintainer approves it with 2FA (npm stage approve, or npmjs.com).
     { run: 'npm stage publish --provenance --access public --ignore-scripts' },
   ]);
   assert.ok(atLeast(RELEASE_NPM, TRUSTED_PUBLISHING_NPM) && atLeast(RELEASE_NPM, STAGED_PUBLISHING_NPM));
   assert.match(RELEASE_NPM, /^\d+\.\d+\.\d+$/, 'an exact npm version');
+  const steps = [...release.jobs.verify.steps, ...release.jobs.publish.steps];
   // No expression is ever expanded into a shell line (script injection through a tag name or a variable).
-  for (const step of release.jobs.publish.steps) if (step.run) assert.doesNotMatch(step.run, /\$\{\{/, step.run);
+  for (const step of steps) if (step.run) assert.doesNotMatch(step.run, /\$\{\{/, step.run);
   // Nothing but npm itself is installed, and nothing runs a package's lifecycle scripts.
-  const runs = release.jobs.publish.steps.filter((step) => step.run).map((step) => step.run);
-  assert.deepEqual(runs.filter((run) => /\bnpm (i|install|ci)\b|\bnpx\b/.test(run)), [`npm install -g npm@${RELEASE_NPM} --ignore-scripts`]);
+  const runs = steps.filter((step) => step.run).map((step) => step.run);
+  assert.deepEqual(runs.filter((run) => /\bnpm (i|install|ci)\b|\bnpx\b/.test(run)), [npm.run, npm.run]);
 });
 
 test('every action in ci.yml and release.yml is pinned to a full commit SHA with its version tag, the same in both', () => {
   const release = actionPins(releaseText);
   const ci = actionPins(ciText);
-  assert.ok(release.length === 2 && ci.length >= 2);
+  assert.ok(release.length === 4 && ci.length >= 2);
   for (const pin of [...release, ...ci]) {
     assert.match(pin.ref, /^[0-9a-f]{40}$/, `${pin.action}: a full commit SHA`);
     assert.match(pin.comment ?? '', /^v\d+\.\d+\.\d+$/, `${pin.action}: the version tag Dependabot keeps next to the SHA`);
@@ -533,6 +556,18 @@ test('every action in ci.yml and release.yml is pinned to a full commit SHA with
   assert.deepEqual([...byAction.keys()].sort(), ['actions/checkout', 'actions/setup-node']);
   // Dependabot covers every workflow in .github/workflows, so one PR bumps a pin in both files.
   assert.match(readText('.github/dependabot.yml'), /package-ecosystem: github-actions\n\s+directory: \/\n/);
+});
+
+test('Dependabot keeps the action pins current and raises security updates for the pinned MCPB packer', () => {
+  assert.deepEqual(parseWorkflow(readText('.github/dependabot.yml')), {
+    version: 2,
+    updates: [
+      { 'package-ecosystem': 'github-actions', directory: '/', schedule: { interval: 'weekly' } },
+      // Security updates only: 0 open version-update PRs, so the packer's deliberate pin (MCPB_VERSION) moves only
+      // in a reviewed change; Dependabot's security PRs for its lockfile aren't limited by this setting.
+      { 'package-ecosystem': 'npm', directory: `/${PACKER_DIR}`, schedule: { interval: 'weekly' }, 'open-pull-requests-limit': 0 },
+    ],
+  });
 });
 
 test('the workflow reader understands only its own subset of YAML', () => {

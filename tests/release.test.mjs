@@ -1,8 +1,10 @@
 // The release gate (DIST-M5): `WISPLY_RELEASE=1 npm test` passes only on the
-// tree to publish. Alex runs it before the first, hand-made publish; the
-// release workflow runs it before it stages every later version. This file
-// checks the release change itself (tests/helpers/release.mjs); the contract
-// is tests/vendor.test.mjs's, the recorded checks, the npm name and "private"
+// tree to publish. Alex runs it before the first, hand-made publish and
+// before every tag; the release workflow's verify job runs it before the
+// publish job stages a version. This file checks the release change itself
+// (tests/helpers/release.mjs); the contract is tests/vendor.test.mjs's and,
+// against real checkouts, tests/upstream.test.mjs's, the clean checkout
+// tests/pack.test.mjs's, the recorded checks, the npm name and "private"
 // are tests/release-checks.test.mjs's, and "published" is
 // tests/clients.test.mjs's.
 import test from 'node:test';

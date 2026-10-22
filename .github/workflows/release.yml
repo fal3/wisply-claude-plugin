@@ -5,15 +5,29 @@
 # - Runs only for pushed v* tags, which a ruleset lets only the owner create,
 #   and only while the repository is public and the repository variable
 #   NPM_TRUSTED_PUBLISHING is "on".
-# - Waits for the "release" environment, whose required reviewer approves
-#   every run.
-# - npm trusted publishing (OIDC): no npm token anywhere, and id-token: write
-#   on this one job only. Nothing is cached and nothing is installed but npm.
+# - The "release" environment must already exist with its rules before the
+#   first tag (SECURITY.md, "Release controls" item 2): Alex as the required
+#   reviewer, deployments only from tags matching v*, and no administrator
+#   bypass. GitHub creates a missing environment, unprotected, on the first
+#   run that names it, and npm's trusted publisher checks only this file's
+#   name and the environment's name, not the ref.
+# - Two jobs. verify reads the code only (contents: read): the tagged commit
+#   must be on main, then npm run check and the release check. publish runs
+#   only after verify, waits for the environment's reviewer, and holds the
+#   one id-token: write (OIDC for npm trusted publishing: no npm token
+#   anywhere). It runs nothing but npm itself, so no test or tool can ask for
+#   the publish-capable token. Nothing is cached.
+# - The release check here can't check out the private wisply-ai: the
+#   contract's "on_main" is the reviewed tree's claim, which the maintainer's
+#   own run (WISPLY_AI_DIR=... WISPLY_PLUGIN_DIR=... WISPLY_RELEASE=1 npm test)
+#   checks against wisply-ai's main before the tag is pushed.
 # - Actions are pinned to full commit SHAs, the same as ci.yml (Dependabot
 #   keeps both current).
 # - Stages the version with provenance (npm stage publish). It goes live only
 #   when a maintainer approves it with two-factor authentication:
-#   npm stage approve <stage id>, or npmjs.com > Staged Packages.
+#   npm stage approve <stage id>, or npmjs.com > Staged Packages. The bundle
+#   and the registry entry wait for that (mcp-publisher reads mcpName from the
+#   live npm version).
 #
 # tests/manifests.test.mjs pins this file's shape, step by step.
 name: release
@@ -26,7 +40,35 @@ on:
 permissions: {}
 
 jobs:
+  verify:
+    if: ${{ !github.event.repository.private && vars.NPM_TRUSTED_PUBLISHING == 'on' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      # The whole history and every branch, so the next step can see main.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      # Only a commit on main is released: a tag on a side branch or an unmerged commit stops here.
+      - run: git merge-base --is-ancestor HEAD refs/remotes/origin/main
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22.x'
+          package-manager-cache: false
+      # The npm the publish job uses, so npm pack here lists what it will publish.
+      - run: npm install -g npm@11.21.0 --ignore-scripts
+      - run: npm run check
+      # Refuses a contract that is provisional or not from wisply-ai's main
+      # ("on_main", as the tree records it), unrecorded release checks, a
+      # package that is still private, a checkout with changes or strays, a
+      # tag that isn't v<version> and a CHANGELOG without this version's date.
+      - run: WISPLY_RELEASE=1 npm test
+
   publish:
+    needs: verify
     if: ${{ !github.event.repository.private && vars.NPM_TRUSTED_PUBLISHING == 'on' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -45,9 +87,4 @@ jobs:
           package-manager-cache: false
       # Trusted publishing needs npm 11.5.1 or later, staged publishing 11.15.0.
       - run: npm install -g npm@11.21.0 --ignore-scripts
-      - run: npm run check
-      # Refuses a contract that is provisional or not from wisply-ai's main,
-      # unrecorded release checks, a package that is still private, a tag that
-      # isn't v<version> and a CHANGELOG without this version's date.
-      - run: WISPLY_RELEASE=1 npm test
       - run: npm stage publish --provenance --access public --ignore-scripts

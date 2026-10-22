@@ -1,8 +1,11 @@
-// What the release change itself must do, one of the three checks behind
+// What the release change itself must do, one of the checks behind
 // `WISPLY_RELEASE=1 npm test` (Alex's local release check, and the release
-// workflow before it stages a version). The other two are
-// tests/vendor.test.mjs (the contract isn't provisional) and
-// tests/release-checks.test.mjs (what a maintainer records in
+// workflow's verify job before publish stages a version). The others are
+// tests/vendor.test.mjs (the contract isn't provisional and says it is from
+// wisply-ai's main), tests/upstream.test.mjs (on Alex's machine: real
+// checkouts confirm the recorded commits are on main),
+// tests/pack.test.mjs (a clean checkout that packs exactly the committed
+// files) and tests/release-checks.test.mjs (what a maintainer records in
 // docs/release-checks.json, PACKAGE_NAME_FINAL with no "private", a
 // destructive setup_claude); tests/clients.test.mjs requires "published":
 // true. So each missing step is named once. Pure, so

@@ -25,10 +25,15 @@
 //
 // Without --provisional, SOURCE.json also says whether wisply-ai's main has
 // the commit ("on_main": the --app checkout's refs/remotes/origin/main
-// contains it; fetch first). A commit from an unmerged branch (DIST-A1
-// before it merges, say) is vendored with "on_main": false, which
-// tests/vendor.test.mjs refuses when WISPLY_RELEASE=1: run sync-vendor
-// again from the main commit once the branch is merged.
+// contains it, and its origin is github.com/fal3/wisply-ai; run
+// `git fetch origin main` there first). A commit from an unmerged branch
+// (DIST-A1 before it merges, say), or a checkout whose origin is another
+// repository, is vendored with "on_main": false, which tests/vendor.test.mjs
+// refuses when WISPLY_RELEASE=1: run sync-vendor again from the main commit
+// once the branch is merged. "on_main" is what this checkout said when the
+// file was written; the maintainer's release check
+// (WISPLY_AI_DIR=... WISPLY_RELEASE=1 npm test, tests/upstream.test.mjs)
+// checks it again against a real checkout.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
@@ -60,16 +65,53 @@ const existsAt = (dir, commit, path) => {
 };
 /** The ref whose history decides "on_main": the remote's main, never a local branch someone may have committed to. */
 export const MAIN_REF = 'refs/remotes/origin/main';
-/** Whether `commit` is on the checkout's origin/main; false when there is no origin/main. */
-const onMain = (dir, commit) => {
+
+/**
+ * Whether a `git remote get-url origin` value is the GitHub repository `repository` names ("github:fal3/wisply-ai"),
+ * over HTTPS or SSH, with or without ".git". Anything else (a fork, a mirror, a local path) means its origin/main
+ * says nothing about that repository's main.
+ * @param {string | null | undefined} url
+ * @param {string} repository
+ */
+export function originMatches(url, repository) {
+  const name = /^github:([A-Za-z0-9-]+\/[A-Za-z0-9._-]+)$/.exec(repository)?.[1];
+  if (!name || typeof url !== 'string') return false;
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^(?:https://(?:[^@/\\s]+@)?github\\.com/|ssh://git@github\\.com/|git@github\\.com:)${escaped}(?:\\.git)?/?$`, 'i')
+    .test(url.trim());
+}
+
+/** The checkout's origin URL, or null. Never printed: it may carry credentials. */
+export const originOf = (dir) => {
   try {
-    git(dir, ['rev-parse', '--verify', '-q', `${MAIN_REF}^{commit}`], 'ignore');
-    git(dir, ['merge-base', '--is-ancestor', commit, MAIN_REF], 'ignore');
-    return true;
+    return git(dir, ['remote', 'get-url', 'origin'], 'ignore').toString('utf8').trim() || null;
   } catch {
-    return false;
+    return null;
   }
 };
+
+/**
+ * Whether `commit` is on the main of the repository `repository` names, as the checkout knows it: its origin is
+ * that repository and its origin/main has the commit. `why` says what is missing when it isn't.
+ * @returns {{ onMain: boolean, why?: string }}
+ */
+export function onMainOf(dir, commit, repository) {
+  const where = repository.replace(/^github:/, 'github.com/');
+  if (!originMatches(originOf(dir), repository)) {
+    return { onMain: false, why: `the checkout's origin isn't ${where} (git remote get-url origin)` };
+  }
+  try {
+    git(dir, ['rev-parse', '--verify', '-q', `${MAIN_REF}^{commit}`], 'ignore');
+  } catch {
+    return { onMain: false, why: 'the checkout has no origin/main (git fetch origin main)' };
+  }
+  try {
+    git(dir, ['merge-base', '--is-ancestor', commit, MAIN_REF], 'ignore');
+    return { onMain: true };
+  } catch {
+    return { onMain: false, why: `${commit.slice(0, 7)} isn't on the checkout's origin/main (git fetch origin main, or wait for the merge)` };
+  }
+}
 
 /** A refusal: printed as is, and nothing has been written. */
 class Refusal extends Error {}
@@ -146,7 +188,8 @@ function main(argv) {
     }
   }
 
-  const appOnMain = values.provisional ? null : onMain(values.app, appCommit);
+  const appMain = values.provisional ? null : onMainOf(values.app, appCommit, APP_REPOSITORY);
+  const appOnMain = appMain === null ? null : appMain.onMain;
   const source = {
     schema: VENDOR_SCHEMA,
     provisional: values.provisional,
@@ -173,8 +216,8 @@ function main(argv) {
   }
   process.stdout.write(`wrote ${SOURCE_FILE}${values.provisional ? ' (provisional)' : ''}\n`);
   if (appOnMain === false) {
-    process.stderr.write(`note: ${appCommit.slice(0, 7)} isn't on the app checkout's origin/main, so SOURCE.json says ` +
-      '"on_main": false and WISPLY_RELEASE=1 refuses it: run sync-vendor again from the main commit once it is merged\n');
+    process.stderr.write(`note: ${appMain.why}, so SOURCE.json says "on_main": false and WISPLY_RELEASE=1 refuses ` +
+      'it: run sync-vendor again from the main commit once it is merged, from a checkout of github.com/fal3/wisply-ai\n');
   }
 }
 

@@ -163,15 +163,27 @@ registry entries and skill built from this repository.
 - The release workflow `.github/workflows/release.yml`, for the releases
   after 0.1.0 (0.1.0 itself is published by hand): only for `v*` tags, only
   while the repository is public and the variable `NPM_TRUSTED_PUBLISHING`
-  is `on`, behind the `release` environment; npm trusted publishing (OIDC,
-  no npm token, `id-token: write` on that one job); actions pinned to full
-  commit SHAs; npm 11.21.0 installed without scripts; `npm run check` and
-  `WISPLY_RELEASE=1 npm test`; then `npm stage publish --provenance`, so a
-  version goes live only after a maintainer approves it on npm with
-  two-factor authentication.
+  is `on`; actions pinned to full commit SHAs; npm 11.21.0 installed without
+  scripts. A read-only `verify` job refuses a tag whose commit isn't on
+  `main`, then runs `npm run check` and `WISPLY_RELEASE=1 npm test`. Only
+  after it, the `publish` job, behind the `release` environment and the one
+  job with `id-token: write` (npm trusted publishing: OIDC, no npm token),
+  runs nothing but `npm stage publish --provenance`, so a version goes live
+  only after a maintainer approves it on npm with two-factor authentication.
+  The environment's rules (Alex as reviewer, `v*` tags only, no
+  administrator bypass) are set up in GitHub before the first tag
+  (SECURITY.md, "Release controls" item 2).
+- Dependabot security updates for the MCPB packer's lockfile
+  (`tools/mcpb`), next to the weekly action pin updates.
 - The release gate `WISPLY_RELEASE=1 npm test`, which lists every step still
   missing: a contract that is provisional or not from wisply-ai's `main`
-  (`tests/vendor.test.mjs`); the checks only
+  (`tests/vendor.test.mjs`); on the maintainer's machine, checkouts of
+  wisply-ai and wisply-claude-plugin (`WISPLY_AI_DIR`, `WISPLY_PLUGIN_DIR`,
+  each with its GitHub repository as `origin`) whose `origin/main` has the
+  recorded commits, so `"on_main"` and the hashes aren't taken on trust
+  (`tests/upstream.test.mjs`); a checkout with changes or untracked files,
+  or a tarball that isn't exactly the committed files
+  (`tests/pack.test.mjs`); the checks only
   a maintainer can record in `docs/release-checks.json` (the Mac port test,
   the MCP Registry namespace, Wisply's npm name), `PACKAGE_NAME_FINAL` with
   no `"private"` in `package.json`, and a destructive `setup_claude` in the
@@ -187,7 +199,8 @@ registry entries and skill built from this repository.
   writes anything, refuses a missing file or a contract the connector can't
   load (for example one with `tool_descriptors` but no `wspr_` scope, or the
   other way round), and records in `contract/SOURCE.json` whether wisply-ai's
-  `origin/main` has the commit (`"on_main"`).
+  `origin/main` has the commit (`"on_main"`), which it says only for a
+  checkout whose `origin` is `github.com/fal3/wisply-ai`.
 
 ### Known limitations
 

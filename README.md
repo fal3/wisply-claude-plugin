@@ -465,13 +465,17 @@ branch's own commits change and skip (the change reaches this repository
 through a re-vendor once it is on `main`); drift that `main` already has fails
 on any checkout. The test also checks SOURCE.json's `"on_main"` against the
 checkout's `origin/main`, and reports a TODO while the vendored commit isn't on
-it yet.
+it yet. With `WISPLY_RELEASE=1` (outside GitHub Actions) both variables are
+required, each checkout's `origin` must be its GitHub repository, and each
+recorded commit must be on that `origin/main`.
 
 - `contract/mcp-contract.json` is vendored from wisply-ai `Docs/mcp-contract.json`,
   and `lib/identity.mjs` from `wisply-claude-plugin`, both by
   `npm run sync-vendor` (see `scripts/sync-vendor.mjs`), which records their
   sha256 in `contract/SOURCE.json`, with `"on_main"`: whether the wisply-ai
-  checkout's `origin/main` has the commit. Don't edit them by hand.
+  checkout's `origin/main` has the commit (only for a checkout whose `origin`
+  is `github.com/fal3/wisply-ai`; `git fetch origin main` first). Don't edit
+  them by hand.
   sync-vendor refuses a contract the connector can't load before it writes
   anything; the steps are in [SECURITY.md](SECURITY.md), "Re-vendoring the
   contract".
@@ -600,20 +604,37 @@ that `fileSha256` belongs to this version. When you bump the version, set
 
 `WISPLY_RELEASE=1 npm test` is the release check. It passes only on the tree
 to publish and otherwise lists what is missing, each step once: a contract
-re-vendored from wisply-ai's `main` (`tests/vendor.test.mjs`); the checks
-recorded in `docs/release-checks.json`, the final package name with no
-`"private"`, and a destructive `setup_claude`
-(`tests/release-checks.test.mjs`); `"published": true` in the clients file
-(`tests/clients.test.mjs`); and the release change itself: this version
-everywhere, the CHANGELOG heading with its date and, in the release
-workflow, the tag `v<version>` (`tests/release.test.mjs`).
+re-vendored from wisply-ai's `main` (`tests/vendor.test.mjs`); on your own
+machine, checkouts of wisply-ai and wisply-claude-plugin that confirm the
+vendored commits are on their `main` (`tests/upstream.test.mjs`); a
+checkout with no changes or untracked files that packs exactly the committed
+files (`tests/pack.test.mjs`); the checks recorded in
+`docs/release-checks.json`, the final package name with no `"private"`, and
+a destructive `setup_claude` (`tests/release-checks.test.mjs`);
+`"published": true` in the clients file (`tests/clients.test.mjs`); and the
+release change itself: this version everywhere, the CHANGELOG heading with
+its date and, in the release workflow, the tag `v<version>`
+(`tests/release.test.mjs`). Run it from a fresh clone, with both checkouts
+fetched:
 
-0.1.0 is published by hand. Later versions go through
-`.github/workflows/release.yml`: a pushed `v*` tag, the `release`
-environment's approval, npm trusted publishing (no npm token), the checks,
-then `npm stage publish --provenance`; the version goes live when a
-maintainer approves it on npm with two-factor authentication. The order of
-every step, and how to set up the trusted publisher, are in
-[SECURITY.md](SECURITY.md), "Release controls".
+```bash
+WISPLY_AI_DIR=<wisply-ai checkout> WISPLY_PLUGIN_DIR=<wisply-claude-plugin checkout> WISPLY_RELEASE=1 npm test
+```
+
+The release workflow can't check out the private wisply-ai, so there the
+contract's `"on_main"` is the reviewed tree's claim: run the command above
+on the commit before you tag it.
+
+0.1.0 is published by hand, from a fresh clone of the tag. Later versions go
+through `.github/workflows/release.yml`: a pushed `v*` tag on a `main`
+commit, the checks in a read-only job, then the `release` environment's
+approval and `npm stage publish --provenance` through npm trusted publishing
+(no npm token) in a job that runs nothing else. The version goes live when a
+maintainer approves it on npm with two-factor authentication
+(`npm stage approve <id>`); only then build the bundle and publish the
+registry entry. The `release` environment must exist with its rules before
+the first tag. The order of every step, and how to set up the environment
+and the trusted publisher, are in [SECURITY.md](SECURITY.md), "Release
+controls".
 
 Security reports: see [SECURITY.md](SECURITY.md). License: [MIT](LICENSE).

@@ -13,7 +13,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } f
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { upstreamContractProblems } from '../scripts/sync-vendor.mjs';
+import { originMatches, upstreamContractProblems } from '../scripts/sync-vendor.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const FIXTURE = JSON.parse(readFileSync(join(ROOT, 'contract/mcp-contract.json'), 'utf8'));
@@ -107,15 +107,28 @@ test('a contract the connector can load is vendored byte for byte, not provision
   assert.equal(loaded.descriptorFor('get_live_transcript').inputSchema.properties.tail_words.maximum, 5000);
 });
 
-test('"on_main" says whether the app checkout\'s origin/main has the commit, and only that ref counts', (t) => {
+test('"on_main" says whether the app checkout\'s origin/main has the commit, and only that ref of that repository counts', (t) => {
   const { parent, copy, plugin } = workspace(t);
   const app = repoWith(parent, 'wisply-ai', { 'Docs/mcp-contract.json': jsonBytes(finalContract()) });
   const appSource = () => JSON.parse(readFileSync(join(copy, 'contract/SOURCE.json'), 'utf8')).sources[0];
-  // No origin/main (and a local main that has the commit doesn't count): not on main, and sync-vendor says so.
+  // No origin at all, even with an origin/main ref that has the commit: whose main it is can't be told.
+  git(app.dir, 'update-ref', 'refs/remotes/origin/main', app.commit);
   let result = syncVendor(copy, app, plugin);
   assert.equal(result.status, 0, result.stderr);
   assert.equal(appSource().on_main, false);
-  assert.match(result.stderr, /isn't on the app checkout's origin\/main, so SOURCE\.json says "on_main": false/);
+  assert.match(result.stderr, /note: the checkout's origin isn't github\.com\/fal3\/wisply-ai \(git remote get-url origin\), so SOURCE\.json says "on_main": false/);
+  // A fork's main proves nothing either.
+  git(app.dir, 'remote', 'add', 'origin', 'https://github.com/someone/wisply-ai.git');
+  result = syncVendor(copy, app, plugin);
+  assert.equal(appSource().on_main, false);
+  assert.match(result.stderr, /origin isn't github\.com\/fal3\/wisply-ai/);
+  // wisply-ai itself, before a fetch (no origin/main; a local main that has the commit doesn't count).
+  git(app.dir, 'remote', 'set-url', 'origin', 'git@github.com:fal3/wisply-ai.git');
+  git(app.dir, 'update-ref', '-d', 'refs/remotes/origin/main');
+  result = syncVendor(copy, app, plugin);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(appSource().on_main, false);
+  assert.match(result.stderr, /note: the checkout has no origin\/main \(git fetch origin main\), so SOURCE\.json says "on_main": false/);
   // A branch commit that origin/main doesn't have yet (DIST-A1 before it merges).
   git(app.dir, 'update-ref', 'refs/remotes/origin/main', app.commit);
   git(app.dir, 'checkout', '-q', '-b', 'claude/lane');
@@ -126,6 +139,7 @@ test('"on_main" says whether the app checkout\'s origin/main has the commit, and
   result = syncVendor(copy, lane, plugin);
   assert.equal(result.status, 0, result.stderr);
   assert.equal(appSource().on_main, false);
+  assert.match(result.stderr, new RegExp(`note: ${lane.commit.slice(0, 7)} isn't on the checkout's origin/main`));
   // Once origin/main has it (the merge), the same command records true and says nothing more.
   git(app.dir, 'update-ref', 'refs/remotes/origin/main', lane.commit);
   result = syncVendor(copy, lane, plugin);
@@ -136,6 +150,23 @@ test('"on_main" says whether the app checkout\'s origin/main has the commit, and
   result = syncVendor(copy, lane, plugin, '--provisional');
   assert.equal(result.status, 0, result.stderr);
   assert.equal(Object.hasOwn(appSource(), 'on_main'), false);
+});
+
+test('originMatches takes the repository over HTTPS or SSH, and nothing else', () => {
+  for (const url of ['https://github.com/fal3/wisply-ai', 'https://github.com/fal3/wisply-ai.git', 'https://github.com/fal3/wisply-ai/',
+    'https://alex@github.com/fal3/wisply-ai.git', 'git@github.com:fal3/wisply-ai.git', 'git@github.com:fal3/wisply-ai',
+    'ssh://git@github.com/fal3/wisply-ai.git', 'https://github.com/Fal3/Wisply-AI.git', ' https://github.com/fal3/wisply-ai\n']) {
+    assert.equal(originMatches(url, 'github:fal3/wisply-ai'), true, url);
+  }
+  for (const url of ['https://github.com/someone/wisply-ai.git', 'https://github.com/fal3/wisply-ai-fork.git',
+    'https://github.com/fal3/wisply-aiXgit', 'https://gitlab.com/fal3/wisply-ai.git', 'https://github.com.evil.example/fal3/wisply-ai',
+    'https://evil.example/github.com/fal3/wisply-ai', '/home/user/wisply-ai', 'file:///home/user/wisply-ai', '', null, undefined,
+    'https://github.com/fal3/wisply-ai.git extra']) {
+    assert.equal(originMatches(url, 'github:fal3/wisply-ai'), false, String(url));
+  }
+  assert.equal(originMatches('git@github.com:fal3/wisply-claude-plugin.git', 'github:fal3/wisply-claude-plugin'), true);
+  assert.equal(originMatches('git@github.com:fal3/wisply-ai.git', 'github:fal3/wisply-claude-plugin'), false);
+  assert.equal(originMatches('https://github.com/fal3/wisply-ai', 'fal3/wisply-ai'), false, 'a repository is github:<owner>/<name>');
 });
 
 test('a contract without tool_descriptors (raycast PR 1 alone) is refused, and nothing is written', (t) => {
