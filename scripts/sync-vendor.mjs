@@ -7,7 +7,10 @@
 //                                --plugin <wisply-claude-plugin dir> --plugin-commit <rev>
 //
 // Files are read with `git show <commit>:<path>`, so what lands here is the
-// file as of that commit, not whatever the checkout has on disk.
+// file as of that commit, not whatever the checkout has on disk. --mcp-ref
+// is recorded only after `git merge-base --is-ancestor` confirms the commit
+// is on that branch in the given repository: the release gate trusts a
+// recorded "main" (scripts/release-gate.mjs).
 //
 //   vendor/wisply-mcp/   bin/wisply-mcp.mjs, lib/*.mjs, the generated data
 //                        modules (contract/mcp-contract.mjs,
@@ -17,7 +20,8 @@
 //                        lib/scopes.mjs, lib/messages.mjs, lib/contract.mjs and
 //                        the clients data from here; esbuild inlines them.
 //   vendor/shared.mjs    the plugin's lib/shared.mjs (no imports), byte for byte
-//   server/wisply-mcp.mjs  the single-file bundle of vendor/wisply-mcp/bin
+//   server/wisply-mcp.mjs  the single-file bundle of vendor/wisply-mcp/bin, with
+//                        the editor texts of src/editor-messages.mjs
 //                        (esbuild.mjs serverBundleOptions)
 //
 // The contract stays provisional while wisply-mcp's contract/SOURCE.json says
@@ -29,9 +33,11 @@ import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import { ROOT, SERVER_BUNDLE, SERVER_ENTRY, buildServerBundle } from '../esbuild.mjs';
+import {
+  EDITOR_MESSAGES, ROOT, SERVER_BUNDLE, SERVER_ENTRY, SOURCE_FILE, VENDORED_MESSAGES, buildServerBundle,
+} from '../esbuild.mjs';
 
-export const SOURCE_FILE = 'vendor/SOURCE.json';
+export { SOURCE_FILE };
 export const VENDOR_SCHEMA = 'wisply-vscode-vendor-v1';
 export const MCP_REPOSITORY = 'github:fal3/wisply-mcp';
 export const PLUGIN_REPOSITORY = 'github:fal3/wisply-claude-plugin';
@@ -53,6 +59,19 @@ const git = (dir, args) => execFileSync('git', ['-C', dir, ...args], {
   maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'inherit'],
 });
 const fullCommit = (dir, rev) => git(dir, ['rev-parse', '--verify', `${rev}^{commit}`]).toString('utf8').trim();
+
+/**
+ * Whether `commit` is on `ref` in the repository at `dir` (an ancestor of, or
+ * equal to, the ref's tip). A ref that doesn't resolve counts as no.
+ */
+export function isOnRef(dir, commit, ref) {
+  try {
+    execFileSync('git', ['-C', dir, 'merge-base', '--is-ancestor', commit, `${ref}^{commit}`], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function writeVendored(local, bytes) {
   const target = join(ROOT, local);
@@ -79,6 +98,10 @@ async function main(argv) {
 
   // wisply-mcp: a clean copy of the vendored files at the commit.
   const mcpCommit = fullCommit(values.mcp, values['mcp-commit']);
+  const mcpRef = values['mcp-ref'];
+  if (mcpRef && !isOnRef(values.mcp, mcpCommit, mcpRef)) {
+    throw new Error(`${mcpCommit.slice(0, 7)} is not on ${mcpRef} in ${values.mcp}: pass the branch the commit is on`);
+  }
   const paths = git(values.mcp, ['ls-tree', '-r', '--name-only', mcpCommit]).toString('utf8')
     .split('\n').filter(isVendoredMcpPath).sort();
   if (!paths.includes('bin/wisply-mcp.mjs') || !paths.includes('contract/mcp-contract.mjs')) {
@@ -103,7 +126,7 @@ async function main(argv) {
   const mcpSource = {
     repository: MCP_REPOSITORY,
     commit: mcpCommit,
-    ...(values['mcp-ref'] ? { ref: values['mcp-ref'] } : {}),
+    ...(mcpRef ? { ref: mcpRef } : {}),
     contract_provisional: contractProvisional,
     files: mcpFiles,
   };
@@ -117,7 +140,13 @@ async function main(argv) {
       mcpSource,
       { repository: PLUGIN_REPOSITORY, commit: pluginCommit, files: pluginFiles },
     ],
-    bundle: { path: SERVER_BUNDLE, entry: SERVER_ENTRY, esbuild: esbuildVersion, sha256: sha256(bundle) },
+    bundle: {
+      path: SERVER_BUNDLE,
+      entry: SERVER_ENTRY,
+      overlays: { [VENDORED_MESSAGES]: EDITOR_MESSAGES },
+      esbuild: esbuildVersion,
+      sha256: sha256(bundle),
+    },
   };
   writeFileSync(join(ROOT, SOURCE_FILE), `${JSON.stringify(source, null, 2)}\n`);
   process.stdout.write(`vendored ${paths.length} files from ${MCP_REPOSITORY}@${mcpCommit.slice(0, 7)}` +

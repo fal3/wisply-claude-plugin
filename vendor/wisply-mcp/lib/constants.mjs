@@ -3,9 +3,10 @@
 // PACKAGE_NAME and PACKAGE_SPEC are placeholders until Alex publishes the
 // package (spec D3: if the npm organization "wisply" is taken, the fallback is
 // "wisply-mcp"). Neither name is registered yet, so nothing public (the
-// wisply.ai guide, Wisply's snippets) may print them before the organization
-// exists. Change them here, in package.json and in the manifests together;
-// tests/pack.test.mjs fails while they disagree.
+// wisply.ai guide, Wisply's snippets, the connector's own messages) may print
+// them before the organization exists (PACKAGE_NAME_FINAL). Change them here,
+// in package.json and in the manifests together; tests/pack.test.mjs fails
+// while they disagree.
 import contract from './contract.mjs';
 
 export const PACKAGE_NAME = '@wisply/mcp';
@@ -24,6 +25,16 @@ export const PACKAGE_SPEC = `${PACKAGE_NAME}@${VERSION}`;
  * a bad 0.x publish would run the same way.
  */
 export const PACKAGE_RANGE = `${PACKAGE_NAME}@${VERSION.split('.')[0]}`;
+/**
+ * Whether PACKAGE_NAME is registered on npm by Wisply. While it is false, no
+ * text the connector shows names the package through npx: tool errors point
+ * only at WISPLY_MCP_TOKEN, and terminal texts name the bin (`wisply-mcp
+ * setup`), so nobody (person or agent) is sent to an npm name someone else
+ * could register first. It becomes true in the change that removes
+ * "private" from package.json (tests/pack.test.mjs ties the two), after Alex
+ * owns the npm organization.
+ */
+export const PACKAGE_NAME_FINAL = false;
 
 /** The key every client config uses for this server. */
 export const SERVER_KEY = 'wisply';
@@ -40,11 +51,11 @@ export const PROTOCOL_VERSIONS = Object.freeze(['2025-11-25', '2025-06-18', '202
 /**
  * Commands planned for later 0.x releases and not in this build. The bin
  * answers them with a "not in this build yet" line (exit 1), and no message
- * tells users to run one of them (tests/bridge.test.mjs). Every planned
- * command is in now (setup, status, forget, print-config and install in
- * lib/cli.mjs), so the list is empty; it stays for the next one.
+ * tells users to run one of them (tests/bridge.test.mjs). setup, status and
+ * forget are in (lib/cli.mjs), so lib/messages.mjs points at `setup`, as the
+ * spec's error texts do. DIST-M4 removes print-config and install.
  */
-export const PLANNED_COMMANDS = Object.freeze([]);
+export const PLANNED_COMMANDS = Object.freeze(['print-config', 'install']);
 
 /** The macOS Keychain item the connector manages (written by `setup`, removed by `forget`; lib/token.mjs). */
 export const KEYCHAIN_SERVICE = 'ai.wisply.mcp';
@@ -53,6 +64,12 @@ export const KEYCHAIN_LABEL = 'Wisply MCP token';
 export const SECURITY_BIN = '/usr/bin/security';
 /** A Keychain read or delete that takes longer than this counts as a failure ("no token" for a read). */
 export const KEYCHAIN_TIMEOUT_MS = 2000;
+/**
+ * delete-generic-password removes only the first match in the keychain search
+ * list, so removing "every copy" deletes until none is found: up to this many
+ * copies, then one more run that has to find none.
+ */
+export const KEYCHAIN_MAX_COPIES = 5;
 
 /** Response budgets: tool results, and the small identity answer. */
 export const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;

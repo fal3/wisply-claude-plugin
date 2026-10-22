@@ -3,8 +3,7 @@
 // stdio (newline-delimited JSON-RPC) for the AI app that started it, and
 // bridges tools/call to the Wisply app on 127.0.0.1 (lib/bridge.mjs).
 // `setup`, `status` and `forget` are commands for people at a terminal
-// (lib/cli.mjs) that keep the token in the macOS login keychain;
-// `print-config` and `install` set up AI apps with the token-free entry.
+// (lib/cli.mjs): they keep the token in the macOS login keychain.
 //
 // stdout carries JSON-RPC only. Requests are handled one at a time, in the
 // order they arrive. Diagnostics go to stderr only when WISPLY_MCP_DEBUG=1
@@ -44,7 +43,7 @@ function parseArgs(argv, env) {
       options.port = parsePort(value);
       if (options.port === null) usage(badPort(value ?? ''));
     } else if (index === 0 && PLANNED_COMMANDS.includes(argument)) {
-      // A command of a later 0.x release (none at the moment).
+      // print-config and install arrive in a later 0.x release (DIST-M4).
       usage(notInThisBuild(argument), 1);
     } else {
       usage(unknownArgument(argument));

@@ -59,12 +59,13 @@ test('package.json declares exactly the settings the extension reads', () => {
   assert.deepEqual(Object.keys(properties).sort(), [...SETTING_IDS].sort());
 });
 
-test('every setting is user-level only: application or machine scope', () => {
+test('every setting is user-level only and stays on this machine: machine scope (Settings Sync skips it)', () => {
   for (const [id, property] of Object.entries(properties)) {
-    assert.ok(['application', 'machine'].includes(property.scope), `${id} has scope ${property.scope}`);
+    assert.equal(property.scope, 'machine', `${id} has scope ${property.scope}`);
   }
-  assert.equal(properties['wisply.port'].scope, 'machine');
-  assert.equal(properties['wisply.mcp.allowClaudeSetup'].scope, 'application');
+  // Turning setup_claude on for one Mac must not turn it on in every synced editor.
+  assert.equal(properties['wisply.mcp.allowClaudeSetup'].scope, 'machine');
+  assert.match(properties['wisply.mcp.allowClaudeSetup'].markdownDescription, /Settings Sync doesn't copy it/);
 });
 
 test('Restricted Mode: limited, with every setting restricted', () => {

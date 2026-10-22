@@ -1,17 +1,21 @@
 // vendor/ and server/wisply-mcp.mjs against vendor/SOURCE.json, and, with
 // WISPLY_MCP_DIR and WISPLY_PLUGIN_DIR set, against the source repositories.
-// With WISPLY_RELEASE=1 a provisional contract (or a branch other than main)
-// fails, so nothing is published from it.
+// With WISPLY_RELEASE=1 everything the release gate refuses fails here too
+// (scripts/release-gate.mjs: a provisional contract, a branch other than
+// main, a placeholder name or link).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { EDITOR_MESSAGES, VENDORED_MESSAGES } from '../esbuild.mjs';
+import { releaseProblems } from '../scripts/release-gate.mjs';
 import {
-  MCP_DIR, MCP_REPOSITORY, PLUGIN_FILES, PLUGIN_REPOSITORY, SOURCE_FILE, VENDOR_SCHEMA, isVendoredMcpPath,
+  MCP_DIR, MCP_REPOSITORY, PLUGIN_FILES, PLUGIN_REPOSITORY, SOURCE_FILE, VENDOR_SCHEMA, isOnRef, isVendoredMcpPath,
 } from '../scripts/sync-vendor.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -56,13 +60,15 @@ test('the bundle matches its recorded sha256 and esbuild version, and names its 
   const manifest = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
   assert.equal(manifest.devDependencies.esbuild, installed);
   assert.match(readFileSync(join(ROOT, source.bundle.path), 'utf8').split('\n')[1], new RegExp(`${MCP_REPOSITORY} at ${mcp.commit}`));
+  // The one file the bundle takes from outside vendor/, recorded.
+  assert.deepEqual(source.bundle.overlays, { [VENDORED_MESSAGES]: EDITOR_MESSAGES });
 });
 
 test('the vendored connector has what the extension and the bundle need', () => {
   const upstream = Object.values(mcp.files).map((entry) => entry.upstream);
   for (const path of ['bin/wisply-mcp.mjs', 'lib/bridge.mjs', 'lib/cli.mjs', 'lib/token.mjs', 'lib/scopes.mjs',
     'lib/messages.mjs', 'lib/contract.mjs', 'lib/constants.mjs', 'lib/identity.mjs', 'contract/mcp-contract.mjs',
-    'contract/SOURCE.json', 'clients/mcp-clients.mjs', 'LICENSE']) {
+    'contract/SOURCE.json', 'LICENSE']) {
     assert.ok(upstream.includes(path), path);
   }
 });
@@ -77,9 +83,41 @@ test('vendor/shared.mjs stands alone (no imports)', () => {
   assert.doesNotMatch(readFileSync(join(ROOT, 'vendor/shared.mjs'), 'utf8'), /^\s*import\s/m);
 });
 
-test('release: refused while the contract is provisional or the source isn\'t main', { skip: process.env.WISPLY_RELEASE !== '1' }, () => {
-  assert.equal(source.provisional, false, 'vendor/SOURCE.json is provisional: re-vendor from wisply-mcp main after DIST-M5');
-  assert.equal(mcp.ref, 'main', 'vendor from fal3/wisply-mcp main (npm run sync-vendor -- --mcp-ref main)');
+test('the vendored connector is the reviewed DIST-M2 state or later: the Keychain item is replaced, not merged (-U)', async () => {
+  const { WRITE_ARGS, securityEnv } = await import('../vendor/wisply-mcp/lib/token.mjs');
+  assert.equal(WRITE_ARGS.includes('-U'), false);
+  assert.equal(typeof securityEnv, 'function');
+  const constants = await import('../vendor/wisply-mcp/lib/constants.mjs');
+  assert.equal(typeof constants.PACKAGE_NAME_FINAL, 'boolean', 'the package name gate exists');
+});
+
+test('release: refused while anything the release gate checks isn\'t final', { skip: process.env.WISPLY_RELEASE !== '1' }, () => {
+  assert.deepEqual(releaseProblems({ source }), []);
+});
+
+test('isOnRef: a commit on the branch, the tip itself, and one that isn\'t', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'wisply-ref-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const run = (...args) => execFileSync('git', ['-C', dir, ...args], {
+    encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.invalid',
+      GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.invalid', GIT_CONFIG_NOSYSTEM: '1', HOME: dir },
+  }).trim();
+  run('init', '-q', '-b', 'main');
+  const commit = (name) => {
+    writeFileSync(join(dir, name), name);
+    run('add', name);
+    run('commit', '-q', '-m', name);
+    return run('rev-parse', 'HEAD');
+  };
+  const first = commit('a');
+  const second = commit('b');
+  run('checkout', '-q', '-b', 'feature', first);
+  const side = commit('c');
+  assert.equal(isOnRef(dir, first, 'main'), true);
+  assert.equal(isOnRef(dir, second, 'main'), true);
+  assert.equal(isOnRef(dir, side, 'main'), false);
+  assert.equal(isOnRef(dir, side, 'feature'), true);
+  assert.equal(isOnRef(dir, first, 'no-such-branch'), false);
 });
 
 const upstreamSkip = !process.env.WISPLY_MCP_DIR || !process.env.WISPLY_PLUGIN_DIR;
@@ -96,4 +134,6 @@ test('upstream: the vendored bytes are the files at the recorded commits, and no
     .split('\n').filter(isVendoredMcpPath).sort();
   assert.deepEqual(Object.values(mcp.files).map((entry) => entry.upstream).sort(), tree);
   assert.equal(relative(ROOT, join(ROOT, MCP_DIR)), 'vendor/wisply-mcp');
+  // A recorded main is a claim the release gate trusts: the commit has to be on it.
+  if (mcp.ref === 'main') assert.ok(isOnRef(process.env.WISPLY_MCP_DIR, mcp.commit, 'main'), `${mcp.commit} is not on main`);
 });

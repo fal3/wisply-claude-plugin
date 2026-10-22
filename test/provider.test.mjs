@@ -2,7 +2,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  ALLOW_CLAUDE_SETUP_FLAG, PROVIDER_ID, SERVER_LABEL, buildDefinition, createProvider, definitionVersion, serverLaunch,
+  ALLOW_CLAUDE_SETUP_FLAG, PROVIDER_ID, REMOVED_ENV, SERVER_LABEL, buildDefinition, createProvider, definitionVersion,
+  serverLaunch, stringEnv,
 } from '../out/test/provider.mjs';
 import { FAKE_TOKENS, FakeEventEmitter, FakeMcpStdioServerDefinition } from './fixtures/fake-vscode.mjs';
 
@@ -17,11 +18,15 @@ const LAUNCH = Object.freeze({
 const TOKEN_SHAPED = /wsp[cr]?_[0-9a-f]{64}/;
 const CONNECTOR = Object.freeze({ token: FAKE_TOKENS.connector, scope: 'connector' });
 const FULL = Object.freeze({ token: FAKE_TOKENS.full, scope: 'full' });
+/** What every definition removes from the extension host's environment (null: removed). */
+const REMOVED = Object.freeze({ WISPLY_MCP_TOKEN: null, WISPLY_MCP_ALLOW_CLAUDE_SETUP: null, WISPLY_MCP_DEBUG: null, NODE_OPTIONS: null });
+const BASE_ENV = Object.freeze({ ELECTRON_RUN_AS_NODE: '1', WISPLY_MCP_PORT: '51771', ...REMOVED });
 
-function setup({ stored = null, entered, launch = LAUNCH } = {}) {
+function setup({ stored = null, entered, launch = LAUNCH, platform = 'darwin' } = {}) {
   const calls = { prompts: 0, stores: [] };
   let token = stored;
   const wisply = createProvider(api, {
+    platform,
     getLaunch: () => launch,
     getToken: async () => token,
     promptForToken: async () => { calls.prompts += 1; return entered; },
@@ -42,8 +47,30 @@ test('the definition runs the bundled connector on the editor\'s Node, with no t
   assert.equal(definition.label, SERVER_LABEL);
   assert.equal(definition.command, LAUNCH.execPath);
   assert.deepEqual(definition.args, [LAUNCH.serverPath]);
-  assert.deepEqual(definition.env, { ELECTRON_RUN_AS_NODE: '1', WISPLY_MCP_PORT: '51771' });
+  assert.deepEqual(definition.env, BASE_ENV);
   assert.equal(definition.version, '0.1.0+connector');
+});
+
+test('the definition removes what the connector must not inherit from the extension host', () => {
+  assert.deepEqual({ ...REMOVED_ENV }, REMOVED);
+  // The editor merges the definition's env over its own, so a value exported
+  // in the user's shell for another app must be removed (null), not left out.
+  for (const allowClaudeSetup of [false, true]) {
+    const { env, args } = serverLaunch({ ...LAUNCH, allowClaudeSetup });
+    assert.equal(Object.hasOwn(env, 'WISPLY_MCP_ALLOW_CLAUDE_SETUP'), true);
+    assert.equal(env.WISPLY_MCP_ALLOW_CLAUDE_SETUP, null, 'only the user setting (the flag) decides');
+    assert.equal(args.includes(ALLOW_CLAUDE_SETUP_FLAG), allowClaudeSetup);
+    assert.equal(env.WISPLY_MCP_TOKEN, null);
+    assert.equal(env.NODE_OPTIONS, null);
+    assert.equal(env.WISPLY_MCP_DEBUG, null);
+  }
+});
+
+test('stringEnv: a removed variable becomes empty, which the connector treats as unset', () => {
+  assert.deepEqual(stringEnv(serverLaunch(LAUNCH).env), {
+    ELECTRON_RUN_AS_NODE: '1', WISPLY_MCP_PORT: '51771', WISPLY_MCP_TOKEN: '', WISPLY_MCP_ALLOW_CLAUDE_SETUP: '',
+    WISPLY_MCP_DEBUG: '', NODE_OPTIONS: '',
+  });
 });
 
 test('--allow-claude-setup is added only with the user setting, and changes the version', () => {
@@ -59,6 +86,30 @@ test('the version follows the scope, so the editor refreshes tools when it chang
   assert.equal(definitionVersion('0.1.0', 'connector', false), '0.1.0+connector');
   assert.equal(definitionVersion('0.1.0', 'full', false), '0.1.0+full');
   assert.notEqual(definitionVersion('0.1.0', 'full', false), definitionVersion('0.1.0', 'connector', false));
+  assert.equal(definitionVersion('0.1.0', 'connector', false, 0), '0.1.0+connector');
+  assert.equal(definitionVersion('0.1.0', 'connector', false, 2), '0.1.0+connector.token2');
+  assert.equal(definitionVersion('0.1.0', 'full', true, 1), '0.1.0+full.claude-setup.token1');
+});
+
+test('a new token of the same scope still changes the version, so a running server is offered a restart', async () => {
+  const { wisply, setToken } = setup({ stored: CONNECTOR });
+  let fired = 0;
+  wisply.provider.onDidChangeMcpServerDefinitions(() => { fired += 1; });
+  const [before] = await wisply.provider.provideMcpServerDefinitions({ isCancellationRequested: false });
+  setToken({ token: `wspc_${'6f'.repeat(32)}`, scope: 'connector' });
+  wisply.tokenChanged();
+  assert.equal(fired, 1);
+  const [after] = await wisply.provider.provideMcpServerDefinitions({ isCancellationRequested: false });
+  assert.notEqual(after.version, before.version);
+  assert.equal(after.version, '0.1.0+connector.token1');
+  assert.doesNotMatch(after.version, TOKEN_SHAPED);
+  // Forgetting it is a change too; a settings refresh alone isn't.
+  setToken(null);
+  wisply.tokenChanged();
+  wisply.refresh();
+  const [forgotten] = await wisply.provider.provideMcpServerDefinitions({ isCancellationRequested: false });
+  assert.equal(forgotten.version, '0.1.0+none.token2');
+  assert.equal(fired, 3);
 });
 
 test('a custom port reaches the connector through WISPLY_MCP_PORT', () => {
@@ -71,7 +122,7 @@ test('provided definitions never hold the token, whatever is stored', async () =
     const { wisply, calls } = setup({ stored });
     const definitions = await wisply.provider.provideMcpServerDefinitions({ isCancellationRequested: false });
     assert.equal(definitions.length, 1);
-    assert.equal(Object.hasOwn(definitions[0].env, 'WISPLY_MCP_TOKEN'), false);
+    assert.equal(definitions[0].env.WISPLY_MCP_TOKEN, null, 'removed from what the server inherits, never set');
     assert.doesNotMatch(JSON.stringify(definitions), TOKEN_SHAPED);
     assert.equal(definitions[0].version, `0.1.0+${stored?.scope ?? 'none'}`);
     assert.equal(calls.prompts, 0, 'providing never asks the user anything');
@@ -107,12 +158,36 @@ test('a cancelled prompt still starts the server without a token (the Keychain i
   const { wisply, calls } = setup({ entered: undefined });
   const [provided] = await wisply.provider.provideMcpServerDefinitions({ isCancellationRequested: false });
   const first = await wisply.provider.resolveMcpServerDefinition(provided, { isCancellationRequested: false });
-  assert.equal(Object.hasOwn(first.env, 'WISPLY_MCP_TOKEN'), false);
+  assert.equal(first.env.WISPLY_MCP_TOKEN, null);
   assert.deepEqual(first.env, provided.env);
   const second = await wisply.provider.resolveMcpServerDefinition(provided, { isCancellationRequested: false });
-  assert.equal(Object.hasOwn(second.env, 'WISPLY_MCP_TOKEN'), false);
+  assert.equal(second.env.WISPLY_MCP_TOKEN, null);
   assert.equal(calls.prompts, 1, 'asked once per session');
   assert.deepEqual(calls.stores, []);
+});
+
+test('outside macOS, starting never asks for a token (there is no Wisply to connect to)', async () => {
+  for (const platform of ['linux', 'win32']) {
+    const { wisply, calls } = setup({ entered: CONNECTOR, platform });
+    const [provided] = await wisply.provider.provideMcpServerDefinitions({ isCancellationRequested: false });
+    const resolved = await wisply.provider.resolveMcpServerDefinition(provided, { isCancellationRequested: false });
+    assert.equal(calls.prompts, 0, platform);
+    assert.deepEqual(calls.stores, []);
+    assert.equal(resolved.env.WISPLY_MCP_TOKEN, null);
+  }
+  // A token stored anyway is still passed on (the connector then explains it's not a Mac).
+  const { wisply } = setup({ stored: CONNECTOR, platform: 'linux' });
+  const [provided] = await wisply.provider.provideMcpServerDefinitions({ isCancellationRequested: false });
+  assert.equal((await wisply.provider.resolveMcpServerDefinition(provided, { isCancellationRequested: false })).env.WISPLY_MCP_TOKEN,
+    FAKE_TOKENS.connector);
+});
+
+test('resolve removes the inherited variables again if the editor hands back a copy without them', async () => {
+  const { wisply } = setup({ stored: CONNECTOR });
+  const stripped = new FakeMcpStdioServerDefinition(SERVER_LABEL, LAUNCH.execPath, [LAUNCH.serverPath],
+    { ELECTRON_RUN_AS_NODE: '1', WISPLY_MCP_PORT: '51771' }, '0.1.0+connector');
+  const resolved = await wisply.provider.resolveMcpServerDefinition(stripped, { isCancellationRequested: false });
+  assert.deepEqual(resolved.env, { ...BASE_ENV, WISPLY_MCP_TOKEN: FAKE_TOKENS.connector });
 });
 
 test('a token stored later is used at the next start', async () => {

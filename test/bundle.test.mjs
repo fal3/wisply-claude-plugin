@@ -1,21 +1,24 @@
 // server/wisply-mcp.mjs: the vendored connector as one file. It runs alone,
-// it is exactly what vendor/ builds to, and through the sidecar it checks
-// Wisply's identity before the token is sent. Also: dist/extension.js has no
-// network code of its own.
+// it is exactly what vendor/ builds to, it answers with the editor texts of
+// src/editor-messages.mjs, the environment the editor gives it can't turn on
+// setup_claude, and through the sidecar it checks Wisply's identity before
+// the token is sent. Also: dist/extension.js has no network code of its own.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { copyFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildServerBundle } from '../esbuild.mjs';
-import { createSidecar, describeConnection } from '../out/test/sidecar.mjs';
+import { createProvider, serverLaunch, stringEnv } from '../out/test/provider.mjs';
+import { CONNECTION_TEXT, createSidecar, describeConnection } from '../out/test/sidecar.mjs';
 import { expectedProof } from '../vendor/wisply-mcp/lib/identity.mjs';
-import * as messages from '../vendor/wisply-mcp/lib/messages.mjs';
-import { FAKE_TOKENS } from './fixtures/fake-vscode.mjs';
+import * as vendoredMessages from '../vendor/wisply-mcp/lib/messages.mjs';
+import * as messages from '../src/editor-messages.mjs';
+import { FAKE_TOKENS, FakeEventEmitter, FakeMcpStdioServerDefinition } from './fixtures/fake-vscode.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const BUNDLE = join(ROOT, 'server/wisply-mcp.mjs');
@@ -30,9 +33,12 @@ function loneBundle(t) {
   return { dir, path };
 }
 
-async function session(path, { args = [], env = {}, cwd } = {}) {
-  const child = spawn(process.execPath, [path, ...args], {
-    cwd, env: { PATH: process.env.PATH, HOME: process.env.HOME ?? '/tmp', ...env }, stdio: ['pipe', 'pipe', 'pipe'],
+const TOOLS_LIST = Object.freeze({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
+const CALL_LIST_MEMOS = Object.freeze({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'list_memos', arguments: {} } });
+
+async function session(path, { args = [], env, extraEnv = {}, cwd, execArgv = [], request = TOOLS_LIST } = {}) {
+  const child = spawn(process.execPath, [...execArgv, path, ...args], {
+    cwd, env: env ?? { PATH: process.env.PATH, HOME: process.env.HOME ?? '/tmp', ...extraEnv }, stdio: ['pipe', 'pipe', 'pipe'],
   });
   let stdout = '';
   let stderr = '';
@@ -41,7 +47,7 @@ async function session(path, { args = [], env = {}, cwd } = {}) {
   for (const message of [
     { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '1' } } },
     { jsonrpc: '2.0', method: 'notifications/initialized' },
-    { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} },
+    request,
   ]) child.stdin.write(`${JSON.stringify(message)}\n`);
   child.stdin.end();
   const [code] = await once(child, 'exit');
@@ -62,13 +68,105 @@ test('the bundle runs alone in an empty directory and lists the 4 connector tool
 
 test('the bundle lists by scope: full access 8, 9 with --allow-claude-setup, --read-only 4', async (t) => {
   const { dir, path } = loneBundle(t);
-  const full = await session(path, { cwd: dir, env: { WISPLY_MCP_TOKEN: FAKE_TOKENS.full } });
+  const full = await session(path, { cwd: dir, extraEnv: { WISPLY_MCP_TOKEN: FAKE_TOKENS.full } });
   assert.equal(full.responses[1].result.tools.length, 8);
   assert.equal(full.responses[1].result.tools.some((tool) => tool.name === 'setup_claude'), false);
-  const claude = await session(path, { cwd: dir, args: ['--allow-claude-setup'], env: { WISPLY_MCP_TOKEN: FAKE_TOKENS.full } });
+  const claude = await session(path, { cwd: dir, args: ['--allow-claude-setup'], extraEnv: { WISPLY_MCP_TOKEN: FAKE_TOKENS.full } });
   assert.equal(claude.responses[1].result.tools.length, 9);
-  const readOnly = await session(path, { cwd: dir, args: ['--read-only'], env: { WISPLY_MCP_TOKEN: FAKE_TOKENS.full } });
+  const readOnly = await session(path, { cwd: dir, args: ['--read-only'], extraEnv: { WISPLY_MCP_TOKEN: FAKE_TOKENS.full } });
   assert.deepEqual(readOnly.responses[1].result.tools.map((tool) => tool.name), CONNECTOR_TOOLS);
+});
+
+/**
+ * The environment an editor gives a server it starts: its own (the
+ * extension host's), with the definition's env on top; null removes
+ * (McpStdioServerDefinition.env).
+ */
+function editorEnv(hostEnv, definitionEnv) {
+  const env = { ...hostEnv };
+  for (const [key, value] of Object.entries(definitionEnv)) {
+    if (value === null) delete env[key];
+    else env[key] = String(value);
+  }
+  return env;
+}
+
+/** A user who exported these in their shell for another AI app (on macOS VS Code takes the login shell's env). */
+const EXPORTED = Object.freeze({
+  PATH: process.env.PATH, HOME: process.env.HOME ?? '/tmp', WISPLY_MCP_ALLOW_CLAUDE_SETUP: '1',
+  WISPLY_MCP_TOKEN: `wsp_${'1b'.repeat(32)}`, WISPLY_MCP_DEBUG: '1', NODE_OPTIONS: '--require /nonexistent/preload.js',
+});
+
+test('an exported WISPLY_MCP_ALLOW_CLAUDE_SETUP=1 doesn\'t reach the server VS Code starts: only the setting decides', async (t) => {
+  const { dir, path } = loneBundle(t);
+  let stored = { token: FAKE_TOKENS.full, scope: 'full' };
+  const provider = createProvider({ McpStdioServerDefinition: FakeMcpStdioServerDefinition }, {
+    platform: 'darwin',
+    getLaunch: () => ({ execPath: process.execPath, serverPath: path, port: 51771, allowClaudeSetup: false, extVersion: '0.1.0' }),
+    getToken: async () => stored,
+    promptForToken: async () => undefined,
+    storeToken: async (value) => { stored = value; },
+    createEmitter: () => new FakeEventEmitter(),
+  });
+  const [provided] = await provider.provider.provideMcpServerDefinitions({ isCancellationRequested: false });
+  const resolved = await provider.provider.resolveMcpServerDefinition(provided, { isCancellationRequested: false });
+  const env = editorEnv(EXPORTED, resolved.env);
+  assert.equal(env.WISPLY_MCP_TOKEN, FAKE_TOKENS.full, 'the token from SecretStorage, not the exported one');
+  for (const key of ['WISPLY_MCP_ALLOW_CLAUDE_SETUP', 'WISPLY_MCP_DEBUG', 'NODE_OPTIONS']) assert.equal(Object.hasOwn(env, key), false, key);
+  const result = await session(resolved.args[0], { cwd: dir, env, args: resolved.args.slice(1) });
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(result.stderr, '');
+  assert.equal(result.responses[1].result.tools.length, 8);
+  assert.equal(result.responses[1].result.tools.some((tool) => tool.name === 'setup_claude'), false);
+
+  // Without the stored token, the exported one is removed too: tools/list falls back to the 4 read-only tools.
+  stored = null;
+  const [bare] = await provider.provider.provideMcpServerDefinitions({ isCancellationRequested: false });
+  const noToken = await session(path, { cwd: dir, env: editorEnv(EXPORTED, bare.env) });
+  assert.deepEqual(noToken.responses[1].result.tools.map((tool) => tool.name), CONNECTOR_TOOLS);
+});
+
+test('the same holds for Cursor\'s string-only config: empty values count as unset', async (t) => {
+  const { dir, path } = loneBundle(t);
+  const { args, env } = serverLaunch({ execPath: process.execPath, serverPath: path, port: 51771, allowClaudeSetup: false });
+  const result = await session(path, { cwd: dir, args: args.slice(1), env: { ...EXPORTED, ...stringEnv(env) } });
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(result.stderr, '');
+  assert.deepEqual(result.responses[1].result.tools.map((tool) => tool.name), CONNECTOR_TOOLS);
+});
+
+test('the bundle answers with the editor texts: the extension\'s commands, never npx', async (t) => {
+  const { dir, path } = loneBundle(t);
+  // The overlay replaces exactly the three texts that say where the token comes from.
+  for (const name of ['SETUP', 'MALFORMED']) {
+    assert.notEqual(messages[name], vendoredMessages[name], name);
+    assert.match(messages[name], /Wisply: Set Token from the Command Palette/);
+    assert.match(messages[name], /Wisply: Store Token in the Mac Keychain/);
+  }
+  assert.notEqual(messages.notWisply(51771), vendoredMessages.notWisply(51771));
+  assert.equal(messages.unavailable(51771), vendoredMessages.unavailable(51771), 'everything else is the vendored text');
+  for (const text of [messages.SETUP, messages.MALFORMED, messages.notWisply(51771)]) {
+    assert.doesNotMatch(text, /npx|@wisply\/mcp|wisply-mcp setup/);
+    assert.match(text, /^[\x20-\x7e]+$/, 'ASCII only');
+  }
+
+  const malformed = await session(path, { cwd: dir, extraEnv: { WISPLY_MCP_TOKEN: 'not-a-token' }, request: CALL_LIST_MEMOS });
+  assert.equal(malformed.responses[1].result.isError, true);
+  assert.equal(malformed.responses[1].result.content[0].text, messages.MALFORMED);
+});
+
+// macOS with no token anywhere. Simulated off macOS only: on a Mac the
+// connector would read the developer's own Keychain.
+const wouldTouchKeychain = process.platform === 'darwin' || existsSync('/usr/bin/security');
+test('with no token, the bundle sends chat the editor\'s SETUP, and Check Connection turns it into its steps', { skip: wouldTouchKeychain }, async (t) => {
+  const { dir, path } = loneBundle(t);
+  const asMac = `data:text/javascript,${encodeURIComponent("Object.defineProperty(process, 'platform', { value: 'darwin' });")}`;
+  const result = await session(path, { cwd: dir, execArgv: ['--import', asMac], request: CALL_LIST_MEMOS });
+  assert.equal(result.code, 0, result.stderr);
+  const answer = { kind: 'result', result: result.responses[1].result };
+  assert.equal(answer.result.content[0].text, messages.SETUP);
+  assert.deepEqual(describeConnection(answer, { port: 51771, stored: null, allowClaudeSetup: false }),
+    { kind: 'setup', text: CONNECTION_TEXT.setup });
 });
 
 test('the bundle is exactly what vendor/ builds to', async () => {

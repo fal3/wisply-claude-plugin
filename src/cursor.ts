@@ -9,9 +9,11 @@
 // That API has no step that runs when the server starts, so a token given to
 // it would sit in Cursor's server list. The extension passes none: the
 // bundled connector reads the token saved in the Mac Keychain
-// (Wisply: Store Token in the Mac Keychain…).
+// (Wisply: Store Token in the Mac Keychain…). The variables the connector
+// must not inherit are passed empty (stringEnv), which it treats as unset:
+// the API takes strings only.
 import type * as vscode from 'vscode';
-import { serverLaunch } from './provider';
+import { serverLaunch, stringEnv } from './provider';
 import type { Launch } from './provider';
 
 export const CURSOR_SERVER_NAME = 'wisply';
@@ -44,7 +46,7 @@ export function getCursorMcp(vscodeModule: unknown): CursorMcpApi | null {
 /** The config given to Cursor: the bundled connector, no token. */
 export function cursorServerConfig(launch: Launch): CursorStdioServerConfig {
   const { command, args, env } = serverLaunch(launch);
-  return { name: CURSOR_SERVER_NAME, server: { command, args, env } };
+  return { name: CURSOR_SERVER_NAME, server: { command, args, env: stringEnv(env) } };
 }
 
 /**

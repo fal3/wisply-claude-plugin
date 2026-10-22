@@ -31,6 +31,14 @@ test('no sources, tests, fixtures, scripts, vendored sources, dependencies or ma
   }
 });
 
+test('no packaged file tells anyone to run the npm package, and the extension holds no client templates', () => {
+  for (const file of listed) {
+    assert.doesNotMatch(readFileSync(join(ROOT, file), 'latin1'), /npx -y @wisply\/mcp/, file);
+  }
+  const extension = readFileSync(join(ROOT, 'dist/extension.js'), 'latin1');
+  assert.doesNotMatch(extension, /standard_entry|"command": "npx"/, 'dist/extension.js bundles no npx entries');
+});
+
 test('no packaged file contains anything shaped like a Wisply token', () => {
   for (const file of listed) {
     assert.doesNotMatch(readFileSync(join(ROOT, file), 'latin1'), /wsp[cr]?_[0-9a-f]{64}/, file);

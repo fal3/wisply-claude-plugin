@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import {
   CHECK_ARGUMENTS, CHECK_TOOL, CONNECTION_TEXT, READ_ONLY_FLAG, createSidecar, describeConnection, sidecarEnv,
 } from '../out/test/sidecar.mjs';
-import * as messages from '../vendor/wisply-mcp/lib/messages.mjs';
+import * as messages from '../src/editor-messages.mjs';
 import { FAKE_TOKENS } from './fixtures/fake-vscode.mjs';
 
 const FAKE_SERVER = fileURLToPath(new URL('./fixtures/fake-server.mjs', import.meta.url));
@@ -189,6 +189,35 @@ test('a token change while the child is starting reaches the call', async (t) =>
   await sidecar.sync();
   const answer = report(await pending);
   assert.equal(answer.env.WISPLY_MCP_TOKEN, FAKE_TOKENS.full);
+});
+
+test('a change event that brings the same token while the child is starting keeps it: one spawn', async (t) => {
+  const { sidecar, state } = makeSidecar({ token: FAKE_TOKENS.connector });
+  t.after(() => sidecar.dispose());
+  const pending = sidecar.call('list_memos', {}, 5000);
+  // As in Set Token: the SecretStorage change event lands while the check starts, twice over.
+  await Promise.all([sidecar.sync(), sidecar.sync()]);
+  const answer = report(await pending);
+  assert.equal(answer.env.WISPLY_MCP_TOKEN, FAKE_TOKENS.connector);
+  assert.equal(state.spawns.length, 1);
+  assert.equal(sidecar.running, true);
+});
+
+test('a call whose child is replaced while it waits is asked once more, of the new child', async (t) => {
+  const { sidecar, state } = makeSidecar({ token: FAKE_TOKENS.connector });
+  t.after(() => sidecar.dispose());
+  report(await sidecar.call('list_memos', {}, 5000));
+  // The child is up; a call is waiting on its answer when the token changes.
+  const pending = sidecar.call('list_memos', { n: 2 }, 5000);
+  state.token = FAKE_TOKENS.full;
+  await sidecar.sync();
+  const answer = report(await pending);
+  assert.equal(answer.env.WISPLY_MCP_TOKEN, FAKE_TOKENS.full);
+  assert.deepEqual(answer.args, { n: 2 });
+  assert.equal(state.spawns.length, 2);
+  // A child that exits on its own is not retried.
+  assert.deepEqual(await sidecar.call('exit', {}, 5000), { kind: 'failure', failure: 'exited' });
+  assert.equal(state.spawns.length, 2);
 });
 
 test('restart and dispose', async () => {

@@ -110,8 +110,8 @@
         "wisply.mcp.allowClaudeSetup": {
           "type": "boolean",
           "default": false,
-          "scope": "application",
-          "markdownDescription": "Offer Wisply's `setup_claude` tool to AI chat when a full-access token is set. The tool can replace the Anthropic API key saved in Wisply, so it is off by default. Wisply reads this setting only from your user settings."
+          "scope": "machine",
+          "markdownDescription": "Offer Wisply's `setup_claude` tool to AI chat when a full-access token is set. The tool can replace the Anthropic API key saved in Wisply, so it is off by default. Wisply reads this setting only from your user settings, and Settings Sync doesn't copy it to your other machines."
         }
       }
     }
@@ -120,10 +120,11 @@
     "build": "node esbuild.mjs",
     "test": "node esbuild.mjs --tests && node --test \"test/*.test.mjs\"",
     "typecheck": "tsc --noEmit",
-    "package": "vsce package --no-dependencies",
+    "package": "WISPLY_DEV_PACKAGE=1 vsce package --no-dependencies --out wisply-dev.vsix",
+    "package:release": "vsce package --no-dependencies",
     "check": "npm run typecheck && npm test && npm run build && npm run package",
     "sync-vendor": "node scripts/sync-vendor.mjs",
-    "vscode:prepublish": "node esbuild.mjs"
+    "vscode:prepublish": "node scripts/release-gate.mjs && node esbuild.mjs"
   },
   "devDependencies": {
     "@types/node": "22.20.5",

@@ -16,12 +16,14 @@
 // extension host), stdin and stdout piped and stderr ignored. It gets one
 // initialize, then tools/call requests with increasing ids. It is stopped
 // after 120 s without calls, on token or port change, after a call times
-// out, and on deactivate, and started again by the next call.
+// out, and on deactivate, and started again by the next call. A call whose
+// child was replaced that way while it waited (a token or port change) is
+// asked once more of the new child: the sidecar's tools are read-only.
 import { spawn as nodeSpawn } from 'node:child_process';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import contract from '../vendor/wisply-mcp/lib/contract.mjs';
-import * as messages from '../vendor/wisply-mcp/lib/messages.mjs';
 import { toolsFor } from '../vendor/wisply-mcp/lib/scopes.mjs';
+import * as messages from './editor-messages.mjs';
 import { scopeTitle } from './token';
 import type { UsableScope } from './token';
 
@@ -70,7 +72,8 @@ export interface Sidecar {
   /**
    * Stops the child if it was started with another token or port than the
    * ones stored now; the next call starts a new one. Safe to call for every
-   * change event: an unchanged token keeps a running child (and its call).
+   * change event: an unchanged token keeps a running or starting child (and
+   * its call). A child still starting is compared once it has read its token.
    */
   sync(): Promise<void>;
   /** Stops the child unconditionally; the next call starts a new one. */
@@ -261,6 +264,23 @@ export function createSidecar(deps: SidecarDeps): Sidecar {
     return null;
   }
 
+  interface Attempt {
+    readonly answer: SidecarAnswer;
+    /** A newer generation took the child's place while the call waited (sync() or restart()). */
+    readonly replaced: boolean;
+  }
+
+  async function callOnce(tool: string, args: Record<string, unknown>, timeoutMs: number): Promise<Attempt> {
+    const child = await ensure();
+    if (!child) return { answer: { kind: 'failure', failure: disposed ? 'disposed' : 'spawn-failed' }, replaced: false };
+    const replaced = () => child.generation !== generation;
+    const ready = await child.ready;
+    if (ready.kind === 'failure') return { answer: ready, replaced: replaced() };
+    if (isObject(ready.message.error)) return { answer: { kind: 'failure', failure: 'bad-response' }, replaced: false };
+    const answer = toAnswer(await request(child, 'tools/call', { name: tool, arguments: args }, timeoutMs));
+    return { answer, replaced: replaced() };
+  }
+
   function clearIdle() {
     if (idleTimer !== null) timers.clearTimeout(idleTimer);
     idleTimer = null;
@@ -282,12 +302,13 @@ export function createSidecar(deps: SidecarDeps): Sidecar {
       clearIdle();
       active += 1;
       try {
-        const child = await ensure();
-        if (!child) return { kind: 'failure', failure: disposed ? 'disposed' : 'spawn-failed' };
-        const ready = await child.ready;
-        if (ready.kind === 'failure') return ready;
-        if (isObject(ready.message.error)) return { kind: 'failure', failure: 'bad-response' };
-        return toAnswer(await request(child, 'tools/call', { name: tool, arguments: args }, timeoutMs));
+        for (let attempt = 0; ; attempt += 1) {
+          const { answer, replaced } = await callOnce(tool, args, timeoutMs);
+          // sync() or restart() replaced the child this call was waiting on
+          // (it held another token or port): ask the new child, once.
+          if (replaced && attempt === 0 && !disposed && answer.kind === 'failure' && answer.failure === 'exited') continue;
+          return answer;
+        }
       } finally {
         active -= 1;
         armIdle();
@@ -297,9 +318,13 @@ export function createSidecar(deps: SidecarDeps): Sidecar {
       let token: string | null = null;
       try { token = await deps.getToken(); } catch { token = null; }
       if (disposed) return;
-      // A child still starting may have read the old token: make the next
-      // call start again (ensure() compares generations).
-      if (starting) generation += 1;
+      // A child still starting is compared once it has read its token, so a
+      // change event that brings the same token leaves it (and its call) be.
+      const pending = starting;
+      if (pending) {
+        try { await pending; } catch { /* start() reports failures as null */ }
+        if (disposed) return;
+      }
       const child = current;
       if (child && !child.ended && (child.token !== token || child.port !== deps.getPort())) {
         generation += 1;

@@ -17,8 +17,33 @@ const TOKEN_SHAPED = /wsp[cr]?_[0-9a-f]{64}/;
 const EXEC = '/Applications/Cursor.app/Contents/Frameworks/Cursor Helper (Plugin).app/Contents/MacOS/Cursor Helper (Plugin)';
 const ROOT = '/Users/someone/.cursor/extensions/wisply.wisply-0.1.0';
 const SERVER = `${ROOT}/server/wisply-mcp.mjs`;
+const HOST_ENV = Object.freeze({
+  HOME: '/Users/someone', PATH: '/usr/bin', USER: 'someone', LANG: 'en_US.UTF-8',
+  NODE_OPTIONS: '--require /Users/someone/.debug/bootloader.js', WISPLY_MCP_TOKEN: FAKE_TOKENS.full,
+  WISPLY_MCP_ALLOW_CLAUDE_SETUP: '1', SENTINEL_PARENT_ONLY: 'leak',
+});
+/** Cursor's config: strings only, so the variables the connector must not inherit are empty. */
+const CURSOR_ENV = Object.freeze({
+  ELECTRON_RUN_AS_NODE: '1', WISPLY_MCP_PORT: '51771', WISPLY_MCP_TOKEN: '', WISPLY_MCP_ALLOW_CLAUDE_SETUP: '',
+  WISPLY_MCP_DEBUG: '', NODE_OPTIONS: '',
+});
 const activate = (vs, context, deps = {}) =>
-  activateExtension(vs, context, { execPath: EXEC, platform: 'darwin', hostEnv: { HOME: '/Users/someone', PATH: '/usr/bin' }, ...deps });
+  activateExtension(vs, context, { execPath: EXEC, platform: 'darwin', hostEnv: HOST_ENV, ...deps });
+
+/** Sample arguments for the texts that take one. */
+const SAMPLE_ARGS = Object.freeze({
+  saved: ['connector', 'full'], welcomeCursor: ['Cursor', 'Windsurf'], forgotten: ['provider', 'cursor', 'manual'],
+  ok: [51771], tools: [],
+});
+
+/** Every text of a text table, functions called with their sample arguments. */
+function everyText(table, prefix) {
+  return Object.entries(table).flatMap(([name, value]) => {
+    if (typeof value === 'string') return [[`${prefix}.${name}`, value]];
+    assert.ok(Object.hasOwn(SAMPLE_ARGS, name), `sample arguments for ${prefix}.${name}`);
+    return SAMPLE_ARGS[name].map((arg) => [`${prefix}.${name}(${arg})`, String(value(arg))]);
+  });
+}
 
 test('getMcpApi needs both registerMcpServerDefinitionProvider and McpStdioServerDefinition', () => {
   assert.equal(getMcpApi(undefined), null);
@@ -50,10 +75,7 @@ test('getCursorMcp finds vscode.cursor.mcp.registerServer only', () => {
 
 test('the Cursor config runs the bundled connector and holds no token', () => {
   const config = cursorServerConfig({ execPath: EXEC, serverPath: SERVER, port: 51771, allowClaudeSetup: false });
-  assert.deepEqual(config, {
-    name: 'wisply',
-    server: { command: EXEC, args: [SERVER], env: { ELECTRON_RUN_AS_NODE: '1', WISPLY_MCP_PORT: '51771' } },
-  });
+  assert.deepEqual(config, { name: 'wisply', server: { command: EXEC, args: [SERVER], env: CURSOR_ENV } });
   assert.equal(CURSOR_SERVER_NAME, 'wisply');
   const mcp = createFakeVscode({ mcp: false, cursor: true }).cursor.mcp;
   const registration = registerWithCursor(mcp, { execPath: EXEC, serverPath: SERVER, port: 51772, allowClaudeSetup: true });
@@ -88,10 +110,7 @@ test('without it, Cursor\'s registerServer gets the connector with no token, eve
   assert.equal(activation.mode, 'cursor');
   assert.equal(vs.cursor.mcp.registered.length, 1);
   const [config] = vs.cursor.mcp.registered;
-  assert.deepEqual(config, {
-    name: 'wisply',
-    server: { command: EXEC, args: [SERVER], env: { ELECTRON_RUN_AS_NODE: '1', WISPLY_MCP_PORT: '51771' } },
-  });
+  assert.deepEqual(config, { name: 'wisply', server: { command: EXEC, args: [SERVER], env: CURSOR_ENV } });
   assert.doesNotMatch(JSON.stringify(vs.log), TOKEN_SHAPED);
   activation.dispose();
   assert.ok(vs.log.some((entry) => entry.kind === 'cursorUnregister' && entry.name === 'wisply'));
@@ -133,14 +152,21 @@ test('neither API: one notice offers the token-free config, once', async () => {
   assert.equal(notice.text, "Add Wisply to this editor's MCP settings.");
   assert.deepEqual(notice.buttons, [BUTTONS.copyConfig, BUTTONS.openSetupGuide]);
   const copied = vs.log.find((entry) => entry.kind === 'clipboard');
-  assert.equal(copied.text, manualConfig());
+  assert.equal(copied.text, manualConfig({ execPath: EXEC, serverPath: SERVER, port: 51771, allowClaudeSetup: false }));
+  // The connector bundled in the extension, on the editor's Node: no npm package, no npx.
   const entry = JSON.parse(copied.text);
-  assert.deepEqual(Object.keys(entry.mcpServers), ['wisply']);
-  assert.equal(entry.mcpServers.wisply.command, 'npx');
-  assert.equal(entry.mcpServers.wisply.args[0], '-y');
-  assert.match(entry.mcpServers.wisply.args[1], /^@wisply\/mcp@/);
-  assert.equal(Object.hasOwn(entry.mcpServers.wisply, 'env'), false);
+  assert.deepEqual(entry, {
+    mcpServers: {
+      wisply: {
+        command: EXEC,
+        args: [SERVER],
+        env: { ELECTRON_RUN_AS_NODE: '1', WISPLY_MCP_PORT: '51771', WISPLY_MCP_ALLOW_CLAUDE_SETUP: '', WISPLY_MCP_DEBUG: '', NODE_OPTIONS: '' },
+      },
+    },
+  });
+  assert.doesNotMatch(copied.text, /npx|@wisply\/mcp/);
   assert.doesNotMatch(copied.text, TOKEN_SHAPED);
+  assert.ok(vs.log.some((logged) => logged.kind === 'info' && logged.text === TEXT.copied));
   activation.dispose();
 
   const again = createFakeVscode({ mcp: false });
@@ -187,8 +213,18 @@ test('Open Setup Guide and Store Token in the Mac Keychain…', async () => {
   assert.equal(SETUP_GUIDE_URL, 'https://www.wisply.ai/docs/mcp/install#vscode');
   vs.commands.run(COMMANDS.storeTokenInKeychain);
   const terminal = vs.log.find((entry) => entry.kind === 'createTerminal');
+  // A complete environment of its own (strictEnv): nothing else from the
+  // window, the user's terminal settings or other extensions, so no
+  // NODE_OPTIONS reaches the process that handles the token.
   assert.deepEqual(terminal.options, {
-    name: 'Wisply setup', shellPath: EXEC, shellArgs: [SERVER, 'setup', '--port', '51771'], env: { ELECTRON_RUN_AS_NODE: '1' },
+    name: 'Wisply setup',
+    shellPath: EXEC,
+    shellArgs: [SERVER, 'setup', '--port', '51771'],
+    env: {
+      ELECTRON_RUN_AS_NODE: '1', PATH: '/usr/bin:/bin:/usr/sbin:/sbin', TERM: 'xterm-256color',
+      HOME: '/Users/someone', USER: 'someone', LANG: 'en_US.UTF-8',
+    },
+    strictEnv: true,
   });
   assert.ok(vs.log.some((entry) => entry.kind === 'terminalShown'));
   activation.dispose();
@@ -200,7 +236,11 @@ test('Forget Token clears SecretStorage and says what stays in the Keychain', as
   const activation = activate(vs, createFakeContext({ root: ROOT, secrets }));
   await vs.commands.run(COMMANDS.forgetToken);
   assert.equal(secrets.values.has('wisply.mcpToken'), false);
-  assert.ok(vs.log.some((entry) => entry.kind === 'info' && entry.text === TEXT.forgotten));
+  assert.ok(vs.log.some((entry) => entry.kind === 'info' && entry.text === TEXT.forgotten('provider')));
+  // A running server keeps the token until it restarts, and the text says so.
+  assert.match(TEXT.forgotten('provider'), /keeps using it until it restarts/);
+  assert.match(TEXT.forgotten('provider'), /Keychain Access/);
+  assert.doesNotMatch(TEXT.forgotten('cursor'), /restarts/);
   await vs.commands.run(COMMANDS.forgetToken);
   assert.ok(vs.log.some((entry) => entry.kind === 'info' && entry.text === TEXT.nothingToForget));
   activation.dispose();
@@ -216,11 +256,54 @@ test('a token change refreshes the provider', async () => {
   await secrets.store('wisply.mcpToken', FAKE_TOKENS.full);
   assert.equal(changes, 1);
   const [definition] = await provider.provideMcpServerDefinitions({ isCancellationRequested: false });
-  assert.equal(definition.version, '0.1.0+full');
+  assert.equal(definition.version, '0.1.0+full.token1');
   vs.changeConfiguration({ 'mcp.allowClaudeSetup': { globalValue: true } });
   assert.equal(changes, 2);
   const [allowed] = await provider.provideMcpServerDefinitions({ isCancellationRequested: false });
   assert.deepEqual(allowed.args, [SERVER, '--allow-claude-setup']);
+  assert.equal(allowed.version, '0.1.0+full.claude-setup.token1');
+  // The same scope again (a regenerated token) still gives a new version.
+  await secrets.store('wisply.mcpToken', `wsp_${'7a'.repeat(32)}`);
+  const [rotated] = await provider.provideMcpServerDefinitions({ isCancellationRequested: false });
+  assert.equal(rotated.version, '0.1.0+full.claude-setup.token2');
+  activation.dispose();
+});
+
+test('no text the extension shows or copies names npx or the npm package', async () => {
+  const { CONNECTION_TEXT } = await import('../out/test/sidecar.mjs');
+  const { TOKEN_TEXT } = await import('../out/test/token.mjs');
+  const texts = [...everyText(TEXT, 'TEXT'), ...everyText(CONNECTION_TEXT, 'CONNECTION_TEXT'), ...everyText(TOKEN_TEXT, 'TOKEN_TEXT')];
+  assert.ok(texts.length > 20);
+  for (const [name, text] of texts) {
+    assert.doesNotMatch(text, /npx|@wisply\/mcp|wisply-mcp (setup|forget)/, name);
+  }
+  for (const allowClaudeSetup of [false, true]) {
+    assert.doesNotMatch(manualConfig({ execPath: EXEC, serverPath: SERVER, port: 51771, allowClaudeSetup }), /npx|@wisply\/mcp/);
+  }
+  // And nothing the commands show along the way, in each mode.
+  for (const options of [{}, { mcp: false, cursor: true, appName: 'Cursor' }, { mcp: false }]) {
+    const secrets = createFakeSecrets({ 'wisply.mcpToken': FAKE_TOKENS.connector });
+    const vs = createFakeVscode({ ...options, answers: { 'MCP settings': BUTTONS.copyConfig } });
+    const activation = activate(vs, createFakeContext({ root: ROOT, secrets }));
+    await activation.noticesDone;
+    await vs.commands.run(COMMANDS.forgetToken);
+    await vs.commands.run(COMMANDS.forgetToken);
+    vs.commands.run(COMMANDS.storeTokenInKeychain);
+    activation.dispose();
+    for (const entry of vs.log) {
+      if (typeof entry.text === 'string') assert.doesNotMatch(entry.text, /npx|@wisply\/mcp/, entry.text);
+    }
+  }
+});
+
+test('outside macOS the provider never asks for a token when the server starts', async () => {
+  const vs = createFakeVscode({ inputs: [FAKE_TOKENS.connector] });
+  const activation = activate(vs, createFakeContext({ root: ROOT }), { platform: 'linux' });
+  const provider = vs.lm.providers.get('wisply.local');
+  const [definition] = await provider.provideMcpServerDefinitions({ isCancellationRequested: false });
+  const resolved = await provider.resolveMcpServerDefinition(definition, { isCancellationRequested: false });
+  assert.equal(vs.log.some((entry) => entry.kind === 'inputBox'), false);
+  assert.equal(resolved.env.WISPLY_MCP_TOKEN, null);
   activation.dispose();
 });
 

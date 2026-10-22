@@ -72,9 +72,11 @@ test('npm runs no install scripts here; only vsce\'s prepublish hook exists', ()
   const lifecycle = ['preinstall', 'install', 'postinstall', 'prepare', 'prepack', 'postpack', 'prepublish',
     'prepublishOnly', 'publish', 'postpublish', 'pretest', 'posttest'];
   for (const name of lifecycle) assert.equal(Object.hasOwn(manifest.scripts, name), false, name);
-  assert.equal(manifest.scripts['vscode:prepublish'], 'node esbuild.mjs');
-  assert.equal(manifest.scripts.package, 'vsce package --no-dependencies');
-  assert.match(manifest.scripts.check, /typecheck.*test.*build.*package/);
+  // vsce and ovsx run vscode:prepublish before they package or publish: the release gate first.
+  assert.equal(manifest.scripts['vscode:prepublish'], 'node scripts/release-gate.mjs && node esbuild.mjs');
+  assert.equal(manifest.scripts.package, 'WISPLY_DEV_PACKAGE=1 vsce package --no-dependencies --out wisply-dev.vsix');
+  assert.equal(manifest.scripts['package:release'], 'vsce package --no-dependencies');
+  assert.match(manifest.scripts.check, /typecheck.*test.*build.*npm run package$/);
 });
 
 test('runs on the Mac side, at startup, from the bundle', () => {
