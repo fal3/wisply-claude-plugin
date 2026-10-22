@@ -196,6 +196,122 @@ spec text. Not shipped in the npm package.
   Keychain" and "answered on 127.0.0.1:{port}, but sent no proof for
   recording-control tokens".
 
+## Plugins, extensions and the bundle (DIST-M3)
+
+- **The standard entry reaches every surface here.** The design's
+  `server.json` variable description, the Gemini extension's and the
+  bundle's token fields and `llms-install.md` name the setup command with the
+  bare package name (no version, no `--prefix /`), and its README matrix and
+  deeplinks use the old `["-y", "@wisply/mcp@0"]` entry. Here every npm snippet,
+  link and command in them is the standard entry above, and the setup command
+  they name is the final one, `NPX_COMMAND` plus `setup`
+  (`npx -y --prefix / @wisply/mcp@0.1.0 setup`), not the interim
+  `wisply-mcp setup` that `PACKAGE_NAME_FINAL` gives the connector's own
+  texts: these files are read only once this repository or its release is
+  public, which waits for the npm organization (SECURITY.md, release control
+  1). `tests/manifests.test.mjs` and `tests/registry.test.mjs` build what
+  they expect from `STANDARD_ENTRY`, `NPX_FLAGS` and `NPX_COMMAND`, so these
+  move with the constants. The Agent Plugin, the Gemini extension and the
+  bundle run their own copy with `node`, never `npx`, so their server entries
+  are unchanged.
+- **The registry entry carries npx's flags.** The design's `server.json`
+  npm package has no `runtimeArguments`. Apps that install from the MCP
+  Registry build the command from the entry themselves: VS Code's gallery
+  (`mcpManagementService.ts`, `getMcpServerConfigurationFromManifest`) runs
+  `npx`, then `runtimeArguments`, then `identifier@version`, then
+  `packageArguments`, and adds no `-y` and no `--prefix` for npm, so the
+  design's entry would run the package through npx with no flags at all, in
+  the open project: the form DIST-M1 closed everywhere else. Here the package has
+  `"runtimeArguments": [{"type": "positional", "value": "-y"},
+  {"type": "named", "name": "--prefix", "value": "/"}]` (a positional
+  argument adds its value, a named one its name and then its value), so a
+  registry install runs the standard entry. The registry checks only named
+  arguments (no `<`, `>`, space or `$` in the name; the value doesn't start
+  with the name), which these pass. `tests/registry.test.mjs` builds the
+  command as VS Code does and requires `STANDARD_ENTRY`, so the entry moves
+  with `NPX_FLAGS`.
+- **The skill names the package, not a command.** The design's
+  `compatibility` line names the connector as an npx command: `-y` and the
+  bare package name, with no `--prefix /` and no version. A model reads the
+  skill and may run or relay that as the way to install, and it is the form
+  DIST-M1 found can run a copy planted in the open project with
+  `WISPLY_MCP_TOKEN`. Here it reads
+  "Needs the Wisply MCP connector (the @wisply/mcp package, or the Wisply
+  plugin or extension for this app) on the Mac that runs Wisply, with
+  Wisply's MCP server turned on." The rest of the skill is the design's exact
+  text. It still has no version, so it doesn't change with every release.
+  `tests/skills.test.mjs` refuses any `npx` or `npm install` in the skill,
+  the Gemini commands and the Cursor extras, and
+  `tests/manifests.test.mjs` sweeps every file in `skills/`, `commands/` and
+  `extras/` for an npx of the package without the standard flags. The VS
+  Code extension (DIST-V2) and wisply.ai (DIST-W1) vendor the skill byte for
+  byte, so they take this text when they re-vendor it, and the spec's skill
+  block changes to match.
+- **`server.json` follows `MCP_NAME`.** Its `name` must equal
+  `package.json` `"mcpName"` (the registry ties the two), so it is the same
+  placeholder: if wisply.ai can't be verified, all three become
+  `io.github.fal3/wisply-mcp` together (`tests/registry.test.mjs`).
+- **`/wisply:live` hedges `tail_words`.** The design has `live.toml` call
+  `get_live_transcript` with `tail_words` 400. The provisional contract's
+  `get_live_transcript` takes no arguments (`additionalProperties: false`),
+  and a model calls tools by their schema (Gemini CLI may also check
+  arguments against it), so the prompt passes `tail_words` 400 only "if the
+  tool accepts tail_words, otherwise with no arguments". Until raycast PR 1's
+  contract is vendored, `/wisply:live` reads the whole live transcript.
+  `tests/skills.test.mjs` fails once the contract has `tail_words` and the
+  hedge is still there, so the DIST-M5 re-vendor makes the call
+  unconditional.
+- **The remote is its own plugin.** The design's directory table and
+  DIST-M6 row add a second `mcp.json` entry, `wisply-cloud`
+  (streamable-http), to the root plugin. The root `mcp.json` stays
+  local-only instead (`tests/manifests.test.mjs` refuses any non-stdio, URL,
+  header or env entry in it), and the remote is the separate, opt-in Agent
+  Plugin at `cloud-connect/plugin`, listed as a second marketplace entry
+  (as DIST-M6 builds it).
+- **No `setup_claude` in the bundle's tools.** The bundle never passes
+  `--allow-claude-setup`, so its manifest (which Claude's directory and
+  Smithery read) lists the eight tools it can serve.
+- **Token fields say what a full-access token allows.** The connector accepts
+  any Wisply token from `WISPLY_MCP_TOKEN`, so the bundle's and the Gemini
+  extension's token fields recommend `wspc_` and say that a `wsp_` token lets
+  the AI app start and stop recordings and propose follow-ups.
+- **The icon sits next to the manifest.** The design's tree has `icon.png`
+  at the repository root. It is `mcpb/icon.png`, because the manifest's
+  `icon` is relative to the manifest, so
+  `mcpb validate mcpb/manifest.json` passes and `build-mcpb.mjs` stages the
+  same file.
+- **Two release assets.** Every release carries the bundle and
+  `SHA256SUMS`, and the notes repeat its line. Gemini CLI installs a GitHub
+  repository from its newest release: with exactly one asset whose name has
+  no platform in it, it takes that asset for the extension and fails to
+  unpack a `.mcpb`; with two, it uses the tag's source archive.
+- **Release build.** The design packs with `npx -y @anthropic-ai/mcpb@2.1.2`
+  and has the CI job `mcpb` run
+  `npm install --no-save --ignore-scripts --prefix .ci/mcpb @anthropic-ai/mcpb@2.1.2`.
+  The release build and CI use the copy installed from `tools/mcpb`'s
+  committed lockfile instead (`npm ci --ignore-scripts --prefix tools/mcpb`,
+  integrity hashes for every dependency), refuse a checkout that isn't clean
+  or isn't at the tag, and stage the tag's own files. The gate runs on the
+  asset downloaded back from the draft release and compares its contents with
+  the tag, not only its sha256. The design's `WISPLY_REGISTRY_RELEASE=1`
+  refuses only the all-zero placeholder; here it also fails without
+  `WISPLY_MCPB_FILE`, because from the second release on `server.json`
+  holds the previous release's real hash, which only the new asset can tell
+  from the right one (the registry only sends a HEAD request to the URL), and
+  release control 7 resets `fileSha256` to the placeholder with each version
+  bump. The build stages regular files only: `trackedSource` refuses a
+  tracked symlink or a path under a symlinked folder, `refSource` accepts
+  only git modes 100644 and 100755 (never 120000 or 160000) for the code, the
+  manifest and the icon, the manifest's `icon` must be `icon.png`, and
+  `stageBundle` refuses any path that would land outside the stage.
+- **Git installs and `main`.** Git-sourced installs (Agent Plugin, Gemini
+  extension) follow the default branch unless they name a ref, so the README
+  gives `--ref v<version>` where the app takes one (Codex, Gemini CLI;
+  GitHub Copilot CLI's `plugin install` and VS Code's **Install Plugin From
+  Source** take none), and the release controls add a `main` ruleset (pull
+  requests with CI only, no force-push or deletion, signed commits) to the
+  design's `v*` tag ruleset and immutable releases.
+
 ## print-config and install (DIST-M4)
 
 - **The argument list carries npx's flags.** The design's templates

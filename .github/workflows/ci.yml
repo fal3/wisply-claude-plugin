@@ -26,3 +26,21 @@ jobs:
           node-version: ${{ matrix.node }}
       # No install step: zero dependencies and no lockfile.
       - run: npm run check
+
+  mcpb:
+    # The Claude Desktop bundle checks with the real @anthropic-ai/mcpb 2.1.2: manifest validation, the
+    # user_config substitution the token fallback relies on, a pack/unpack round trip and the release
+    # comparison (tests/mcpb-config.test.mjs). Installed from tools/mcpb's lockfile (exact versions and
+    # integrity hashes for every dependency), outside the package, without scripts.
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts --no-audit --no-fund --prefix tools/mcpb
+      - run: WISPLY_MCPB_LIB=$PWD/tools/mcpb/node_modules/@anthropic-ai/mcpb/dist/index.js npm test

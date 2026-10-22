@@ -109,18 +109,69 @@ All notable changes to `@wisply/mcp` are listed here. Versions follow
   `docs/release-checks.json` (the Mac port test, the MCP Registry namespace)
   and a destructive `setup_claude` in the contract.
 
+### Added outside the npm package
+
+These live in the repository, not in the package:
+
+- The Agent Plugin (`plugin.json`, `mcp.json`, Agent Plugins 1.0.0) for
+  Codex, Cursor, VS Code and GitHub Copilot CLI, with a Codex marketplace
+  (`.agents/plugins/marketplace.json`). It runs the repository's copy of the
+  connector with `node`, never `npx`.
+- The Gemini CLI extension (`gemini-extension.json`): the token as an
+  optional sensitive setting that recommends the read-only token and says
+  what a full-access one allows, and the commands `/wisply:recap`,
+  `/wisply:live` and `/wisply:find`.
+- The portable skill `skills/wisply-memos/SKILL.md` (Agent Skills), and an
+  optional Cursor rule and command in `extras/cursor/`.
+- The Claude Desktop bundle source (`mcpb/manifest.json`, MCPB 0.3, with an
+  optional masked token field that defaults to empty, so an empty field
+  uses the token saved by `setup`, and the tools the bundle can serve: every
+  contract tool but `setup_claude`) and `scripts/build-mcpb.mjs`:
+  `npm run build:mcpb` is the release build (a clean checkout at tag
+  `v<version>` only; it stages the tag's files, packs the bundle and writes
+  `SHA256SUMS`), `--unreleased` packs a test bundle from any checkout under a
+  name no release gate accepts, and only files git tracks reach a bundle.
+- The pinned MCPB packer in `tools/mcpb` (`@anthropic-ai/mcpb` 2.1.2 and a
+  committed lockfile with integrity hashes for every dependency), installed
+  with `npm ci --ignore-scripts --prefix tools/mcpb` in CI and for releases;
+  nothing runs `npx` to pack.
+- The release gate `WISPLY_MCPB_FILE` also unpacks the bundle and compares
+  every file with the release tag, byte for byte, and
+  `WISPLY_REGISTRY_RELEASE=1` fails without it, so a hash left over from the
+  previous release can't pass.
+- The bundle build takes regular files only (a tracked symlink, a submodule
+  or a path under a symlinked folder stops it), the manifest's `icon` must be
+  `icon.png`, and no staged path can land outside the stage.
+- MCP Registry entries `server.json` (`ai.wisply/local`: the npm package and
+  the bundle) and `registry/cloud.server.json` (`ai.wisply/cloud`, for Cloud
+  Connect), `glama.json` and `llms-install.md`.
+- The README's install matrix: one-click links for Cursor, VS Code, VS Code
+  Insiders, Goose, LM Studio and Kiro, the setup for 20 apps, and
+  tag-pinned git installs (`--ref v0.1.0`) for Codex and Gemini CLI. Every
+  npm snippet, link and command in them, `llms-install.md`, the registry
+  entry and the token fields uses the standard entry
+  (`npx -y --prefix / @wisply/mcp@0.1.0`). The registry entry gives npx's
+  flags as `runtimeArguments`, so apps that build the command from it (VS
+  Code's MCP gallery) run the standard entry too. The skill, the Gemini
+  commands and the Cursor extras name no command at all.
+
 ### Differences from the distribution design
 
 `docs/design-differences.md` lists every place this package departs from
 the distribution design, for the bridge (exact versions, `--prefix /`, the
-Keychain and scope texts, the release checks) and for setup, status and
+Keychain and scope texts, the release checks), for setup, status and
 forget (no package name before it is Wisply's, `SETUP_MALFORMED`, replace
 instead of update, every copy removed, the full-access note, `forget` off
-macOS, exit codes) and for print-config and install (npx's flags in the
+macOS, exit codes), for print-config and install (npx's flags in the
 argument list, `"published"`, the extra fields, the app list, the absolute
 program path, no Zed edit, the shared Cline file, the splice, the masked
 backup, nothing before the release, `--port` only, re-running install, the
-kept fields, the disclosure), so they can be folded into the spec.
+kept fields, the disclosure) and for the plugins, extensions and the bundle
+(the standard entry on every install surface, the skill's text, the registry
+name, the registry entry's `runtimeArguments`, the `/wisply:live` hedge,
+the separate cloud plugin, the bundle's tools, token fields and icon, two
+release assets, the release build and its gate, git installs and `main`), so
+they can be folded into the spec.
 
 ### Not yet
 
@@ -129,3 +180,11 @@ kept fields, the disclosure), so they can be folded into the spec.
   contract is re-vendored from wisply-ai. `WISPLY_RELEASE=1 npm test` fails
   on purpose until then and until `docs/release-checks.json` records the
   release checks (DIST-M5); the ordinary `npm test` checks that it does.
+- The bundle's `fileSha256` in `server.json` is a placeholder until the
+  release asset exists; `WISPLY_REGISTRY_RELEASE=1 npm test` refuses it, and
+  refuses any hash without `WISPLY_MCPB_FILE`.
+- `setup_claude` (only with `--allow-claude-setup`): Wisply's answer includes
+  a Cursor snippet with its full-access token, and the connector passes it on
+  unchanged. Until Wisply returns a placeholder there (or the connector
+  redacts token-shaped text in results), leave the switch off; SECURITY.md
+  says so.

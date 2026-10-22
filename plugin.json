@@ -1,0 +1,23 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "wisply",
+  "version": "0.1.0",
+  "description": "Use your Wisply meeting notes, action items and live transcript from the Wisply app on this Mac.",
+  "author": {
+    "name": "Wisply",
+    "email": "support@wisply.ai",
+    "url": "https://www.wisply.ai"
+  },
+  "homepage": "https://www.wisply.ai/docs/mcp/install",
+  "repository": "https://github.com/fal3/wisply-mcp",
+  "license": "MIT",
+  "keywords": [
+    "wisply",
+    "meetings",
+    "transcripts",
+    "voice-memos",
+    "mcp",
+    "macos",
+    "local"
+  ]
+}

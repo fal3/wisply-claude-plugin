@@ -1,0 +1,22 @@
+{
+  "name": "wisply",
+  "version": "0.1.0",
+  "description": "Use your Wisply meeting notes, action items and live transcript from the Wisply app on this Mac.",
+  "mcpServers": {
+    "wisply": {
+      "command": "node",
+      "args": [
+        "${extensionPath}/bin/wisply-mcp.mjs"
+      ],
+      "cwd": "${extensionPath}"
+    }
+  },
+  "settings": [
+    {
+      "name": "Wisply token",
+      "description": "Optional. Your read-only connector token (wspc_...) from Wisply > Settings > Integrations > MCP Server. A full-access token (wsp_...) also works here, but it lets this AI app start and stop recordings and propose follow-ups, so use wspc_. Leave empty if you ran npx -y --prefix / @wisply/mcp@0.1.0 setup.",
+      "envVar": "WISPLY_MCP_TOKEN",
+      "sensitive": true
+    }
+  ]
+}

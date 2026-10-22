@@ -21,6 +21,11 @@ Only the newest 0.x release gets fixes.
   recordings" switch, and a follow-up waits for your confirmation in Wisply.
 - `wsp_`: full access. `setup_claude`, which can store an Anthropic API key in
   Wisply, stays hidden unless the connector runs with `--allow-claude-setup`.
+  Leave that switch off: Wisply's answer to `setup_claude` currently includes
+  a Cursor snippet with Wisply's full-access token, and the connector passes
+  results on unchanged, so the AI app would send the token to its AI
+  service. The Claude Desktop bundle never turns the switch on and doesn't
+  list `setup_claude`.
 
 The connector refuses any tool outside the token's scope, and Wisply refuses
 it again (JSON-RPC `-32003`).
@@ -157,7 +162,15 @@ your AI app runs under the `wisply` entry:
   `lib/constants.mjs`): `npx` then resolves from `/`, the read-only system
   volume on macOS, and installs only from the registry your own `~/.npmrc`
   names. `tests/pack.test.mjs` refuses any `npx` of the package in these
-  documents or in `lib/messages.mjs` without those flags. A global install
+  documents or in `lib/messages.mjs` without those flags, and
+  `tests/manifests.test.mjs` in the manifests, `llms-install.md` and every
+  file in `skills/`, `commands/` and `extras/` (the skill and the prompts
+  name no command at all). Apps that install from the MCP Registry build the
+  command from `server.json` themselves (VS Code's gallery runs `npx`, then
+  the entry's `runtimeArguments`, then `@wisply/mcp@<version>`, and adds
+  nothing of its own), so the entry carries the same flags as
+  `runtimeArguments`; `tests/registry.test.mjs` builds that command and
+  requires the standard entry. A global install
   (`npm i -g @wisply/mcp@0.1.0`) doesn't read a project's `.npmrc` either.
 - **The version.** The snippets in this README (and, once they exist, on
   wisply.ai and in Wisply) run one exact version (`@wisply/mcp@0.1.0`), taken
@@ -192,6 +205,31 @@ skips npx: `npm i -g @wisply/mcp@0.1.0` once, then the absolute path of
 `wisply-mcp` as the app's command. Whether each app starts `npx --prefix /`
 cleanly is part of the Mac QA before the release.
 
+The Agent Plugin, the Gemini CLI extension and the Claude Desktop bundle in
+this repository run the copy of the connector that comes with them (`node
+bin/wisply-mcp.mjs`), never `npx`. Whether that copy is pinned depends on how
+it was installed:
+
+- **The bundle** is a file, so it changes only when you install another one.
+  A bundle downloaded from the GitHub release is not checked against
+  `server.json`: the sha256 there (`fileSha256`) is for installers that
+  install from the MCP Registry. What protects the download is that the
+  release is immutable once published and only the maintainer can create
+  `v*` tags. Each release also gives the bundle's sha256 in its notes and in a
+  `SHA256SUMS` asset, so you can check a download with
+  `shasum -a 256 -c SHA256SUMS`. Both come from the same release, so they show
+  that the file is the one published, not who published it.
+- **Git installs** (the Agent Plugin in Codex, VS Code and GitHub Copilot CLI,
+  and the Gemini CLI extension) copy this repository at a git ref. With a
+  release tag (`--ref v0.1.0` in Codex and Gemini CLI) they stay on that
+  release, since `v*` tags can't be moved. Without one they copy the default
+  branch, `main` (Gemini CLI: the newest release once there is one), and every
+  update (`codex plugin marketplace upgrade`, `copilot plugin update`,
+  `gemini extensions update` or Gemini's auto-update) copies it again, so a
+  push to `main` reaches them. Only the npm snippets and tag-pinned installs
+  are version-pinned; for the rest, the guard is the `main` ruleset under
+  "Release controls".
+
 Until the contract with Wisply is final, `package.json` is marked `"private"`,
 so `npm publish` refuses the package. Until the npm name is Wisply's
 (`PACKAGE_NAME_FINAL` in `lib/constants.mjs`, tied to `"private"` by
@@ -216,7 +254,7 @@ is told to `npx` a name someone else could register first.
 ## Release controls (maintainers)
 
 Each of these must hold before the step it names. None is met yet: the
-package has never been published. Parts of items 2 and 3 are also
+package has never been published. Parts of items 3 and 4 are also
 machine-checked: `WISPLY_RELEASE=1 npm test` fails while the contract is
 provisional or leaves `setup_claude` non-destructive, and until
 `docs/release-checks.json` records the port and registry checks
@@ -229,7 +267,12 @@ provisional or leaves `setup_claude` non-destructive, and until
    same owner, so nobody else can register either name and be what `npx -y`
    runs. Until then `clients/mcp-clients.json` says `"published": false`, and
    its copies in wisply-ai and wisply-web render nothing from it.
-2. **Before the first publish:** the contract is re-vendored from wisply-ai
+2. **Before the repository is public** (git installs need it public): a
+   ruleset on `main` (changes only through pull requests with the `ci` checks
+   passing; no force-push and no deletion; signed commits required, or at
+   least preferred), a ruleset on `v*` tags (only the owner creates them; no
+   update and no deletion), and immutable releases turned on.
+3. **Before the first publish:** the contract is re-vendored from wisply-ai
    (`contract/SOURCE.json` no longer provisional, `WISPLY_RELEASE=1 npm test`
    passes), `"private": true` is removed from `package.json`,
    `PACKAGE_NAME_FINAL` becomes `true` and `"published"` becomes `true` in
@@ -260,7 +303,7 @@ provisional or leaves `setup_claude` non-destructive, and until
      `forget`: both go, and `status` reports no token.
    - `setup --full-access` and `status` with that item print the full-access
      note; `WISPLY_MCP_PORT=eighty forget` still removes the item.
-3. **Before the first publish, the MCP Registry name.** `package.json`
+4. **Before the first publish, the MCP Registry name.** `package.json`
    `"mcpName"` (`MCP_NAME` in `lib/constants.mjs`, now `ai.wisply/local`) goes
    into the published package and can't change for that version, and the
    registry accepts an `ai.wisply/*` name only from someone who proved control
@@ -273,21 +316,48 @@ provisional or leaves `setup_claude` non-destructive, and until
    If the domain can't be verified, switch `MCP_NAME` and `"mcpName"` to
    `io.github.fal3/wisply-mcp` (verified with `mcp-publisher login github` as
    `fal3`, or as an owner if `fal3` is an organization) before the first
-   publish.
-4. **The first publish** is by hand, by the organization owner, with
+   publish, together with the `name` of `server.json`
+   (`tests/manifests.test.mjs` and `tests/registry.test.mjs` tie them).
+5. **The first publish** is by hand, by the organization owner, with
    two-factor authentication.
-5. **From the second release,** only npm trusted publishing (OIDC from a
+6. **From the second release,** only npm trusted publishing (OIDC from a
    GitHub Actions release workflow in this repository, behind a protected
    environment) publishes, and the package's publishing access is set to
    "Require two-factor authentication and disallow tokens". This repository
    has no release workflow yet; until it does, no release claims provenance.
-6. **Every release** bumps `version` in `package.json` and `VERSION` in
-   `lib/constants.mjs` together, with every `@wisply/mcp@<version>` in
+7. **Every release** bumps `version` in `package.json` and `VERSION` in
+   `lib/constants.mjs` together, with the versions in `plugin.json`,
+   `gemini-extension.json`, `mcpb/manifest.json` and `server.json` (its
+   bundle URL included) and the README's links and `--ref` tags
+   (`tests/manifests.test.mjs` and `tests/registry.test.mjs` fail until they
+   agree), and sets `server.json`'s `fileSha256` back to the placeholder (64
+   zeros) until the new bundle exists, so the old release's hash can't be
+   published with the new URL, and every `@wisply/mcp@<version>` in
    `clients/mcp-clients.json` (`package_spec`, `standard_entry` and the
-   `vscode-inputs` text; `tests/clients.test.mjs` ties them). The
-   snippets follow `PACKAGE_SPEC`; copy the clients file on to wisply-ai and
+   `vscode-inputs` text; `tests/clients.test.mjs` ties them). The snippets
+   follow `PACKAGE_SPEC`; copy the clients file on to wisply-ai and
    wisply-web, so the wisply.ai guide and Wisply's snippets name the new
    version.
+8. **The Claude Desktop bundle** is built once, in a fresh clone of the
+   release tag, with the pinned packer (`npm ci --ignore-scripts --prefix
+   tools/mcpb`, from its committed lockfile; never `npx`). `npm run
+   build:mcpb` refuses a checkout that has changes or untracked files or isn't
+   at the tag, and stages the tag's own files. Both
+   `wisply-mcp-<version>.mcpb` and `SHA256SUMS` go to a draft GitHub release
+   (never the bundle alone: Gemini CLI takes a release's only asset for the
+   extension), the `SHA256SUMS` line goes into the release notes, and the
+   sha256 goes into `server.json` before the registry entry is published.
+   The gate runs on the asset downloaded back from the draft release:
+   `WISPLY_REGISTRY_RELEASE=1 WISPLY_MCPB_FILE=<downloaded .mcpb> npm test`
+   must pass. It checks the hash, then unpacks the bundle and compares every
+   file with the tag, byte for byte. `WISPLY_REGISTRY_RELEASE=1` fails
+   without `WISPLY_MCPB_FILE`: from the second release on, `server.json`
+   holds a real hash from the previous release, and the registry never
+   compares it with the file (it only checks that the URL answers), so only
+   the asset itself shows that the hash is this version's. The build takes
+   regular files only: a tracked symlink or a path under a symlinked folder
+   stops it, and the manifest's `icon` must be `icon.png`. A rebuilt bundle
+   has a different sha256, so never rebuild a released one.
 
 ## If a bad release is published (maintainers)
 

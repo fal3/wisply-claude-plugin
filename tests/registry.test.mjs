@@ -1,0 +1,267 @@
+// The MCP Registry entries: server.json (ai.wisply/local) and
+// registry/cloud.server.json (ai.wisply/cloud). Besides the 2025-12-11
+// schema, this repeats offline what the official registry checks at publish
+// time (modelcontextprotocol/registry internal/validators @11b7b0e), and holds
+// the release gates for the bundle's sha256:
+//
+//   WISPLY_REGISTRY_RELEASE=1                       refuses the all-zero fileSha256 placeholder, and requires
+//                                                   WISPLY_MCPB_FILE: from the second release on, server.json
+//                                                   holds the previous release's real hash, which only the
+//                                                   new asset itself can tell apart from the right one
+//   WISPLY_MCPB_FILE=<the asset downloaded back from the draft release>
+//                                                   fileSha256 must equal that file's sha256, and the file must
+//                                                   unpack to exactly the files of tag v<version> (verifyBundle,
+//                                                   with the pinned packer in tools/mcpb)
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { MCP_NAME, NPX_COMMAND, PACKAGE_NAME, STANDARD_ENTRY, VERSION } from '../lib/constants.mjs';
+import { bundleFileName, packerLib, verifyBundle } from '../scripts/build-mcpb.mjs';
+import { validate } from './helpers/json-schema.mjs';
+import { ROOT, exists, readJson } from './helpers/repo.mjs';
+
+const SCHEMA_URL = 'https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json';
+const PUBLISHER_KEY = 'io.modelcontextprotocol.registry/publisher-provided';
+const PLACEHOLDER_SHA = '0'.repeat(64);
+const CLOUD_URL = 'https://www.wisply.ai/mcp';
+const registrySchema = readJson('tests/schemas/mcp-registry-2025-12-11/server.schema.json');
+const pkg = readJson('package.json');
+const local = readJson('server.json');
+const cloud = readJson('registry/cloud.server.json');
+const npmPackage = local.packages.find((entry) => entry.registryType === 'npm');
+const mcpbPackage = local.packages.find((entry) => entry.registryType === 'mcpb');
+
+// internal/validators/registries/mcpb.go isValidGitHubReleaseURL
+const GITHUB_RELEASE_PATH = /^\/([a-zA-Z0-9]([a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?)\/([a-zA-Z0-9._-]+)\/releases\/download\/([^/]+)\/([^/]+)$/;
+// internal/validators/validators.go looksLikeVersionRange (the common forms)
+const VERSION_RANGE = /^[\^~<>=]|\|\||\s-\s|(^|\.)[xX*](\.|$)/;
+
+/** internal/validators/validators.go validateArgument: named arguments only (positional ones aren't checked). */
+function argumentProblems(args = []) {
+  const problems = [];
+  for (const arg of args) {
+    if (arg.type !== 'named') continue;
+    const name = arg.name ?? '';
+    if (name === '' || /[<> $]/.test(name)) problems.push(`named argument name ${JSON.stringify(name)}`);
+    for (const field of ['value', 'default']) {
+      if (arg[field] && arg[field].startsWith(name)) problems.push(`named argument ${field} starts with its name`);
+    }
+  }
+  return problems;
+}
+
+/**
+ * The command line VS Code's MCP gallery builds from a registry npm package
+ * (microsoft/vscode src/vs/platform/mcp/common/mcpManagementService.ts, getMcpServerConfigurationFromManifest
+ * and processArguments): `npx`, then runtimeArguments, then `--registry <registryBaseUrl>` when set, then
+ * `identifier@version`, then packageArguments. It never reads runtimeHint and adds no `-y` and no `--prefix`
+ * for npm; a positional argument adds its value, a named one its name and then its value. Arguments without a
+ * fixed value would become prompts, so this refuses them.
+ */
+function galleryCommand(entry) {
+  const args = [];
+  const push = (arg) => {
+    assert.equal(typeof arg.value, 'string', `${JSON.stringify(arg)}: every argument has a fixed value, so nothing is prompted`);
+    if (arg.type === 'positional') args.push(arg.value);
+    else if (arg.type === 'named') args.push(arg.name, arg.value);
+    else assert.fail(`unexpected argument type ${arg.type}`);
+  };
+  for (const arg of entry.runtimeArguments ?? []) push(arg);
+  if (entry.registryBaseUrl) args.push('--registry', entry.registryBaseUrl);
+  args.push(entry.version ? `${entry.identifier}@${entry.version}` : entry.identifier);
+  for (const arg of entry.packageArguments ?? []) push(arg);
+  return { command: 'npx', args };
+}
+
+/** Offline copies of the registry's semantic checks for one server.json. */
+function registryProblems(doc) {
+  const problems = [];
+  const name = /^([a-zA-Z0-9][a-zA-Z0-9.-]*[a-zA-Z0-9])\/([a-zA-Z0-9][a-zA-Z0-9._-]*[a-zA-Z0-9])$/.exec(doc.name ?? '');
+  if (!name) problems.push('name must be namespace/name');
+  if (doc.$schema !== SCHEMA_URL) problems.push('$schema');
+  if (typeof doc.title === 'string' && doc.title.trim() === '') problems.push('title is only whitespace');
+  if (doc.version === 'latest' || VERSION_RANGE.test(doc.version ?? '')) problems.push('version looks like a range');
+  if (doc.websiteUrl !== undefined && new URL(doc.websiteUrl).protocol !== 'https:') problems.push('websiteUrl');
+  for (const icon of doc.icons ?? []) if (new URL(icon.src).protocol !== 'https:') problems.push('icon src must be https');
+  if (doc.repository && !/^https:\/\/github\.com\/[^/]+\/[^/]+$/.test(doc.repository.url)) problems.push('repository url');
+  if (doc._meta !== undefined) {
+    // Only this key survives publishing, and it is capped at 4 KB.
+    if (Object.keys(doc._meta).some((key) => key !== PUBLISHER_KEY)) problems.push('_meta keys other than publisher-provided are dropped');
+    if (Buffer.byteLength(JSON.stringify(doc._meta[PUBLISHER_KEY] ?? {})) > 4096) problems.push('_meta over 4 KB');
+  }
+  for (const entry of doc.packages ?? []) {
+    if (/\s/.test(entry.identifier)) problems.push('identifier has spaces');
+    if (entry.version !== undefined && (entry.version === 'latest' || VERSION_RANGE.test(entry.version))) problems.push('package version');
+    if (entry.transport?.type === 'stdio' && entry.transport.url) problems.push('stdio transport with a url');
+    problems.push(...argumentProblems(entry.runtimeArguments), ...argumentProblems(entry.packageArguments));
+    if (entry.registryType === 'npm') {
+      if (!entry.version) problems.push('npm package needs a version');
+      if (entry.fileSha256 !== undefined) problems.push('npm package must not have fileSha256');
+      if (entry.registryBaseUrl !== undefined && entry.registryBaseUrl !== 'https://registry.npmjs.org') problems.push('npm registryBaseUrl');
+    } else if (entry.registryType === 'mcpb') {
+      if (!/^[a-f0-9]{64}$/.test(entry.fileSha256 ?? '')) problems.push('mcpb needs fileSha256');
+      if (entry.registryBaseUrl !== undefined) problems.push('mcpb must not have registryBaseUrl');
+      const url = new URL(entry.identifier);
+      if (url.protocol !== 'https:' || !['github.com', 'www.github.com'].includes(url.host) || !GITHUB_RELEASE_PATH.test(url.pathname)) {
+        problems.push('mcpb identifier must be a GitHub release asset');
+      }
+      if (!entry.identifier.toLowerCase().includes('mcp')) problems.push('mcpb identifier must contain "mcp"');
+    } else {
+      problems.push(`unexpected registryType ${entry.registryType}`);
+    }
+  }
+  for (const remote of doc.remotes ?? []) {
+    if (!['streamable-http', 'sse'].includes(remote.type) || !/^https:\/\//.test(remote.url ?? '')) problems.push('remote');
+  }
+  return problems;
+}
+
+test('both entries validate against the 2025-12-11 server.json schema', () => {
+  assert.deepEqual(validate(registrySchema, local), []);
+  assert.deepEqual(validate(registrySchema, cloud), []);
+  assert.equal(local.$schema, SCHEMA_URL);
+  assert.equal(cloud.$schema, SCHEMA_URL);
+});
+
+test('both entries pass the registry\'s publish-time checks that can run offline', () => {
+  assert.deepEqual(registryProblems(local), []);
+  assert.deepEqual(registryProblems(cloud), []);
+});
+
+test('the offline checks catch what the registry refuses', () => {
+  const broken = structuredClone(local);
+  broken.version = '^0.1.0';
+  broken._meta.other = {};
+  broken.packages[0].fileSha256 = PLACEHOLDER_SHA;
+  broken.packages[1].identifier = 'https://example.com/wisply.mcpb';
+  broken.packages[0].runtimeArguments.push({ type: 'named', name: '--prefix /', value: '/' }, { type: 'named', name: '--cache', value: '--cache=/tmp' });
+  assert.deepEqual(registryProblems(broken), [
+    'version looks like a range',
+    '_meta keys other than publisher-provided are dropped',
+    'named argument name "--prefix /"',
+    'named argument value starts with its name',
+    'npm package must not have fileSha256',
+    'mcpb identifier must be a GitHub release asset',
+  ]);
+});
+
+test('ai.wisply/local: the DNS namespace, the npm package and its mcpName', () => {
+  // DNS authentication on wisply.ai grants ai.wisply.*; npm ownership is mcpName in the published version.
+  // MCP_NAME is a placeholder until wisply.ai is verified (DIST-M1, docs/release-checks.json); the fallback
+  // is io.github.fal3/wisply-mcp, in lib/constants.mjs, package.json and here together.
+  assert.equal(local.name, MCP_NAME);
+  assert.ok(['ai.wisply/local', 'io.github.fal3/wisply-mcp'].includes(MCP_NAME), MCP_NAME);
+  assert.equal(pkg.mcpName, local.name);
+  assert.ok(local.description.length <= 100);
+  assert.ok(local.title.length <= 100);
+  assert.deepEqual(local.packages.map((entry) => entry.registryType), ['npm', 'mcpb']);
+  assert.equal(npmPackage.identifier, PACKAGE_NAME);
+  assert.equal(npmPackage.version, VERSION);
+  assert.equal(npmPackage.runtimeHint, 'npx');
+  assert.deepEqual(npmPackage.transport, { type: 'stdio' });
+  assert.deepEqual(mcpbPackage.transport, { type: 'stdio' });
+});
+
+test('ai.wisply/local: a client that installs from the registry runs the standard entry (npx -y --prefix / and the exact version)', () => {
+  // Registry clients build the command themselves. Without runtimeArguments, VS Code's gallery would run
+  // `npx @wisply/mcp@<version>` in the open project, where a planted node_modules/@wisply/mcp or a project
+  // .npmrc could answer instead of npm and receive WISPLY_MCP_TOKEN (DIST-M1, lib/constants.mjs NPX_FLAGS).
+  assert.equal(npmPackage.runtimeHint, STANDARD_ENTRY.command);
+  assert.deepEqual(galleryCommand(npmPackage), { command: STANDARD_ENTRY.command, args: [...STANDARD_ENTRY.args] });
+  assert.deepEqual(npmPackage.runtimeArguments, [
+    { type: 'positional', value: '-y' },
+    { type: 'named', name: '--prefix', value: '/' },
+  ]);
+  assert.equal(Object.hasOwn(npmPackage, 'packageArguments'), false, 'the connector starts with no arguments');
+  assert.equal(Object.hasOwn(npmPackage, 'registryBaseUrl'), false, 'npm itself, never another registry');
+  // The builder sees what was missing: the old entry gave a command without --prefix /.
+  const { runtimeArguments, ...withoutArguments } = npmPackage;
+  assert.deepEqual(galleryCommand(withoutArguments).args, [`${PACKAGE_NAME}@${VERSION}`]);
+});
+
+test('ai.wisply/local: the token is an optional secret, and nothing sets its value', () => {
+  assert.deepEqual(npmPackage.environmentVariables.map((variable) => variable.name), ['WISPLY_MCP_TOKEN']);
+  const [token] = npmPackage.environmentVariables;
+  assert.equal(token.isSecret, true);
+  assert.equal(token.isRequired, false);
+  for (const key of ['value', 'default', 'choices']) assert.equal(Object.hasOwn(token, key), false, key);
+  // The final setup command, as in every manifest here (tests/manifests.test.mjs SETUP_COMMAND).
+  assert.ok(token.description.includes(`${NPX_COMMAND} setup`), 'names the pinned setup command');
+  assert.equal(Object.hasOwn(mcpbPackage, 'environmentVariables'), false, 'the bundle asks for the token itself (user_config)');
+});
+
+test('ai.wisply/local: the MCPB asset is this version\'s release asset of fal3/wisply-mcp', () => {
+  assert.equal(mcpbPackage.identifier,
+    `https://github.com/fal3/wisply-mcp/releases/download/v${VERSION}/${bundleFileName(VERSION)}`);
+  assert.ok(mcpbPackage.identifier.includes('mcp'));
+  assert.equal(Object.hasOwn(mcpbPackage, 'version'), false);
+});
+
+test('ai.wisply/local: publisher metadata says it needs Wisply for Mac', () => {
+  const meta = local._meta[PUBLISHER_KEY];
+  assert.deepEqual(meta['ai.wisply'].platforms, ['macOS']);
+  assert.match(meta['ai.wisply'].requires, /Wisply for Mac/);
+  assert.equal(meta['com.github'].serverDisplayName, local.title);
+});
+
+test('fileSha256 is the placeholder until the release, and the release gate refuses it (WISPLY_REGISTRY_RELEASE=1)', () => {
+  assert.match(mcpbPackage.fileSha256, /^[a-f0-9]{64}$/);
+  if (process.env.WISPLY_REGISTRY_RELEASE === '1') {
+    assert.notEqual(mcpbPackage.fileSha256, PLACEHOLDER_SHA,
+      'build the bundle once from the release tag (npm run build:mcpb), upload it, then put its sha256 in server.json');
+  }
+});
+
+test('the release gate (WISPLY_REGISTRY_RELEASE=1) needs the release asset itself (WISPLY_MCPB_FILE)', () => {
+  // From the second release on, fileSha256 holds the previous release's real hash until someone replaces it,
+  // and the registry never compares it with the file (mcpb.go only sends a HEAD request). Only this version's
+  // asset can tell a stale hash from the right one, so the gate doesn't pass without it.
+  if (process.env.WISPLY_REGISTRY_RELEASE !== '1') return;
+  assert.ok(process.env.WISPLY_MCPB_FILE,
+    `download the release asset and set WISPLY_MCPB_FILE to it (gh release download v${VERSION} --repo fal3/wisply-mcp --pattern '*.mcpb' --dir dist/check)`);
+});
+
+test('with WISPLY_MCPB_FILE, fileSha256 is that file\'s sha256 and the file is exactly the tag\'s bundle', { skip: process.env.WISPLY_MCPB_FILE ? false : 'WISPLY_MCPB_FILE not set' }, async () => {
+  const file = resolve(process.env.WISPLY_MCPB_FILE);
+  assert.ok(file.endsWith(`/${bundleFileName(VERSION)}`), `${file} is not ${bundleFileName(VERSION)}`);
+  const sha = createHash('sha256').update(readFileSync(file)).digest('hex');
+  assert.equal(mcpbPackage.fileSha256, sha, 'server.json fileSha256 must equal the uploaded bundle\'s sha256');
+  // The hash only says which file was uploaded; this says the file holds the tag's code and nothing else.
+  assert.deepEqual(await verifyBundle({ file, version: VERSION, lib: packerLib() }), [],
+    'the bundle must unpack to exactly the files of the release tag');
+});
+
+test('the release gate really fails without the asset, whatever fileSha256 holds, and on the placeholder', { skip: process.env.WISPLY_REGISTRY_RELEASE === '1' }, () => {
+  const env = { ...process.env, WISPLY_REGISTRY_RELEASE: '1' };
+  delete env.NODE_TEST_CONTEXT;
+  delete env.WISPLY_MCPB_FILE;
+  const result = spawnSync(process.execPath, ['--test', '--test-reporter=tap', fileURLToPath(import.meta.url)], { cwd: ROOT, env, encoding: 'utf8' });
+  const output = result.stdout.slice(-4000);
+  assert.notEqual(result.status, 0, output);
+  // The asset check fails on its own, so a stale (non-zero) hash from an earlier release can't pass the gate.
+  assert.match(result.stdout, /not ok \d+ - the release gate \(WISPLY_REGISTRY_RELEASE=1\) needs the release asset itself/, output);
+  assert.match(result.stdout, /set WISPLY_MCPB_FILE/, output);
+  assert.equal(/not ok \d+ - fileSha256 is the placeholder until the release/.test(result.stdout), mcpbPackage.fileSha256 === PLACEHOLDER_SHA, output);
+});
+
+test('ai.wisply/cloud: the remote entry for Cloud Connect, with no package', () => {
+  assert.deepEqual(Object.keys(cloud), ['$schema', 'name', 'title', 'description', 'websiteUrl', 'version', 'remotes']);
+  assert.equal(cloud.name, 'ai.wisply/cloud');
+  assert.equal(cloud.title, 'Wisply Cloud');
+  assert.ok(cloud.description.length <= 100);
+  assert.match(cloud.description, /Cloud Connect/);
+  assert.equal(cloud.websiteUrl, 'https://www.wisply.ai/docs/cloud-connect');
+  assert.deepEqual(cloud.remotes, [{ type: 'streamable-http', url: CLOUD_URL }]);
+  assert.equal(Object.hasOwn(cloud, 'packages'), false);
+  assert.match(cloud.version, /^\d+\.\d+\.\d+$/);
+});
+
+test('ai.wisply/cloud names the same remote as the wisply-cloud plugin, once DIST-M6 is here', (t) => {
+  if (!exists('cloud-connect/plugin/mcp.json')) return t.skip('cloud-connect/plugin/mcp.json arrives with DIST-M6');
+  const plugin = readJson('cloud-connect/plugin/mcp.json');
+  assert.deepEqual(cloud.remotes, [{ type: 'streamable-http', url: plugin.mcpServers['wisply-cloud'].url }]);
+});

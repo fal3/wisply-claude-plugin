@@ -1,0 +1,70 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "ai.wisply/local",
+  "title": "Wisply",
+  "description": "Your Wisply meeting notes, action items and live transcript, from the Wisply app on this Mac.",
+  "websiteUrl": "https://www.wisply.ai/docs/mcp/install",
+  "repository": {
+    "url": "https://github.com/fal3/wisply-mcp",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "icons": [
+    {
+      "src": "https://www.wisply.ai/apple-touch-icon.png",
+      "mimeType": "image/png"
+    }
+  ],
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@wisply/mcp",
+      "version": "0.1.0",
+      "runtimeHint": "npx",
+      "runtimeArguments": [
+        {
+          "type": "positional",
+          "value": "-y"
+        },
+        {
+          "type": "named",
+          "name": "--prefix",
+          "value": "/"
+        }
+      ],
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "WISPLY_MCP_TOKEN",
+          "description": "Wisply connector token (wspc_…). Optional after `npx -y --prefix / @wisply/mcp@0.1.0 setup`.",
+          "isRequired": false,
+          "isSecret": true,
+          "format": "string"
+        }
+      ]
+    },
+    {
+      "registryType": "mcpb",
+      "identifier": "https://github.com/fal3/wisply-mcp/releases/download/v0.1.0/wisply-mcp-0.1.0.mcpb",
+      "fileSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ],
+  "_meta": {
+    "io.modelcontextprotocol.registry/publisher-provided": {
+      "com.github": {
+        "serverDisplayName": "Wisply"
+      },
+      "ai.wisply": {
+        "platforms": [
+          "macOS"
+        ],
+        "requires": "Wisply for Mac with Settings > Integrations > MCP Server turned on"
+      }
+    }
+  }
+}
