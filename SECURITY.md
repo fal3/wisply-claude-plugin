@@ -37,12 +37,15 @@ another program takes the port). Second, it relies on Wisply holding its port
 alone while it runs: the proof binds the token, the port and the nonce, not
 the TCP connection, and the check and the call use separate connections. A
 program that could listen on `127.0.0.1:<port>` next to Wisply could pass the
-check on to Wisply and then receive the token with the call. Whether Wisply's
-listener (`allowLocalEndpointReuse` in `MCPServer.swift`) lets a second
-same-user socket bind that port is still to be checked on a Mac; if it does,
-Wisply has to bind the port exclusively before this connector is released
-(see "Release controls"). The default token is read-only, which limits what
-either gap could expose.
+check on to Wisply and then receive the token with the call. Wisply's
+listener sets `allowLocalEndpointReuse = true` (`MCPServer.swift`), so
+whether a second same-user socket can bind that port is still to be checked
+on a Mac; if it can, Wisply has to bind the port exclusively before this
+connector is released. The release check enforces this: `WISPLY_RELEASE=1 npm
+test` fails until `docs/release-checks.json` records, for the Wisply commit
+the contract is vendored from, how exclusivity was shown (see "Release
+controls"). The default token is read-only, which limits what either gap
+could expose.
 
 **Network.** The connector talks only to `127.0.0.1`, with its own HTTP agent
 (proxy variables are ignored), never follows redirects, and caps every answer
@@ -58,8 +61,8 @@ the connector's stderr in its log files.
 
 **The token at rest.** Don't put a token in an AI app's config file: those
 files end up in Settings Sync, dotfile repositories and backups. Run
-`npx -y @wisply/mcp@0.1.0 setup`, which keeps it in your login keychain, or let
-the app's secret storage pass it as `WISPLY_MCP_TOKEN`.
+`npx -y --prefix / @wisply/mcp@0.1.0 setup`, which keeps it in your login
+keychain, or let the app's secret storage pass it as `WISPLY_MCP_TOKEN`.
 
 - The item is a generic password: service `ai.wisply.mcp`, account `token`,
   label "Wisply MCP token", trusting `/usr/bin/security` only (`-T`, never
@@ -98,17 +101,36 @@ Wisply goes to the AI service that app uses, under that service's terms.
 Transcripts are recorded speech: treat them as untrusted data.
 
 **Supply chain.** The package has zero runtime dependencies and no lifecycle
-scripts (`tests/pack.test.mjs` enforces both). The snippets in this README
-(and, once they exist, on wisply.ai and in Wisply) run one exact version
-(`@wisply/mcp@0.1.0`), taken from `PACKAGE_SPEC`, and so do the `setup`,
-`status` and `forget` commands the connector's messages name. npm never lets a published
-version change, so a later release, including a bad one, reaches your app only
-after you change the version in its settings. If you
-write `@wisply/mcp@0` instead, `npx` fetches the newest 0.x release every time
-your app starts the connector: you get fixes on their own, and a bad release
-would run the same way. `npx` doesn't check npm provenance when it installs a
-package, so provenance is an audit trail, not a guard. Publishing is guarded
-by npm's own controls, listed under "Release controls" below.
+scripts (`tests/pack.test.mjs` enforces both). Two things decide which code
+your AI app runs under the `wisply` entry:
+
+- **The folder it starts in.** AI apps (Claude Code, Codex, Gemini CLI,
+  Cursor, VS Code) start stdio servers in the project you have open, and
+  `npx` resolves a package from that folder before it asks npm: a
+  `node_modules/@wisply/mcp` anywhere above it (with its `.bin/wisply-mcp`
+  link) runs instead of the npm package, with `WISPLY_MCP_TOKEN` in its
+  environment, and a project `.npmrc` can point the `@wisply` scope at another
+  registry. A cloned repository could bring either. Every snippet and command
+  here therefore runs `npx -y --prefix / ...` (`NPX_COMMAND` in
+  `lib/constants.mjs`): `npx` then resolves from `/`, the read-only system
+  volume on macOS, and installs only from the registry your own `~/.npmrc`
+  names. `tests/pack.test.mjs` refuses any `npx` of the package in these
+  documents or in `lib/messages.mjs` without those flags. A global install
+  (`npm i -g @wisply/mcp@0.1.0`) doesn't read a project's `.npmrc` either.
+- **The version.** The snippets in this README (and, once they exist, on
+  wisply.ai and in Wisply) run one exact version (`@wisply/mcp@0.1.0`), taken
+  from `PACKAGE_SPEC`, and so do the `setup`, `status` and `forget` commands
+  the connector's messages name once the npm name is Wisply's (`setup` is the
+  command that writes the token to your keychain). npm never lets a published
+  version change, so a later release, including a bad one, reaches your app
+  only after you change the version in its settings. If you write
+  `@wisply/mcp@0` instead, `npx` fetches the newest 0.x release every time
+  your app starts the connector: you get fixes on their own, and a bad release
+  would run the same way.
+
+`npx` doesn't check npm provenance when it installs a package, so provenance
+is an audit trail, not a guard. Publishing is guarded by npm's own controls,
+listed under "Release controls" below.
 
 Until the contract with Wisply is final, `package.json` is marked `"private"`,
 so `npm publish` refuses the package. Until the npm name is Wisply's
@@ -123,9 +145,10 @@ is told to `npx` a name someone else could register first.
 1. In Wisply, open **Settings > Integrations > MCP Server** and regenerate the
    token (connector, recording or full access). Every client using the old
    token stops working at once.
-2. Run `npx -y @wisply/mcp@0.1.0 setup` again with the new token, or give it
-   to the AI apps that keep it themselves. `npx -y @wisply/mcp@0.1.0 forget`
-   removes the saved token if you don't need it any more.
+2. Run `npx -y --prefix / @wisply/mcp@0.1.0 setup` again with the new token,
+   or give it to the AI apps that keep it themselves.
+   `npx -y --prefix / @wisply/mcp@0.1.0 forget` removes the saved token if you
+   don't need it any more.
 3. Turn the MCP server off in Wisply if you don't use it. Wisply stops
    answering MCP requests at once; if Wisply Companion is set up, the same
    local listener stays on for it.
@@ -133,7 +156,11 @@ is told to `npx` a name someone else could register first.
 ## Release controls (maintainers)
 
 Each of these must hold before the step it names. None is met yet: the
-package has never been published.
+package has never been published. Parts of items 2 and 3 are also
+machine-checked: `WISPLY_RELEASE=1 npm test` fails while the contract is
+provisional or leaves `setup_claude` non-destructive, and until
+`docs/release-checks.json` records the port and registry checks
+(`tests/vendor.test.mjs`, `tests/release-checks.test.mjs`).
 
 1. **Before anything public names the package** (the wisply.ai guide,
    Wisply's snippets, catalog listings, the connector's own messages): the npm
@@ -146,8 +173,14 @@ package has never been published.
    passes), `"private": true` is removed from `package.json` and
    `PACKAGE_NAME_FINAL` becomes `true` in the same change
    (`tests/pack.test.mjs` ties all three), `setup`, `status` and `forget` have
-   passed the manual Keychain QA on a Mac (below), and a test on a Mac has
-   shown that no second socket can listen on Wisply's port while Wisply runs.
+   passed the manual Keychain QA on a Mac (below), and the vendored contract
+   marks `setup_claude` `destructiveHint: true` (it replaces the Anthropic key
+   stored in Wisply; fixed in wisply-ai's `MCPToolCatalog.swift`, never in the
+   vendored JSON). `docs/release-checks.json` records `port_exclusive` for the
+   Wisply commit the contract is vendored from: either that commit binds the
+   port exclusively (`allowLocalEndpointReuse = false`), or a test on a Mac
+   has shown that no second socket can listen on Wisply's port while Wisply
+   runs.
 
    Manual Keychain QA, from a checkout (`node bin/wisply-mcp.mjs ...`):
    - `setup` with the connector token: one item, and
@@ -164,14 +197,28 @@ package has never been published.
      `forget`: both go, and `status` reports no token.
    - `setup --full-access` and `status` with that item print the full-access
      note; `WISPLY_MCP_PORT=eighty forget` still removes the item.
-3. **The first publish** is by hand, by the organization owner, with
+3. **Before the first publish, the MCP Registry name.** `package.json`
+   `"mcpName"` (`MCP_NAME` in `lib/constants.mjs`, now `ai.wisply/local`) goes
+   into the published package and can't change for that version, and the
+   registry accepts an `ai.wisply/*` name only from someone who proved control
+   of wisply.ai: `mcp-publisher login dns --domain wisply.ai --private-key ...`
+   with a `v=MCPv1; k=ed25519; p=<public key>` TXT record on the apex, or
+   `mcp-publisher login http` with the same line at
+   `https://wisply.ai/.well-known/mcp-registry-auth`. Alex does this (it needs
+   the domain and a private key, so no agent can), then records
+   `registry_namespace` in `docs/release-checks.json` (`"how": "dns: ..."`).
+   If the domain can't be verified, switch `MCP_NAME` and `"mcpName"` to
+   `io.github.fal3/wisply-mcp` (verified with `mcp-publisher login github` as
+   `fal3`, or as an owner if `fal3` is an organization) before the first
+   publish.
+4. **The first publish** is by hand, by the organization owner, with
    two-factor authentication.
-4. **From the second release,** only npm trusted publishing (OIDC from a
+5. **From the second release,** only npm trusted publishing (OIDC from a
    GitHub Actions release workflow in this repository, behind a protected
    environment) publishes, and the package's publishing access is set to
    "Require two-factor authentication and disallow tokens". This repository
    has no release workflow yet; until it does, no release claims provenance.
-5. **Every release** bumps `version` in `package.json` and `VERSION` in
+6. **Every release** bumps `version` in `package.json` and `VERSION` in
    `lib/constants.mjs` together. The snippets follow `PACKAGE_SPEC`; update
    the wisply.ai guide and Wisply's snippets to the new version.
 

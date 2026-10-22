@@ -225,7 +225,7 @@ test('setup removes every copy saved before, and stops before asking if one stay
 });
 
 test('a stored token that Wisply doesn\'t confirm stays stored, with the reason (exit 1)', async () => {
-  for (const outcome of ['unavailable', 'not-wisply', 'old-wisply', 'missing-scope', 'surprising']) {
+  for (const outcome of ['unavailable', 'not-wisply', 'old-wisply', 'missing-scope', 'keychain', 'surprising']) {
     const h = harness({ identity: outcome, paste: outcome === 'missing-scope' ? RECORDING : CONNECTOR });
     assert.equal(await run(['setup'], h), 1, outcome);
     assert.deepEqual(h.lines, [...INTRO, messages.STORED_UNCHECKED, messages.identityProblem(outcome, 51771, { terminal: true }),
@@ -239,6 +239,10 @@ test('a stored token that Wisply doesn\'t confirm stays stored, with the reason 
   assert.ok(messages.identityProblem('not-wisply', 51771, { terminal: true }).includes(messages.SETUP_COMMAND));
   assert.equal(messages.identityProblem('old-wisply', 51771), messages.UPDATE_WISPLY);
   assert.equal(messages.identityProblem('missing-scope', 51771), messages.UPDATE_WISPLY_SCOPE);
+  // Wisply's own 503 (it couldn't read its tokens from the Keychain) gets the same text as in a tool result.
+  assert.equal(messages.identityProblem('keychain', 51771), messages.keychainUnavailable(51771));
+  assert.equal(messages.identityProblem('keychain', 51771, { terminal: true }), messages.keychainUnavailable(51771));
+  assert.equal(messages.identityProblem('surprising', 51771, { terminal: true }), messages.TERMINAL_TEXTS.notWisply(51771));
   // A check that throws counts as nothing answering.
   const throwing = harness({ identity: () => { throw new Error('boom'); } });
   assert.equal(await run(['setup'], throwing), 1);
@@ -464,7 +468,8 @@ test('status reports each failed identity check with its message (exit 1)', asyn
     unavailable: 'Wisply: not answering on 127.0.0.1:51771',
     'not-wisply': 'Wisply: the program on 127.0.0.1:51771 failed the identity check',
     'old-wisply': 'Wisply: answered on 127.0.0.1:51771, but has no identity check',
-    'missing-scope': "Wisply: answered on 127.0.0.1:51771, but doesn't know recording-control tokens",
+    'missing-scope': 'Wisply: answered on 127.0.0.1:51771, but sent no proof for recording-control tokens',
+    keychain: "Wisply: answered on 127.0.0.1:51771, but couldn't read its MCP tokens from the Keychain",
   };
   for (const [outcome, line] of Object.entries(short)) {
     const h = harness({ item: RECORDING, identity: outcome });
@@ -490,6 +495,27 @@ test('status against the synthetic Wisply, with the token in the env', async (t)
   assert.equal(h.lines[3], 'Tools:  3 (start_recording, stop_recording, propose_follow_up)');
   assert.equal(fake.state.challenges[0].authorization, undefined);
   assert.equal(fake.state.calls.length, 0);
+});
+
+test('status and setup against a Wisply that can\'t read its tokens from the Keychain (its own 503)', async (t) => {
+  const fake = await startFakeWisply({ mode: 'keychain-locked' });
+  t.after(fake.close);
+  const env = { WISPLY_MCP_PORT: String(fake.port) };
+  const status = harness({ env, item: FAKE_TOKENS.connector });
+  assert.equal(await runCli(['status'], { ...status.deps, createLoopback }), 1);
+  assert.equal(status.lines[2], `Wisply: answered on 127.0.0.1:${fake.port}, but couldn't read its MCP tokens from the Keychain`);
+  assert.equal(status.lines[4], messages.keychainUnavailable(fake.port));
+  const setup = harness({ env, paste: FAKE_TOKENS.connector });
+  assert.equal(await runCli(['setup'], { ...setup.deps, createLoopback }), 1);
+  assert.deepEqual(setup.lines.slice(INTRO.length), [
+    messages.STORED_UNCHECKED, messages.keychainUnavailable(fake.port), messages.RESTART_NOTE,
+  ]);
+  assert.equal(setup.keychain.item, FAKE_TOKENS.connector, 'the token stays stored: Wisply has to reopen, not the user to redo setup');
+  // The token never went to the listener: identity challenges only, no Authorization, no call.
+  assert.ok(fake.state.challenges.length >= 2);
+  for (const challenge of fake.state.challenges) assert.equal(challenge.authorization, undefined);
+  assert.equal(fake.state.calls.length, 0);
+  for (const h of [status, setup]) assert.doesNotMatch(h.text, TOKEN_SHAPE);
 });
 
 test('forget removes the item, says when there was none, and reports a failure', async () => {
