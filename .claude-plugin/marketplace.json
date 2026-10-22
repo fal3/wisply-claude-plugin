@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "wisply",
+  "owner": {
+    "name": "Wisply",
+    "email": "support@fallah.io",
+    "url": "https://www.wisply.ai"
+  },
+  "metadata": {
+    "description": "Official Wisply plugins for Claude Code: read your Wisply memos from the Mac that runs Wisply.",
+    "version": "0.2.2"
+  },
+  "plugins": [
+    {
+      "name": "wisply-local",
+      "source": "./",
+      "description": "Read-only access to your Wisply memos, transcript excerpts, live transcript and action items from Claude Code on the Mac running Wisply, plus a status line and quote button for live recordings. Talks only to the Wisply app on 127.0.0.1.",
+      "version": "0.2.2",
+      "author": {
+        "name": "Alex Fallah",
+        "email": "support@fallah.io"
+      },
+      "homepage": "https://wisply.ai",
+      "repository": "https://github.com/fal3/wisply-claude-plugin",
+      "license": "MIT",
+      "category": "productivity",
+      "keywords": ["wisply", "meetings", "transcription", "mcp", "macos"]
+    }
+  ]
+}

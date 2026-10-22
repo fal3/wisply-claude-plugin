@@ -9,7 +9,7 @@
   "repository": "github:fal3/wisply-claude-plugin",
   "type": "module",
   "scripts": {
-    "test": "node --test shared.test.mjs bridge.test.mjs loopback.test.mjs",
+    "test": "node --test shared.test.mjs bridge.test.mjs loopback.test.mjs marketplace.test.mjs",
     "test:mod": "claude plugin test .",
     "validate": "claude plugin validate --strict .",
     "eval": "claude plugin eval ."
