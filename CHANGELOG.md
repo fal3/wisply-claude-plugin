@@ -20,15 +20,26 @@ All notable changes to `@wisply/mcp` are listed here. Versions follow
 - Plain tool errors for every failure (token not set or malformed, Wisply not
   answering, identity check failed, Wisply too old, tool outside the scope,
   another platform), none of which contain the token or the app's response.
-  Until `setup` exists they point only at `WISPLY_MCP_TOKEN`.
+  They point at `npx -y @wisply/mcp setup` and at `WISPLY_MCP_TOKEN`.
 - A JSON-RPC error from Wisply keeps its code, with a fixed message from the
   connector in place of Wisply's own text.
-- `setup`, `status`, `forget`, `print-config` and `install` answer "not in
-  this build yet" (exit 1).
+- `setup [--full-access]`: macOS's `security` asks for the token in the
+  terminal and stores it in the login keychain ("Wisply MCP token"; service
+  `ai.wisply.mcp`, account `token`), so the token never passes through the
+  connector's arguments or output. Setup reads it back once, removes a
+  full-access token unless `--full-access` and anything that isn't a Wisply
+  token, and runs the identity check on what it keeps. It needs a terminal.
+- `status`: where the token comes from (environment or Keychain, and whether
+  a placeholder was ignored), its scope, the port, whether Wisply answered and
+  proved it holds the token, and the tool count. It never prints the token.
+- `forget`: removes the Keychain item.
+- Without a usable `WISPLY_MCP_TOKEN`, the connector reads the Keychain item
+  (macOS only, 2 s budget).
+- `print-config` and `install` answer "not in this build yet" (exit 1).
 - Snippets pin the exact version (`@wisply/mcp@0.1.0`); `@wisply/mcp@0` is an
   opt-in for automatic 0.x updates.
 - The token from `WISPLY_MCP_TOKEN`; empty values and unresolved `${...}`
-  placeholders count as unset.
+  placeholders count as unset and fall through to the Keychain item.
 - `WISPLY_MCP_DEBUG=1`: one fixed-field line per request on stderr, never
   arguments, results or tokens.
 - `--help` and `--version`.
@@ -38,5 +49,4 @@ All notable changes to `@wisply/mcp` are listed here. Versions follow
 - The contract is provisional (transcribed from Wisply's tool catalog), so
   `package.json` is `"private"` and npm refuses to publish it until the
   contract is re-vendored from wisply-ai.
-- `setup`, `status` and `forget` (the macOS Keychain token), `print-config` and
-  `install`.
+- `print-config` and `install`.

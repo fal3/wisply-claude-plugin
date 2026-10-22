@@ -54,13 +54,27 @@ and milliseconds. Arguments, results, transcript text and headers are never
 logged, and every line is also scrubbed of anything shaped like a token.
 
 **The token at rest.** Don't put a token in an AI app's config file: those
-files end up in Settings Sync, dotfile repositories and backups. Let the app's
-secret storage pass it as `WISPLY_MCP_TOKEN`, or (from the first release) run
-`npx -y @wisply/mcp setup`, which keeps it in your login keychain. The Keychain
-item keeps the token out of config files, sync and backups. It does **not**
-stop another program running as you on this Mac from reading it, because the
-item trusts `/usr/bin/security`. Use the read-only connector token, and
-regenerate it in Wisply if you suspect malware.
+files end up in Settings Sync, dotfile repositories and backups. Run
+`npx -y @wisply/mcp setup`, which keeps it in your login keychain, or let the
+app's secret storage pass it as `WISPLY_MCP_TOKEN`.
+
+- The item is a generic password: service `ai.wisply.mcp`, account `token`,
+  label "Wisply MCP token", trusting `/usr/bin/security` only (`-T`, never
+  `-A`).
+- The connector reaches it only through `/usr/bin/security`, by absolute path,
+  with fixed arguments. `setup` lets `security` prompt for the token in the
+  terminal (`-w` as the last argument), so the token is never in an argument
+  list, a process listing or the connector's output. Reads come back through
+  a pipe and are given up after 2 seconds (a locked keychain or an unanswered
+  macOS dialog then counts as "no token").
+- `setup` reads the item back once and removes it again when it isn't a Wisply
+  token or is the full-access token without `--full-access`. `status` never
+  prints the token. `forget` removes the item.
+
+The Keychain item keeps the token out of config files, sync and backups. It
+does **not** stop another program running as you on this Mac from reading it,
+because the item trusts `/usr/bin/security`. Use the read-only connector
+token, and regenerate it in Wisply if you suspect malware.
 
 **What your AI app does with what it reads.** Whatever the AI app reads from
 Wisply goes to the AI service that app uses, under that service's terms.
@@ -86,7 +100,9 @@ so `npm publish` refuses the package.
 1. In Wisply, open **Settings > Integrations > MCP Server** and regenerate the
    token (connector, recording or full access). Every client using the old
    token stops working at once.
-2. Give the new token to your AI apps again.
+2. Run `npx -y @wisply/mcp setup` again with the new token, or give it to the
+   AI apps that keep it themselves. `npx -y @wisply/mcp forget` removes the
+   saved token if you don't need it any more.
 3. Turn the MCP server off in Wisply if you don't use it. Wisply stops
    answering MCP requests at once; if Wisply Companion is set up, the same
    local listener stays on for it.
@@ -104,9 +120,9 @@ package has never been published.
 2. **Before the first publish:** the contract is re-vendored from wisply-ai
    (`contract/SOURCE.json` no longer provisional, `WISPLY_RELEASE=1 npm test`
    passes), `"private": true` is removed from `package.json` in the same
-   change (`tests/pack.test.mjs` ties the two), the `setup`, `status` and
-   `forget` commands are in, and a test on a Mac has shown that no second
-   socket can listen on Wisply's port while Wisply runs.
+   change (`tests/pack.test.mjs` ties the two), `setup`, `status` and `forget`
+   have passed the manual Keychain QA on a Mac, and a test on a Mac has shown
+   that no second socket can listen on Wisply's port while Wisply runs.
 3. **The first publish** is by hand, by the organization owner, with
    two-factor authentication.
 4. **From the second release,** only npm trusted publishing (OIDC from a

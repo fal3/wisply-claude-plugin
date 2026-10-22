@@ -2,6 +2,8 @@
 // wisply-mcp: the Wisply MCP connector. With no command it serves MCP over
 // stdio (newline-delimited JSON-RPC) for the AI app that started it, and
 // bridges tools/call to the Wisply app on 127.0.0.1 (lib/bridge.mjs).
+// `setup`, `status` and `forget` are commands for people at a terminal
+// (lib/cli.mjs): they keep the token in the macOS login keychain.
 //
 // stdout carries JSON-RPC only. Requests are handled one at a time, in the
 // order they arrive. Diagnostics go to stderr only when WISPLY_MCP_DEBUG=1
@@ -10,6 +12,7 @@ import { createInterface } from 'node:readline';
 import contract from '../lib/contract.mjs';
 import { DEFAULT_PORT, PLANNED_COMMANDS, VERSION } from '../lib/constants.mjs';
 import { createBridge } from '../lib/bridge.mjs';
+import { CLI_COMMANDS, runCli } from '../lib/cli.mjs';
 import { debugLine } from '../lib/debug.mjs';
 import { createLoopback, parsePort } from '../lib/loopback.mjs';
 import { HELP, RPC, badPort, notInThisBuild, unknownArgument } from '../lib/messages.mjs';
@@ -93,4 +96,18 @@ async function serve({ port, readOnly, allowClaudeSetup }) {
   }
 }
 
-await serve(parseArgs(process.argv.slice(2), process.env));
+const argv = process.argv.slice(2);
+if (CLI_COMMANDS.includes(argv[0])) {
+  // A closed pipe (status | head) ends the output, not the process with an error.
+  process.stdout.on('error', () => {});
+  process.exitCode = await runCli(argv, {
+    env: process.env,
+    platform: process.platform,
+    // /usr/bin/security asks for the token on the terminal, so setup needs one.
+    isTTY: process.stdin.isTTY === true,
+    out: (text) => process.stdout.write(text),
+    err: (text) => process.stderr.write(text),
+  });
+} else {
+  await serve(parseArgs(argv, process.env));
+}

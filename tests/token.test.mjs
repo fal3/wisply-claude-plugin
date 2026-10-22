@@ -1,9 +1,19 @@
-// Token resolution from the environment, with an injected Keychain reader.
-// (The real Keychain reader, setup and forget arrive with DIST-M2.) Tokens
-// are synthetic.
+// Token resolution (environment first, then the Keychain) and the Keychain
+// item itself: read, interactive write and delete through /usr/bin/security.
+// Every `security` run here is a spy or a plain node child standing in for
+// it; no test ever touches a real keychain (on a Mac, the tests that would
+// run the real /usr/bin/security are skipped). Tokens are synthetic.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PLACEHOLDER_RE, defaultReadKeychain, redact, resolveToken } from '../lib/token.mjs';
+import { EventEmitter } from 'node:events';
+import { execFile as nodeExecFile } from 'node:child_process';
+import {
+  KEYCHAIN_ACCOUNT, KEYCHAIN_LABEL, KEYCHAIN_SERVICE, KEYCHAIN_TIMEOUT_MS, SECURITY_BIN,
+} from '../lib/constants.mjs';
+import {
+  DELETE_ARGS, ITEM_NOT_FOUND_EXIT, PLACEHOLDER_RE, READ_ARGS, WRITE_ARGS, defaultReadKeychain, deleteKeychain,
+  envToken, redact, resolveToken, writeKeychainInteractive,
+} from '../lib/token.mjs';
 
 const FULL = `wsp_${'5a'.repeat(32)}`;
 const CONNECTOR = `wspc_${'6b'.repeat(32)}`;
@@ -97,8 +107,233 @@ test('a Keychain that fails, answers nothing or answers junk is missing; nothing
   assert.equal((await resolveToken({ env: hostile, platform: 'darwin', readKeychain: keychain() })).problem, 'missing');
 });
 
-test('until DIST-M2 the default Keychain reader finds nothing', async () => {
+test('envToken classifies the variable without returning anything but a token', () => {
+  assert.deepEqual(envToken({ WISPLY_MCP_TOKEN: ` ${CONNECTOR} ` }), { kind: 'token', token: CONNECTOR });
+  for (const env of [undefined, {}, { WISPLY_MCP_TOKEN: '' }, { WISPLY_MCP_TOKEN: ' \n' }, { WISPLY_MCP_TOKEN: 42 }]) {
+    assert.deepEqual(envToken(env), { kind: 'unset' });
+  }
+  assert.deepEqual(envToken({ WISPLY_MCP_TOKEN: '${user_config.wisply_mcp_token}' }), { kind: 'placeholder' });
+  assert.deepEqual(envToken({ WISPLY_MCP_TOKEN: 'sk-synthetic' }), { kind: 'malformed' });
+});
+
+// --- The Keychain item through /usr/bin/security -------------------------
+
+const TOKEN_SHAPE = /wsp[cr]?_[0-9a-f]{64}/;
+
+/**
+ * An execFile spy standing in for /usr/bin/security. It records each run and
+ * answers with `stdout`, or fails with exit `code`, or (never) not at all.
+ */
+function fakeExecFile({ stdout = '', code = null, never = false, throws = false } = {}) {
+  const spy = (file, args, options, callback) => {
+    if (throws) throw new Error('spawn failed');
+    const child = new EventEmitter();
+    child.stdin = { end: () => { spy.stdinEnded += 1; } };
+    child.kill = (signal) => { spy.kills.push(signal); return true; };
+    spy.calls.push({ file, args, options });
+    if (!never) {
+      setImmediate(() => {
+        if (code === null) callback(null, stdout, '');
+        else callback(Object.assign(new Error(`Command failed: exit ${code}`), { code }), '', 'security: SecKeychainSearchCopyNext');
+      });
+    }
+    return child;
+  };
+  spy.calls = [];
+  spy.kills = [];
+  spy.stdinEnded = 0;
+  return spy;
+}
+
+test('the item and the security argument lists are fixed, absolute and token-free', () => {
+  assert.equal(SECURITY_BIN, '/usr/bin/security');
+  assert.equal(KEYCHAIN_SERVICE, 'ai.wisply.mcp');
+  assert.equal(KEYCHAIN_ACCOUNT, 'token');
+  assert.equal(KEYCHAIN_LABEL, 'Wisply MCP token');
+  assert.equal(KEYCHAIN_TIMEOUT_MS, 2000);
+  assert.equal(ITEM_NOT_FOUND_EXIT, (-25300) & 0xff, 'errSecItemNotFound as an exit status');
+  assert.deepEqual(READ_ARGS, ['find-generic-password', '-s', 'ai.wisply.mcp', '-a', 'token', '-w']);
+  assert.deepEqual(WRITE_ARGS, ['add-generic-password', '-U', '-s', 'ai.wisply.mcp', '-a', 'token', '-l', 'Wisply MCP token',
+    '-T', '/usr/bin/security', '-w']);
+  assert.deepEqual(DELETE_ARGS, ['delete-generic-password', '-s', 'ai.wisply.mcp', '-a', 'token']);
+  // -w last with no value: security prompts for the password itself.
+  assert.equal(WRITE_ARGS.at(-1), '-w');
+  for (const list of [READ_ARGS, WRITE_ARGS, DELETE_ARGS]) {
+    assert.ok(Object.isFrozen(list));
+    assert.ok(!list.includes('-A'), 'never "any application may read"');
+    for (const argument of list) assert.doesNotMatch(argument, TOKEN_SHAPE);
+  }
+});
+
+test('defaultReadKeychain runs find-generic-password -w with a 2 s budget and a pipe', async () => {
+  const execFile = fakeExecFile({ stdout: `${CONNECTOR}\n` });
+  assert.equal(await defaultReadKeychain({ execFile }), `${CONNECTOR}\n`);
+  assert.equal(execFile.calls.length, 1);
+  const [{ file, args, options }] = execFile.calls;
+  assert.equal(file, '/usr/bin/security');
+  assert.deepEqual(args, [...READ_ARGS]);
+  assert.equal(options.timeout, 2000);
+  assert.equal(options.killSignal, 'SIGKILL');
+  assert.equal(options.encoding, 'utf8');
+  assert.ok(options.maxBuffer <= 4096);
+  assert.equal(Object.hasOwn(options, 'stdio'), false, 'execFile pipes stdout back');
+  assert.equal(execFile.stdinEnded, 1, 'stdin is closed, so security can never wait for input');
+});
+
+test('defaultReadKeychain is null for no item, any failure, and a runner that throws', async () => {
+  for (const code of [ITEM_NOT_FOUND_EXIT, 1, 51, 128]) {
+    assert.equal(await defaultReadKeychain({ execFile: fakeExecFile({ code }) }), null, `exit ${code}`);
+  }
+  assert.equal(await defaultReadKeychain({ execFile: fakeExecFile({ throws: true }) }), null);
+});
+
+test('a read that never answers is null after exactly 2 s, and the child is killed', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const execFile = fakeExecFile({ never: true });
+  let result = 'pending';
+  const read = defaultReadKeychain({ execFile }).then((value) => { result = value; });
+  t.mock.timers.tick(KEYCHAIN_TIMEOUT_MS - 1);
+  await Promise.resolve();
+  assert.equal(result, 'pending');
+  t.mock.timers.tick(1);
+  await read;
+  assert.equal(result, null);
+  assert.deepEqual(execFile.kills, ['SIGKILL']);
+});
+
+// Real child processes standing in for /usr/bin/security (the file argument
+// is ignored), so the pipe, the timeout kill and the size cap are Node's own.
+const stand = (script) => (_file, _args, options, callback) => nodeExecFile(process.execPath, ['-e', script], options, callback);
+
+test('a real child: its stdout comes back through the pipe, and resolveToken takes it', async () => {
+  const execFile = stand(`process.stdout.write(${JSON.stringify(`${RECORDING}\n`)})`);
+  assert.equal(await defaultReadKeychain({ execFile }), `${RECORDING}\n`);
+  const result = await resolveToken({ env: {}, platform: 'darwin', readKeychain: () => defaultReadKeychain({ execFile }) });
+  assert.deepEqual(result, { token: RECORDING, source: 'keychain', problem: null, placeholderIgnored: false });
+});
+
+test('a real child that hangs is killed at the timeout; one that floods stdout is refused', async () => {
+  const started = Date.now();
+  assert.equal(await defaultReadKeychain({ execFile: stand('setInterval(() => {}, 1000)'), timeoutMs: 300 }), null);
+  assert.ok(Date.now() - started < 2000, 'answered at the timeout, not after the child chose to exit');
+  assert.equal(await defaultReadKeychain({ execFile: stand("process.stdout.write('a'.repeat(100000))") }), null);
+  assert.equal(await defaultReadKeychain({ execFile: stand('process.exit(44)') }), null);
+});
+
+test('placeholders fall through to the real reader, which runs the fixed find argv', async () => {
+  for (const value of ['${user_config.wisply_mcp_token}', '${input:wisply-token}', '${env:X}', '', '  ']) {
+    const execFile = fakeExecFile({ stdout: `${CONNECTOR}\n` });
+    const result = await resolveToken({
+      env: { WISPLY_MCP_TOKEN: value }, platform: 'darwin', readKeychain: () => defaultReadKeychain({ execFile }),
+    });
+    assert.deepEqual(result, { token: CONNECTOR, source: 'keychain', problem: null, placeholderIgnored: value.trim() !== '' }, value);
+    assert.deepEqual(execFile.calls.map((run) => run.args), [[...READ_ARGS]]);
+  }
+  // A valid env token means security never runs, and no argv ever holds a token.
+  const execFile = fakeExecFile({ stdout: `${FULL}\n` });
+  await resolveToken({ env: { WISPLY_MCP_TOKEN: CONNECTOR }, platform: 'darwin', readKeychain: () => defaultReadKeychain({ execFile }) });
+  assert.equal(execFile.calls.length, 0);
+});
+
+test('the Keychain holding junk, an empty value or a hex dump is no token', async () => {
+  for (const stdout of ['', '\n', 'not a token\n', `${'77'.repeat(40)}\n`, `${CONNECTOR} ${CONNECTOR}\n`]) {
+    const execFile = fakeExecFile({ stdout });
+    const result = await resolveToken({ env: {}, platform: 'darwin', readKeychain: () => defaultReadKeychain({ execFile }) });
+    assert.deepEqual(result, { token: null, source: null, problem: 'missing', placeholderIgnored: false }, JSON.stringify(stdout));
+  }
+});
+
+/** A spawn spy whose child exits as told, after the caller had a chance to look. */
+function fakeSpawn({ exit = [0, null], error = null, throws = false } = {}) {
+  const spy = (file, args, options) => {
+    if (throws) throw new Error('spawn failed');
+    spy.calls.push({ file, args, options });
+    const child = new EventEmitter();
+    spy.child = child;
+    setImmediate(() => {
+      spy.listenersDuring = spy.signals?.listenerCount('SIGINT');
+      if (error) child.emit('error', error);
+      else child.emit('exit', ...exit);
+    });
+    return child;
+  };
+  spy.calls = [];
+  return spy;
+}
+
+test('writeKeychainInteractive lets security prompt in the terminal: -w last, stdio inherited', async () => {
+  const signals = new EventEmitter();
+  const spawn = fakeSpawn();
+  spawn.signals = signals;
+  assert.equal(await writeKeychainInteractive({ spawn, signals }), 'written');
+  assert.equal(spawn.calls.length, 1);
+  const [{ file, args, options }] = spawn.calls;
+  assert.equal(file, '/usr/bin/security');
+  assert.deepEqual(args, [...WRITE_ARGS]);
+  assert.equal(args.at(-1), '-w');
+  assert.equal(options.stdio, 'inherit');
+  assert.equal(Object.hasOwn(options, 'env'), false);
+  for (const argument of args) assert.doesNotMatch(argument, TOKEN_SHAPE);
+  // Ctrl-C is left to security while it runs, and the handler is gone after.
+  assert.equal(spawn.listenersDuring, 1);
+  assert.equal(signals.listenerCount('SIGINT'), 0);
+});
+
+test('writeKeychainInteractive reports cancel, failure and a spawn error, and always lets go of SIGINT', async () => {
+  const cases = [
+    [{ exit: [1, null] }, 'failed'],
+    [{ exit: [null, 'SIGINT'] }, 'cancelled'],
+    [{ exit: [null, 'SIGTERM'] }, 'cancelled'],
+    [{ error: Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) }, 'failed'],
+    [{ throws: true }, 'failed'],
+  ];
+  for (const [options, expected] of cases) {
+    const signals = new EventEmitter();
+    assert.equal(await writeKeychainInteractive({ spawn: fakeSpawn(options), signals }), expected, JSON.stringify(options));
+    assert.equal(signals.listenerCount('SIGINT'), 0);
+  }
+  // A SIGINT while security runs doesn't end the write by itself; security's exit does.
+  const signals = new EventEmitter();
+  let finished = false;
+  const spawn = (file, args, options) => {
+    const child = new EventEmitter();
+    setImmediate(() => {
+      signals.emit('SIGINT');
+      setImmediate(() => {
+        assert.equal(finished, false);
+        child.emit('exit', null, 'SIGINT');
+      });
+    });
+    return child;
+  };
+  assert.equal(await writeKeychainInteractive({ spawn, signals }).finally(() => { finished = true; }), 'cancelled');
+  assert.equal(await writeKeychainInteractive({ spawn: () => null, signals }), 'failed');
+});
+
+test('deleteKeychain: deleted, not found (exit 44), failed, and a 2 s budget', async (t) => {
+  const execFile = fakeExecFile({ stdout: 'keychain: "/Users/synthetic/Library/Keychains/login.keychain-db"\n' });
+  assert.equal(await deleteKeychain({ execFile }), 'deleted');
+  const [{ file, args, options }] = execFile.calls;
+  assert.equal(file, '/usr/bin/security');
+  assert.deepEqual(args, [...DELETE_ARGS]);
+  assert.equal(options.timeout, 2000);
+  assert.ok(options.maxBuffer >= 16 * 1024, 'room for the attributes security prints');
+  assert.equal(await deleteKeychain({ execFile: fakeExecFile({ code: ITEM_NOT_FOUND_EXIT }) }), 'not-found');
+  assert.equal(await deleteKeychain({ execFile: fakeExecFile({ code: 1 }) }), 'failed');
+  assert.equal(await deleteKeychain({ execFile: fakeExecFile({ throws: true }) }), 'failed');
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const never = fakeExecFile({ never: true });
+  const pending = deleteKeychain({ execFile: never });
+  t.mock.timers.tick(KEYCHAIN_TIMEOUT_MS);
+  assert.equal(await pending, 'failed');
+  assert.deepEqual(never.kills, ['SIGKILL']);
+});
+
+test('off macOS the real reader and delete find no security binary and say so quietly', {
+  skip: process.platform === 'darwin' ? 'would run the real /usr/bin/security against your login keychain' : false,
+}, async () => {
   assert.equal(await defaultReadKeychain(), null);
+  assert.equal(await deleteKeychain(), 'failed');
   const result = await resolveToken({ env: {}, platform: 'darwin' });
   assert.deepEqual(result, { token: null, source: null, problem: 'missing', placeholderIgnored: false });
 });

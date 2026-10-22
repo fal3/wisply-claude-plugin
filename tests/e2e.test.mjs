@@ -129,11 +129,17 @@ test('an impostor never receives the token; an old Wisply is told to update', as
   assert.equal(noRecording.state.calls.length, 0);
 });
 
-test('without a token the connector still lists the read-only tools and explains the setup', async () => {
+// Without an env token the real bin falls through to the Keychain, which on
+// a Mac means the real /usr/bin/security and the developer's own login
+// keychain. Tests never read a real token, so on macOS this runs only in
+// tests/bridge.test.mjs and tests/cli.test.mjs, with injected readers.
+test('without a token the connector still lists the read-only tools and explains the setup', {
+  skip: process.platform === 'darwin' ? 'would read your login keychain through /usr/bin/security' : false,
+}, async () => {
   const result = await run({ env: { WISPLY_MCP_PORT: '1025' }, lines: [rpc(1, 'tools/list'), rpc(2, 'tools/call', { name: 'list_memos' })] });
   assert.equal(result.code, 0);
   assert.equal(result.responses[0].result.tools.length, 4);
-  const expected = process.platform === 'darwin' ? messages.SETUP : messages.notMac(process.platform);
+  const expected = messages.notMac(process.platform);
   assert.equal(toolText(result.responses[1]), expected);
   const placeholder = await run({ env: { WISPLY_MCP_TOKEN: '${user_config.wisply_mcp_token}' }, lines: [rpc(1, 'tools/call', { name: 'list_memos' })] });
   assert.equal(toolText(placeholder.responses[0]), expected);
