@@ -104,14 +104,16 @@
           "default": 51771,
           "minimum": 1024,
           "maximum": 65535,
-          "scope": "machine",
-          "markdownDescription": "The port of Wisply's MCP server on this Mac, as shown in Wisply > Settings > Integrations > MCP Server. Wisply reads this setting only from your user settings."
+          "scope": "application",
+          "ignoreSync": true,
+          "markdownDescription": "The port of Wisply's MCP server on this Mac, as shown in Wisply > Settings > Integrations > MCP Server. Wisply reads this setting only from your user settings on this computer: not from a workspace, a dev container or a remote machine, and Settings Sync doesn't copy it."
         },
         "wisply.mcp.allowClaudeSetup": {
           "type": "boolean",
           "default": false,
-          "scope": "machine",
-          "markdownDescription": "Offer Wisply's `setup_claude` tool to AI chat when a full-access token is set. The tool can replace the Anthropic API key saved in Wisply, so it is off by default. Wisply reads this setting only from your user settings, and Settings Sync doesn't copy it to your other machines."
+          "scope": "application",
+          "ignoreSync": true,
+          "markdownDescription": "Offer Wisply's `setup_claude` tool to AI chat when a full-access token is set with **Wisply: Set Token**. The tool can replace the Anthropic API key saved in Wisply, so it is off by default. Wisply reads this setting only from your user settings on this computer: not from a workspace, a dev container or a remote machine, and Settings Sync doesn't copy it to your other computers."
         }
       }
     }
@@ -120,7 +122,7 @@
     "build": "node esbuild.mjs",
     "test": "node esbuild.mjs --tests && node --test \"test/*.test.mjs\"",
     "typecheck": "tsc --noEmit",
-    "package": "WISPLY_DEV_PACKAGE=1 vsce package --no-dependencies --out wisply-dev.vsix",
+    "package": "node scripts/package-dev.mjs",
     "package:release": "vsce package --no-dependencies",
     "check": "npm run typecheck && npm test && npm run build && npm run package",
     "sync-vendor": "node scripts/sync-vendor.mjs",

@@ -9,9 +9,13 @@
 // That API has no step that runs when the server starts, so a token given to
 // it would sit in Cursor's server list. The extension passes none: the
 // bundled connector reads the token saved in the Mac Keychain
-// (Wisply: Store Token in the Mac Keychain…). The variables the connector
-// must not inherit are passed empty (stringEnv), which it treats as unset:
-// the API takes strings only.
+// (Wisply: Store Token in the Mac Keychain…). The extension registers it
+// without asking and never learns that token's scope, so the connector runs
+// with --read-only: Cursor's agent (auto-run included) gets only the
+// read-only memo tools, even if another app's `setup --full-access` left a
+// full-access token in the Keychain. The variables the connector must not
+// inherit are passed empty (stringEnv), which it treats as unset: the API
+// takes strings only.
 import type * as vscode from 'vscode';
 import { serverLaunch, stringEnv } from './provider';
 import type { Launch } from './provider';
@@ -43,9 +47,9 @@ export function getCursorMcp(vscodeModule: unknown): CursorMcpApi | null {
   return mcp as unknown as CursorMcpApi;
 }
 
-/** The config given to Cursor: the bundled connector, no token. */
+/** The config given to Cursor: the bundled connector, no token, read-only (the Keychain item's token). */
 export function cursorServerConfig(launch: Launch): CursorStdioServerConfig {
-  const { command, args, env } = serverLaunch(launch);
+  const { command, args, env } = serverLaunch(launch, 'keychain');
   return { name: CURSOR_SERVER_NAME, server: { command, args, env: stringEnv(env) } };
 }
 

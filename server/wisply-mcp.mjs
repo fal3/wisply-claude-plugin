@@ -504,7 +504,6 @@ var FULL_ACCESS_REFUSED = `That is Wisply's full-access token, so it wasn't save
 var unavailable = (port) => `Wisply isn't answering on 127.0.0.1:${port}. Open Wisply on this Mac and turn on Settings > Integrations > MCP Server.`;
 var UPDATE_WISPLY = "This version of Wisply has no identity check, so the token wasn't sent. Update Wisply from the Mac App Store.";
 var UPDATE_WISPLY_SCOPE = "This version of Wisply doesn't know recording-control tokens (wspr_), or couldn't read yours from the Keychain, so the token wasn't sent. Update Wisply, or quit and reopen it and copy the recording token again; or use the connector token.";
-var keychainUnavailable = (port) => `Wisply on 127.0.0.1:${port} couldn't read its MCP tokens from the Keychain, so the token wasn't sent. Quit and reopen Wisply, and allow Keychain access if macOS asks.`;
 var SCOPE_HINTS = Object.freeze({
   connector: "Use the full-access token for recording control and follow-ups.",
   recording: "Use the connector token to read memos.",
@@ -584,7 +583,6 @@ var KEYCHAIN_NOT_STORED = `macOS didn't store the token (the two entries may not
 var SETUP_MALFORMED = `That isn't a Wisply token (it should start with wspc_, wspr_ or wsp_ and have 64 hex characters), so it wasn't saved. Copy the read-only connector token from Wisply > Settings > Integrations > MCP Server and run \`${SETUP_COMMAND}\` again.`;
 var READ_BACK_FAILED = `macOS stored the token, but it couldn't be read back to check it, so it was removed again. Run \`${SETUP_COMMAND}\` again.`;
 var NO_ITEM_NOW = `Your login keychain holds no ${KEYCHAIN_LABEL} now.`;
-var removeFailed = (reason) => reason === "full-access" ? `That is Wisply's full-access token. It was stored, and removing it again failed. Run \`${FORGET_COMMAND}\` now, then \`${SETUP_COMMAND}\` with the read-only connector token.` : `The value macOS stored couldn't be kept, and removing it again failed. Run \`${FORGET_COMMAND}\`, then \`${SETUP_COMMAND}\` again.`;
 var stored = (port, scope2, count2) => `Stored. Wisply answered on 127.0.0.1:${port} and proved it holds this token (${SCOPE_LABELS[scope2]}: ${count2} tools).`;
 var STORED_UNCHECKED = `Stored in your login keychain as "${KEYCHAIN_LABEL}", but Wisply didn't confirm it:`;
 var FULL_ACCESS_SHARED = `Every AI app on this Mac that starts the connector without its own WISPLY_MCP_TOKEN now gets full access, including recording control and follow-ups. To undo this, run \`${SETUP_COMMAND}\` again with the read-only connector token.`;
@@ -595,13 +593,6 @@ var forgotten = (count2) => count2 <= 1 ? FORGOTTEN : `Removed ${count2} copies 
 var NOTHING_TO_FORGET = `Your login keychain holds no ${KEYCHAIN_LABEL}. Nothing was removed.`;
 var FORGET_FAILED = `Couldn't remove "${KEYCHAIN_LABEL}" from your login keychain. Open Keychain Access, search for "${KEYCHAIN_LABEL}" and delete every item it finds.`;
 var ENV_UNCHANGED = "Note: WISPLY_MCP_TOKEN is set in this shell; forget doesn't change it.";
-var identityProblem = (outcome, port, { terminal = false } = {}) => {
-  if (outcome === "unavailable") return unavailable(port);
-  if (outcome === "old-wisply") return UPDATE_WISPLY;
-  if (outcome === "missing-scope") return UPDATE_WISPLY_SCOPE;
-  if (outcome === "keychain") return keychainUnavailable(port);
-  return (terminal ? TERMINAL_TEXTS.notWisply : notWisply)(port);
-};
 var STATUS = Object.freeze({
   header: `wisply-mcp ${VERSION} status`,
   /**
@@ -665,6 +656,25 @@ var TOKEN_STEP = `run ${EDITOR_COMMANDS.setToken} from the Command Palette and r
 var SETUP2 = `Wisply MCP token is not set. In Wisply on this Mac, open Settings > Integrations > MCP Server and copy the read-only connector token. Then ${TOKEN_STEP}.`;
 var MALFORMED2 = `WISPLY_MCP_TOKEN is set but isn't a Wisply token (it should start with wspc_, wspr_ or wsp_ and have 64 hex characters). Copy the read-only connector token from Wisply > Settings > Integrations > MCP Server, then ${TOKEN_STEP}.`;
 var notWisply2 = (port) => `Wisply identity check failed: the program on 127.0.0.1:${port} couldn't prove it is the Wisply that issued this token, so the token wasn't sent. If you regenerated the token in Wisply, ${TOKEN_STEP}. Otherwise quit whatever is using that port.`;
+var keychainUnavailable = (port) => `Wisply on 127.0.0.1:${port} couldn't read its MCP tokens from the Keychain, so the token wasn't sent. Quit and reopen Wisply. If macOS asks for Keychain access, allow it only when the dialog names Wisply.`;
+var SETUP_AGAIN = `run ${EDITOR_COMMANDS.storeInKeychain} again from the Command Palette`;
+var DELETE_BY_HAND = `Open Keychain Access, search for "${KEYCHAIN_LABEL}" and delete every item it finds.`;
+var SETUP_NEEDS_TERMINAL2 = `setup needs a terminal: macOS asks for the token there, so it never passes through this program or its output. Run ${EDITOR_COMMANDS.storeInKeychain} from the Command Palette.`;
+var REPLACE_FAILED2 = `Couldn't remove the "${KEYCHAIN_LABEL}" saved before, so setup stopped before asking for the new token. ${DELETE_BY_HAND} Then ${SETUP_AGAIN}.`;
+var PREVIOUS_REMOVED2 = `The token saved before had already been removed, so AI apps that use "${KEYCHAIN_LABEL}" have no token until you ${SETUP_AGAIN} and it succeeds.`;
+var KEYCHAIN_NOT_STORED2 = `macOS didn't store the token (the two entries may not have matched). To try again, ${SETUP_AGAIN}.`;
+var SETUP_MALFORMED2 = `That isn't a Wisply token (it should start with wspc_, wspr_ or wsp_ and have 64 hex characters), so it wasn't saved. Copy the read-only connector token from Wisply > Settings > Integrations > MCP Server, then ${SETUP_AGAIN}.`;
+var READ_BACK_FAILED2 = `macOS stored the token, but it couldn't be read back to check it, so it was removed again. To try again, ${SETUP_AGAIN}.`;
+var FULL_ACCESS_REFUSED2 = `That is Wisply's full-access token, so it wasn't saved. To store the read-only connector token instead, ${SETUP_AGAIN}. If VS Code's AI chat needs recording control and follow-ups, use ${EDITOR_COMMANDS.setToken} instead: it asks you to confirm a full-access token. A token in the Mac Keychain only ever gets the read-only memo tools in this extension.`;
+var removeFailed = (reason) => (reason === "full-access" ? "That is Wisply's full-access token. It was stored, and removing it again failed. " : "The value macOS stored couldn't be kept, and removing it again failed. ") + `${DELETE_BY_HAND} Then ${SETUP_AGAIN} with the read-only connector token.`;
+var FULL_ACCESS_SHARED2 = `Every AI app on this Mac that starts the connector without its own WISPLY_MCP_TOKEN now gets full access, including recording control and follow-ups. To undo this, ${SETUP_AGAIN} with the read-only connector token.`;
+var identityProblem = (outcome, port, _options = {}) => {
+  if (outcome === "unavailable") return unavailable(port);
+  if (outcome === "old-wisply") return UPDATE_WISPLY;
+  if (outcome === "missing-scope") return UPDATE_WISPLY_SCOPE;
+  if (outcome === "keychain") return keychainUnavailable(port);
+  return notWisply2(port);
+};
 
 // vendor/wisply-mcp/lib/bridge.mjs
 var error = (id, code, message) => ({ jsonrpc: "2.0", id, error: { code, message } });
@@ -1226,20 +1236,20 @@ async function setup({ fullAccess, port }, io) {
     return 1;
   }
   if (!io.isTTY) {
-    say(SETUP_NEEDS_TERMINAL);
+    say(SETUP_NEEDS_TERMINAL2);
     return 1;
   }
   io.out(setupIntro({ fullAccess }));
   const before = await removeAll(io);
   if (!before.complete) {
-    say(REPLACE_FAILED);
+    say(REPLACE_FAILED2);
     return 1;
   }
   const written = await io.writeKeychain();
   if (written !== "written") {
     if (written === "cancelled") say(before.removed > 0 ? SETUP_CANCELLED_AFTER_REMOVAL : SETUP_CANCELLED);
-    else say(KEYCHAIN_NOT_STORED);
-    if (before.removed > 0) say(PREVIOUS_REMOVED);
+    else say(KEYCHAIN_NOT_STORED2);
+    if (before.removed > 0) say(PREVIOUS_REMOVED2);
     return 1;
   }
   let value = null;
@@ -1260,7 +1270,7 @@ async function setup({ fullAccess, port }, io) {
       say(removeFailed(refusal));
       return 1;
     }
-    say(refusal === "full-access" ? FULL_ACCESS_REFUSED : refusal === "malformed" ? SETUP_MALFORMED : READ_BACK_FAILED);
+    say(refusal === "full-access" ? FULL_ACCESS_REFUSED2 : refusal === "malformed" ? SETUP_MALFORMED2 : READ_BACK_FAILED2);
     say(NO_ITEM_NOW);
     return 1;
   }
@@ -1271,7 +1281,7 @@ async function setup({ fullAccess, port }, io) {
     say(STORED_UNCHECKED);
     say(identityProblem(outcome, port, { terminal: true }));
   }
-  if (scope2 === "full") say(FULL_ACCESS_SHARED);
+  if (scope2 === "full") say(FULL_ACCESS_SHARED2);
   say(RESTART_NOTE);
   if (envToken(io.env).kind === "token") say(ENV_WINS);
   return outcome === "ok" ? 0 : 1;

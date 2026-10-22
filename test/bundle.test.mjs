@@ -7,12 +7,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { buildServerBundle } from '../esbuild.mjs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import * as esbuild from 'esbuild';
+import { ROOT as BUILD_ROOT, buildServerBundle, editorMessagesPlugin } from '../esbuild.mjs';
 import { createProvider, serverLaunch, stringEnv } from '../out/test/provider.mjs';
 import { CONNECTION_TEXT, createSidecar, describeConnection } from '../out/test/sidecar.mjs';
 import { expectedProof } from '../vendor/wisply-mcp/lib/identity.mjs';
@@ -128,7 +129,7 @@ test('an exported WISPLY_MCP_ALLOW_CLAUDE_SETUP=1 doesn\'t reach the server VS C
 
 test('the same holds for Cursor\'s string-only config: empty values count as unset', async (t) => {
   const { dir, path } = loneBundle(t);
-  const { args, env } = serverLaunch({ execPath: process.execPath, serverPath: path, port: 51771, allowClaudeSetup: false });
+  const { args, env } = serverLaunch({ execPath: process.execPath, serverPath: path, port: 51771, allowClaudeSetup: false }, 'keychain');
   const result = await session(path, { cwd: dir, args: args.slice(1), env: { ...EXPORTED, ...stringEnv(env) } });
   assert.equal(result.code, 0, result.stderr);
   assert.equal(result.stderr, '');
@@ -137,7 +138,8 @@ test('the same holds for Cursor\'s string-only config: empty values count as uns
 
 test('the bundle answers with the editor texts: the extension\'s commands, never npx', async (t) => {
   const { dir, path } = loneBundle(t);
-  // The overlay replaces exactly the three texts that say where the token comes from.
+  // The overlay replaces the texts that say where the token comes from (the
+  // setup terminal's are covered below).
   for (const name of ['SETUP', 'MALFORMED']) {
     assert.notEqual(messages[name], vendoredMessages[name], name);
     assert.match(messages[name], /Wisply: Set Token from the Command Palette/);
@@ -276,6 +278,17 @@ test('end to end: an impostor on the port never sees the token', async (t) => {
     { kind: 'problem', text: messages.notWisply(impostor.port) });
 });
 
+test('the 503 advice never asks to approve a Keychain dialog that doesn\'t name Wisply', () => {
+  // Any program on the port can send that 503, so the text must not help it
+  // get a Keychain dialog of its own approved.
+  const text = messages.keychainUnavailable(51771);
+  assert.notEqual(text, vendoredMessages.keychainUnavailable(51771));
+  assert.match(text, /allow it only when the dialog names Wisply/);
+  assert.doesNotMatch(text, /allow Keychain access if macOS asks/);
+  assert.equal(messages.identityProblem('keychain', 51771), text);
+  assert.equal(messages.identityProblem('keychain', 51771, { terminal: true }), text);
+});
+
 test('end to end: a Wisply that can\'t read its Keychain gets no token, and Check Connection says what to do', async (t) => {
   const wisply = await startFakeWisply(t, { keychainFailure: true });
   const { path } = loneBundle(t);
@@ -366,4 +379,101 @@ test('end to end in Cursor: the check passes and points to the Keychain, which C
   assert.deepEqual(info.buttons, [BUTTONS.storeInKeychain]);
   // Cursor's registration never got the token.
   assert.doesNotMatch(JSON.stringify(vs.cursor.mcp.registered), /wsp[cr]?_[0-9a-f]{64}/);
+});
+
+// --- The setup terminal (Wisply: Store Token in the Mac Keychain) ----------
+
+/**
+ * lib/cli.mjs as the bundle has it: built with the same overlay plugin, so
+ * runCli can be driven through every path of `setup` with fakes for the
+ * Keychain and Wisply. The terminal runs the bundle itself, so a text naming
+ * `wisply-mcp setup` (or `--full-access`, `forget`) would send the user to a
+ * command that doesn't exist in the editor.
+ */
+async function overlaidCli(t) {
+  const result = await esbuild.build({
+    absWorkingDir: BUILD_ROOT, entryPoints: ['vendor/wisply-mcp/lib/cli.mjs'], plugins: [editorMessagesPlugin()],
+    bundle: true, platform: 'node', format: 'esm', target: 'node20', write: false, logLevel: 'silent',
+  });
+  const dir = mkdtempSync(join(tmpdir(), 'wisply-cli-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = join(dir, 'cli.mjs');
+  writeFileSync(file, result.outputFiles[0].contents);
+  return import(pathToFileURL(file).href);
+}
+
+/**
+ * One `setup` run. `deletes` is what each delete-generic-password run answers
+ * ('deleted', 'not-found' or 'failed'), in order; then 'not-found'.
+ */
+async function runSetup(cli, { platform = 'darwin', isTTY = true, deletes = [], write = 'written', read, outcome = 'ok' } = {}) {
+  const queue = [...deletes];
+  let output = '';
+  const code = await cli.runCli(['setup', '--port', '51771'], {
+    env: {}, platform, isTTY,
+    out: (text) => { output += text; },
+    err: (text) => { output += text; },
+    deleteKeychain: async () => queue.shift() ?? 'not-found',
+    writeKeychain: async () => write,
+    readKeychain: async () => {
+      if (read instanceof Error) throw read;
+      return read;
+    },
+    createLoopback: () => ({ identity: async () => ({ outcome }) }),
+  });
+  return { code, output };
+}
+
+test('every text the setup terminal can print points to the extension\'s commands, never to wisply-mcp or npx', async (t) => {
+  const cli = await overlaidCli(t);
+  const runs = {
+    notMac: await runSetup(cli, { platform: 'linux' }),
+    noTerminal: await runSetup(cli, { isTTY: false }),
+    replaceFailed: await runSetup(cli, { deletes: ['failed'] }),
+    cancelled: await runSetup(cli, { write: 'cancelled' }),
+    cancelledAfterRemoval: await runSetup(cli, { deletes: ['deleted'], write: 'cancelled' }),
+    notStored: await runSetup(cli, { write: 'failed' }),
+    notStoredAfterRemoval: await runSetup(cli, { deletes: ['deleted'], write: 'failed' }),
+    readBackFailed: await runSetup(cli, { read: new Error('no item') }),
+    malformed: await runSetup(cli, { read: 'not-a-token' }),
+    fullAccess: await runSetup(cli, { read: FAKE_TOKENS.full }),
+    removeFailedFull: await runSetup(cli, { read: FAKE_TOKENS.full, deletes: ['not-found', 'failed'] }),
+    removeFailedMalformed: await runSetup(cli, { read: 'not-a-token', deletes: ['not-found', 'failed'] }),
+    removeFailedUnreadable: await runSetup(cli, { read: new Error('no item'), deletes: ['not-found', 'failed'] }),
+  };
+  for (const outcome of ['ok', 'unavailable', 'not-wisply', 'old-wisply', 'missing-scope', 'keychain']) {
+    runs[`identity:${outcome}`] = await runSetup(cli, { read: FAKE_TOKENS.connector, outcome });
+  }
+
+  for (const [name, { output }] of Object.entries(runs)) {
+    assert.ok(output.length > 0, name);
+    assert.doesNotMatch(output, /wisply-mcp|npx|@wisply\/mcp|--full-access/, `${name}: ${output}`);
+    assert.match(output, /^[\x20-\x7e\n]*$/, `${name} is ASCII`);
+  }
+  // The overlay's texts are the ones printed.
+  assert.ok(runs.fullAccess.output.includes(messages.FULL_ACCESS_REFUSED));
+  assert.match(messages.FULL_ACCESS_REFUSED, /Wisply: Store Token in the Mac Keychain again/);
+  assert.match(messages.FULL_ACCESS_REFUSED, /use Wisply: Set Token instead/);
+  assert.ok(runs.malformed.output.includes(messages.SETUP_MALFORMED));
+  assert.ok(runs.readBackFailed.output.includes(messages.READ_BACK_FAILED));
+  assert.ok(runs.notStored.output.includes(messages.KEYCHAIN_NOT_STORED));
+  assert.ok(runs.notStoredAfterRemoval.output.includes(messages.PREVIOUS_REMOVED));
+  assert.ok(runs.replaceFailed.output.includes(messages.REPLACE_FAILED));
+  assert.ok(runs.noTerminal.output.includes(messages.SETUP_NEEDS_TERMINAL));
+  for (const reason of ['full-access', 'malformed', 'unreadable']) {
+    const key = { 'full-access': 'removeFailedFull', malformed: 'removeFailedMalformed', unreadable: 'removeFailedUnreadable' }[reason];
+    assert.ok(runs[key].output.includes(messages.removeFailed(reason)), reason);
+    assert.match(messages.removeFailed(reason), /Keychain Access/);
+  }
+  assert.ok(runs['identity:not-wisply'].output.includes(messages.notWisply(51771)));
+  assert.ok(runs['identity:keychain'].output.includes(messages.keychainUnavailable(51771)));
+  assert.equal(runs['identity:ok'].code, 0);
+  for (const [name, run] of Object.entries(runs)) if (name !== 'identity:ok') assert.equal(run.code, 1, name);
+
+  // The vendored texts it replaces named the connector's commands.
+  for (const name of ['FULL_ACCESS_REFUSED', 'SETUP_MALFORMED', 'READ_BACK_FAILED', 'KEYCHAIN_NOT_STORED', 'PREVIOUS_REMOVED',
+    'REPLACE_FAILED', 'SETUP_NEEDS_TERMINAL', 'FULL_ACCESS_SHARED']) {
+    assert.match(vendoredMessages[name], /wisply-mcp/, name);
+    assert.doesNotMatch(messages[name], /wisply-mcp|npx|--full-access/, name);
+  }
 });

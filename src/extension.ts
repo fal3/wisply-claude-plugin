@@ -76,13 +76,14 @@ export const TEXT = Object.freeze({
 
 /**
  * The token-free entry that Copy Config puts on the clipboard: the connector
- * bundled in this extension, on the editor's own Node, as the provider and
- * Cursor's API start it. Never an npm package: the extension needs no npx,
- * and the package name isn't Wisply's yet. WISPLY_MCP_TOKEN is left out, so
- * the entry doesn't invite a pasted token; the connector reads the Keychain.
+ * bundled in this extension, on the editor's own Node, as Cursor's API
+ * starts it. Never an npm package: the extension needs no npx, and the
+ * package name isn't Wisply's yet. WISPLY_MCP_TOKEN is left out, so the
+ * entry doesn't invite a pasted token; the connector reads the Keychain,
+ * with --read-only like every Keychain connector the extension sets up.
  */
 export function manualConfig(launch: Launch): string {
-  const { command, args, env } = serverLaunch(launch);
+  const { command, args, env } = serverLaunch(launch, 'keychain');
   const { WISPLY_MCP_TOKEN: _token, ...kept } = stringEnv(env);
   return `${JSON.stringify({ mcpServers: { [SERVER_KEY]: { command, args, env: kept } } }, null, 2)}\n`;
 }
@@ -234,7 +235,7 @@ export function activateExtension(vs: VscodeModule, context: vscode.ExtensionCon
   // still has the old token in its environment.
   subscriptions.push(tokens.onDidChange(() => {
     void sidecar.sync();
-    provider?.tokenChanged();
+    void provider?.tokenChanged();
   }));
   subscriptions.push(vs.workspace.onDidChangeConfiguration((event) => {
     if (!affectsWisply(event)) return;

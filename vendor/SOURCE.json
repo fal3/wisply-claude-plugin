@@ -88,6 +88,6 @@
       "vendor/wisply-mcp/lib/messages.mjs": "src/editor-messages.mjs"
     },
     "esbuild": "0.28.2",
-    "sha256": "e69ce4245c656fcdd3b7e67cd54a228457d822838cea96a34bbe849afc98dd24"
+    "sha256": "6a4647095470bf82ce01680abe1f3b9e7b313503d7577b8d43a985096066c5ed"
   }
 }

@@ -59,13 +59,19 @@ test('package.json declares exactly the settings the extension reads', () => {
   assert.deepEqual(Object.keys(properties).sort(), [...SETTING_IDS].sort());
 });
 
-test('every setting is user-level only and stays on this machine: machine scope (Settings Sync skips it)', () => {
+test('every setting is local user settings only (application scope) and stays on this computer (ignoreSync)', () => {
+  // `machine` would also take remote settings, which a repository can write
+  // (a dev container's customizations.vscode.settings, Remote-SSH machine
+  // settings), and inspect().globalValue merges them in. VS Code never reads
+  // an application setting from remote settings.
   for (const [id, property] of Object.entries(properties)) {
-    assert.equal(property.scope, 'machine', `${id} has scope ${property.scope}`);
+    assert.equal(property.scope, 'application', `${id} has scope ${property.scope}`);
+    assert.equal(property.ignoreSync, true, `${id} would be synced`);
+    assert.match(property.markdownDescription, /only from your user settings on this computer: not from a workspace, a dev container or a remote machine/, id);
+    assert.match(property.markdownDescription, /Settings Sync doesn't copy it/, id);
   }
-  // Turning setup_claude on for one Mac must not turn it on in every synced editor.
-  assert.equal(properties['wisply.mcp.allowClaudeSetup'].scope, 'machine');
-  assert.match(properties['wisply.mcp.allowClaudeSetup'].markdownDescription, /Settings Sync doesn't copy it/);
+  // The spec's guarantee in one line: a repository can't turn on setup_claude.
+  assert.equal(properties['wisply.mcp.allowClaudeSetup'].scope, 'application');
 });
 
 test('Restricted Mode: limited, with every setting restricted', () => {

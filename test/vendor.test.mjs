@@ -15,7 +15,8 @@ import { fileURLToPath } from 'node:url';
 import { EDITOR_MESSAGES, VENDORED_MESSAGES } from '../esbuild.mjs';
 import { releaseProblems } from '../scripts/release-gate.mjs';
 import {
-  MCP_DIR, MCP_REPOSITORY, PLUGIN_FILES, PLUGIN_REPOSITORY, SOURCE_FILE, VENDOR_SCHEMA, isOnRef, isVendoredMcpPath,
+  MCP_DIR, MCP_REMOTE, MCP_REMOTE_RE, MCP_REPOSITORY, PLUGIN_FILES, PLUGIN_REPOSITORY, SOURCE_FILE, VENDOR_SCHEMA, isOnRef,
+  isVendoredMcpPath, validRef, verifyOnUpstreamMain,
 } from '../scripts/sync-vendor.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -92,7 +93,7 @@ test('the vendored connector is the reviewed DIST-M2 state or later: the Keychai
 });
 
 test('release: refused while anything the release gate checks isn\'t final', { skip: process.env.WISPLY_RELEASE !== '1' }, () => {
-  assert.deepEqual(releaseProblems({ source }), []);
+  assert.deepEqual(releaseProblems({ source, readme: readFileSync(join(ROOT, 'README.md'), 'utf8') }), []);
 });
 
 test('isOnRef: a commit on the branch, the tip itself, and one that isn\'t', (t) => {
@@ -134,6 +135,74 @@ test('upstream: the vendored bytes are the files at the recorded commits, and no
     .split('\n').filter(isVendoredMcpPath).sort();
   assert.deepEqual(Object.values(mcp.files).map((entry) => entry.upstream).sort(), tree);
   assert.equal(relative(ROOT, join(ROOT, MCP_DIR)), 'vendor/wisply-mcp');
-  // A recorded main is a claim the release gate trusts: the commit has to be on it.
-  if (mcp.ref === 'main') assert.ok(isOnRef(process.env.WISPLY_MCP_DIR, mcp.commit, 'main'), `${mcp.commit} is not on main`);
+  // A recorded main is a claim the release gate trusts: the commit has to be
+  // on the origin/main tip sync-vendor checked against.
+  if (mcp.ref === 'main') {
+    assert.equal(mcp.remote, MCP_REMOTE);
+    assert.ok(isOnRef(process.env.WISPLY_MCP_DIR, mcp.commit, mcp.remote_main), `${mcp.commit} is not on ${mcp.remote_main}`);
+  }
+});
+
+test('sync-vendor passes git only names: nothing that starts with "-", no "..", no empty value', () => {
+  for (const good of ['main', 'claude/distribution-3', 'b0869896e4f3028f12255134799f1a7b40ec40fe', 'refs/remotes/origin/main', 'v0.1.0']) {
+    assert.equal(validRef(good), true, good);
+  }
+  for (const bad of ['', '-x', '--upload-pack=touch /tmp/x', '--output=/tmp/x', 'a..b', 'main/', 'x.lock', 'a b', 'a;b', '$(id)', undefined, 1]) {
+    assert.equal(validRef(bad), false, String(bad));
+  }
+  // isOnRef refuses such a value before git sees it.
+  assert.equal(isOnRef(ROOT, '--all', 'main'), false);
+  assert.equal(isOnRef(ROOT, 'HEAD', '--output=/dev/null'), false);
+});
+
+test('origin must be github.com/fal3/wisply-mcp for --mcp-ref main', () => {
+  for (const url of ['https://github.com/fal3/wisply-mcp', 'https://github.com/fal3/wisply-mcp.git', 'git@github.com:fal3/wisply-mcp.git',
+    'ssh://git@github.com/fal3/wisply-mcp']) {
+    assert.ok(MCP_REMOTE_RE.test(url), url);
+  }
+  for (const url of ['https://github.com/fal3/wisply-claude-plugin', 'https://github.com/someone/wisply-mcp',
+    'https://github.com/fal3/wisply-mcp-fork', '/home/user/wisply-mcp', 'https://example.com/fal3/wisply-mcp']) {
+    assert.equal(MCP_REMOTE_RE.test(url), false, url);
+  }
+});
+
+test('verifyOnUpstreamMain: only a commit on GitHub\'s main counts, never the checkout\'s own main', (t) => {
+  // "GitHub" is a local bare repository here: a global git config rewrites
+  // the github.com URL to it (url.<path>.insteadOf), so origin's configured
+  // URL is the real one and nothing touches the network.
+  const dir = mkdtempSync(join(tmpdir(), 'wisply-upstream-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const globalConfig = join(dir, 'gitconfig');
+  const bare = join(dir, 'upstream.git');
+  const env = {
+    PATH: process.env.PATH, HOME: dir, GIT_CONFIG_GLOBAL: globalConfig, GIT_CONFIG_NOSYSTEM: '1',
+    GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.invalid', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.invalid',
+  };
+  const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', env }).trim();
+  writeFileSync(globalConfig, `[url "${bare}"]\n\tinsteadOf = ${MCP_REMOTE}\n[init]\n\tdefaultBranch = main\n`);
+  execFileSync('git', ['init', '-q', '--bare', '-b', 'main', bare], { env });
+
+  const work = join(dir, 'work');
+  execFileSync('git', ['init', '-q', '-b', 'main', work], { env });
+  git(work, 'remote', 'add', 'origin', MCP_REMOTE);
+  const commit = (name) => {
+    writeFileSync(join(work, name), name);
+    git(work, 'add', name);
+    git(work, 'commit', '-q', '-m', name);
+    return git(work, 'rev-parse', 'HEAD');
+  };
+  const pushed = commit('a');
+  git(work, 'push', '-q', 'origin', 'main');
+  const localOnly = commit('b');
+
+  assert.equal(isOnRef(work, localOnly, 'main'), true, 'the local main has it...');
+  assert.throws(() => verifyOnUpstreamMain(work, localOnly, { env }), /is not on https:\/\/github\.com\/fal3\/wisply-mcp main/,
+    '...but GitHub\'s main doesn\'t');
+  assert.deepEqual(verifyOnUpstreamMain(work, pushed, { env }), { remote: MCP_REMOTE, mainTip: pushed });
+
+  // A checkout of another repository, or none at all, is refused before any fetch.
+  git(work, 'remote', 'set-url', 'origin', 'https://github.com/fal3/wisply-claude-plugin');
+  assert.throws(() => verifyOnUpstreamMain(work, pushed, { env }), /has origin https:\/\/github\.com\/fal3\/wisply-claude-plugin/);
+  git(work, 'remote', 'remove', 'origin');
+  assert.throws(() => verifyOnUpstreamMain(work, pushed, { env }), /has no origin remote/);
 });

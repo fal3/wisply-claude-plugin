@@ -74,7 +74,10 @@ test('npm runs no install scripts here; only vsce\'s prepublish hook exists', ()
   for (const name of lifecycle) assert.equal(Object.hasOwn(manifest.scripts, name), false, name);
   // vsce and ovsx run vscode:prepublish before they package or publish: the release gate first.
   assert.equal(manifest.scripts['vscode:prepublish'], 'node scripts/release-gate.mjs && node esbuild.mjs');
-  assert.equal(manifest.scripts.package, 'WISPLY_DEV_PACKAGE=1 vsce package --no-dependencies --out wisply-dev.vsix');
+  // The development package comes from a copy of the manifest under another
+  // name and a prerelease version (scripts/package-dev.mjs; test/release.test.mjs).
+  assert.equal(manifest.scripts.package, 'node scripts/package-dev.mjs');
+  assert.doesNotMatch(JSON.stringify(manifest.scripts), /WISPLY_DEV_PACKAGE/);
   assert.equal(manifest.scripts['package:release'], 'vsce package --no-dependencies');
   assert.match(manifest.scripts.check, /typecheck.*test.*build.*npm run package$/);
 });

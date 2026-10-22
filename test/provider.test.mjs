@@ -2,8 +2,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  ALLOW_CLAUDE_SETUP_FLAG, PROVIDER_ID, REMOVED_ENV, SERVER_LABEL, buildDefinition, createProvider, definitionVersion,
-  serverLaunch, stringEnv,
+  ALLOW_CLAUDE_SETUP_FLAG, PROVIDER_ID, READ_ONLY_FLAG, REMOVED_ENV, SERVER_LABEL, buildDefinition, createProvider,
+  definitionVersion, serverLaunch, stringEnv,
 } from '../out/test/provider.mjs';
 import { FAKE_TOKENS, FakeEventEmitter, FakeMcpStdioServerDefinition } from './fixtures/fake-vscode.mjs';
 
@@ -22,7 +22,7 @@ const FULL = Object.freeze({ token: FAKE_TOKENS.full, scope: 'full' });
 const REMOVED = Object.freeze({ WISPLY_MCP_TOKEN: null, WISPLY_MCP_ALLOW_CLAUDE_SETUP: null, WISPLY_MCP_DEBUG: null, NODE_OPTIONS: null });
 const BASE_ENV = Object.freeze({ ELECTRON_RUN_AS_NODE: '1', WISPLY_MCP_PORT: '51771', ...REMOVED });
 
-function setup({ stored = null, entered, launch = LAUNCH, platform = 'darwin' } = {}) {
+function setup({ stored = null, entered, launch = LAUNCH, platform = 'darwin', storeFails = false } = {}) {
   const calls = { prompts: 0, stores: [] };
   let token = stored;
   const wisply = createProvider(api, {
@@ -30,7 +30,11 @@ function setup({ stored = null, entered, launch = LAUNCH, platform = 'darwin' } 
     getLaunch: () => launch,
     getToken: async () => token,
     promptForToken: async () => { calls.prompts += 1; return entered; },
-    storeToken: async (value) => { calls.stores.push(value); token = value; },
+    storeToken: async (value) => {
+      calls.stores.push(value);
+      if (storeFails) throw new Error('secret storage unavailable');
+      token = value;
+    },
     createEmitter: () => new FakeEventEmitter(),
   });
   return { wisply, calls, setToken: (value) => { token = value; } };
@@ -55,11 +59,11 @@ test('the definition removes what the connector must not inherit from the extens
   assert.deepEqual({ ...REMOVED_ENV }, REMOVED);
   // The editor merges the definition's env over its own, so a value exported
   // in the user's shell for another app must be removed (null), not left out.
-  for (const allowClaudeSetup of [false, true]) {
-    const { env, args } = serverLaunch({ ...LAUNCH, allowClaudeSetup });
+  for (const [allowClaudeSetup, source] of [[false, 'secret-storage'], [true, 'secret-storage'], [true, 'keychain']]) {
+    const { env, args } = serverLaunch({ ...LAUNCH, allowClaudeSetup }, source);
     assert.equal(Object.hasOwn(env, 'WISPLY_MCP_ALLOW_CLAUDE_SETUP'), true);
     assert.equal(env.WISPLY_MCP_ALLOW_CLAUDE_SETUP, null, 'only the user setting (the flag) decides');
-    assert.equal(args.includes(ALLOW_CLAUDE_SETUP_FLAG), allowClaudeSetup);
+    assert.equal(args.includes(ALLOW_CLAUDE_SETUP_FLAG), allowClaudeSetup && source === 'secret-storage');
     assert.equal(env.WISPLY_MCP_TOKEN, null);
     assert.equal(env.NODE_OPTIONS, null);
     assert.equal(env.WISPLY_MCP_DEBUG, null);
@@ -67,14 +71,24 @@ test('the definition removes what the connector must not inherit from the extens
 });
 
 test('stringEnv: a removed variable becomes empty, which the connector treats as unset', () => {
-  assert.deepEqual(stringEnv(serverLaunch(LAUNCH).env), {
+  assert.deepEqual(stringEnv(serverLaunch(LAUNCH, 'keychain').env), {
     ELECTRON_RUN_AS_NODE: '1', WISPLY_MCP_PORT: '51771', WISPLY_MCP_TOKEN: '', WISPLY_MCP_ALLOW_CLAUDE_SETUP: '',
     WISPLY_MCP_DEBUG: '', NODE_OPTIONS: '',
   });
 });
 
+test('a token from the Mac Keychain gets --read-only, whatever the settings', () => {
+  assert.equal(READ_ONLY_FLAG, '--read-only');
+  for (const allowClaudeSetup of [false, true]) {
+    assert.deepEqual(serverLaunch({ ...LAUNCH, allowClaudeSetup }, 'keychain').args, [LAUNCH.serverPath, READ_ONLY_FLAG]);
+  }
+  // A provided definition with no token stored is the Keychain case.
+  assert.deepEqual(buildDefinition(api, { ...LAUNCH, allowClaudeSetup: true, scope: null }).args, [LAUNCH.serverPath, READ_ONLY_FLAG]);
+  assert.deepEqual(buildDefinition(api, { ...LAUNCH, scope: 'connector' }).args, [LAUNCH.serverPath]);
+});
+
 test('--allow-claude-setup is added only with the user setting, and changes the version', () => {
-  assert.deepEqual(serverLaunch(LAUNCH).args, [LAUNCH.serverPath]);
+  assert.deepEqual(serverLaunch(LAUNCH, 'secret-storage').args, [LAUNCH.serverPath]);
   const allowed = buildDefinition(api, { ...LAUNCH, allowClaudeSetup: true, scope: 'full' });
   assert.deepEqual(allowed.args, [LAUNCH.serverPath, ALLOW_CLAUDE_SETUP_FLAG]);
   assert.equal(ALLOW_CLAUDE_SETUP_FLAG, '--allow-claude-setup');
@@ -148,18 +162,62 @@ test('resolve adds the stored token to a copy and leaves the provided definition
 test('with no token stored, starting asks once, stores the answer and uses it', async () => {
   const { wisply, calls } = setup({ entered: CONNECTOR });
   const [provided] = await wisply.provider.provideMcpServerDefinitions({ isCancellationRequested: false });
+  assert.deepEqual(provided.args, [LAUNCH.serverPath, READ_ONLY_FLAG], 'listed before a token exists: the Keychain case');
   const resolved = await wisply.provider.resolveMcpServerDefinition(provided, { isCancellationRequested: false });
   assert.equal(calls.prompts, 1);
   assert.deepEqual(calls.stores, [CONNECTOR]);
   assert.equal(resolved.env.WISPLY_MCP_TOKEN, FAKE_TOKENS.connector);
+  assert.deepEqual(resolved.args, [LAUNCH.serverPath], 'started with the entered token, not read-only');
+  assert.equal(resolved.version, provided.version);
 });
 
-test('a cancelled prompt still starts the server without a token (the Keychain item), and isn\'t repeated', async () => {
+test('the change event for the token resolve stored doesn\'t give a new version; the next change does', async () => {
+  const { wisply, setToken } = setup({ entered: CONNECTOR });
+  let fired = 0;
+  wisply.provider.onDidChangeMcpServerDefinitions(() => { fired += 1; });
+  const [provided] = await wisply.provider.provideMcpServerDefinitions({ isCancellationRequested: false });
+  await wisply.provider.resolveMcpServerDefinition(provided, { isCancellationRequested: false });
+  // SecretStorage reports the store resolve made.
+  await wisply.tokenChanged();
+  assert.equal(fired, 0, 'the server that just started already has this token');
+  // Any later change counts, the same token stored again in another window included.
+  setToken({ token: `wspc_${'4d'.repeat(32)}`, scope: 'connector' });
+  await wisply.tokenChanged();
+  assert.equal(fired, 1);
+  const [next] = await wisply.provider.provideMcpServerDefinitions({ isCancellationRequested: false });
+  assert.equal(next.version, '0.1.0+connector.token1');
+});
+
+test('if another token arrived before resolve\'s own event, the change counts', async () => {
+  const { wisply, setToken } = setup({ entered: CONNECTOR });
+  let fired = 0;
+  wisply.provider.onDidChangeMcpServerDefinitions(() => { fired += 1; });
+  const [provided] = await wisply.provider.provideMcpServerDefinitions({ isCancellationRequested: false });
+  await wisply.provider.resolveMcpServerDefinition(provided, { isCancellationRequested: false });
+  setToken(FULL);
+  await wisply.tokenChanged();
+  assert.equal(fired, 1, 'the stored token is no longer the one this start got');
+});
+
+test('a token that couldn\'t be stored is still used for this start, and no event is waited for', async () => {
+  const { wisply, calls } = setup({ entered: CONNECTOR, storeFails: true });
+  let fired = 0;
+  wisply.provider.onDidChangeMcpServerDefinitions(() => { fired += 1; });
+  const [provided] = await wisply.provider.provideMcpServerDefinitions({ isCancellationRequested: false });
+  const resolved = await wisply.provider.resolveMcpServerDefinition(provided, { isCancellationRequested: false });
+  assert.equal(calls.stores.length, 1);
+  assert.equal(resolved.env.WISPLY_MCP_TOKEN, FAKE_TOKENS.connector);
+  await wisply.tokenChanged();
+  assert.equal(fired, 1, 'a later change from elsewhere is a change');
+});
+
+test('a cancelled prompt still starts the server without a token (the Keychain item, read-only), and isn\'t repeated', async () => {
   const { wisply, calls } = setup({ entered: undefined });
   const [provided] = await wisply.provider.provideMcpServerDefinitions({ isCancellationRequested: false });
   const first = await wisply.provider.resolveMcpServerDefinition(provided, { isCancellationRequested: false });
   assert.equal(first.env.WISPLY_MCP_TOKEN, null);
   assert.deepEqual(first.env, provided.env);
+  assert.deepEqual(first.args, [LAUNCH.serverPath, READ_ONLY_FLAG]);
   const second = await wisply.provider.resolveMcpServerDefinition(provided, { isCancellationRequested: false });
   assert.equal(second.env.WISPLY_MCP_TOKEN, null);
   assert.equal(calls.prompts, 1, 'asked once per session');
@@ -190,13 +248,20 @@ test('resolve removes the inherited variables again if the editor hands back a c
   assert.deepEqual(resolved.env, { ...BASE_ENV, WISPLY_MCP_TOKEN: FAKE_TOKENS.connector });
 });
 
-test('a token stored later is used at the next start', async () => {
+test('a token stored later is used at the next start, and a forgotten one falls back to read-only', async () => {
   const { wisply, setToken } = setup({ entered: undefined });
   const [provided] = await wisply.provider.provideMcpServerDefinitions({ isCancellationRequested: false });
   await wisply.provider.resolveMcpServerDefinition(provided, { isCancellationRequested: false });
   setToken(FULL);
   const resolved = await wisply.provider.resolveMcpServerDefinition(provided, { isCancellationRequested: false });
   assert.equal(resolved.env.WISPLY_MCP_TOKEN, FAKE_TOKENS.full);
+  assert.deepEqual(resolved.args, [LAUNCH.serverPath], 'rebuilt for the token source, not copied from the stale listing');
+  // Listed with a token, started after it was forgotten: the Keychain case again.
+  const [withToken] = await wisply.provider.provideMcpServerDefinitions({ isCancellationRequested: false });
+  setToken(null);
+  const forgotten = await wisply.provider.resolveMcpServerDefinition(withToken, { isCancellationRequested: false });
+  assert.equal(forgotten.env.WISPLY_MCP_TOKEN, null);
+  assert.deepEqual(forgotten.args, [LAUNCH.serverPath, READ_ONLY_FLAG]);
 });
 
 test('a cancelled start resolves to undefined; another label passes through untouched', async () => {

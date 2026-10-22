@@ -1,13 +1,20 @@
 // The extension's settings, read from the user's own settings only.
 //
-// Every `wisply.*` setting is declared with `machine` scope (user settings
-// only, and never copied to other machines by Settings Sync, so turning on
-// setup_claude on one Mac doesn't turn it on everywhere) and listed in
-// `capabilities.untrustedWorkspaces.restrictedConfigurations` (package.json;
-// test/settings.test.mjs). On top of that, this file reads
-// only `inspect(key).globalValue`, never `.get()`: a repository's
-// .vscode/settings.json (workspace or folder values) can't turn on
-// setup_claude or point the extension at another port, trusted or not.
+// Every `wisply.*` setting is declared with `application` scope and
+// `ignoreSync` (package.json; test/settings.test.mjs) and listed in
+// `capabilities.untrustedWorkspaces.restrictedConfigurations`:
+//   - `application`: only the local user settings can set it. `machine` would
+//     also accept remote settings, which a repository can write: a dev
+//     container's devcontainer.json `customizations.vscode.settings` lands in
+//     the container's machine settings, and `inspect().globalValue` is the
+//     local and remote user values merged. Application settings are never
+//     read from remote settings.
+//   - `ignoreSync`: Settings Sync doesn't copy it, so turning on setup_claude
+//     on one Mac doesn't turn it on everywhere.
+// On top of that, this file reads only `inspect(key).globalValue`, never
+// `.get()`: a repository's .vscode/settings.json (workspace or folder
+// values) can't turn on setup_claude or point the extension at another port,
+// trusted or not.
 import type * as vscode from 'vscode';
 import { DEFAULT_PORT, MAX_PORT, MIN_PORT } from '../vendor/wisply-mcp/lib/constants.mjs';
 

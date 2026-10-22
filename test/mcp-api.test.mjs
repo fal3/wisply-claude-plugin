@@ -73,13 +73,15 @@ test('getCursorMcp finds vscode.cursor.mcp.registerServer only', () => {
   assert.ok(getCursorMcp(createFakeVscode({ mcp: false, cursor: true })));
 });
 
-test('the Cursor config runs the bundled connector and holds no token', () => {
+test('the Cursor config runs the bundled connector read-only and holds no token', () => {
   const config = cursorServerConfig({ execPath: EXEC, serverPath: SERVER, port: 51771, allowClaudeSetup: false });
-  assert.deepEqual(config, { name: 'wisply', server: { command: EXEC, args: [SERVER], env: CURSOR_ENV } });
+  assert.deepEqual(config, { name: 'wisply', server: { command: EXEC, args: [SERVER, '--read-only'], env: CURSOR_ENV } });
   assert.equal(CURSOR_SERVER_NAME, 'wisply');
+  // The token comes from the Keychain, unconfirmed and of unknown scope: only
+  // the read-only memo tools, so the setup_claude opt-in has nothing to add.
   const mcp = createFakeVscode({ mcp: false, cursor: true }).cursor.mcp;
   const registration = registerWithCursor(mcp, { execPath: EXEC, serverPath: SERVER, port: 51772, allowClaudeSetup: true });
-  assert.deepEqual(mcp.registered[0].server.args, [SERVER, '--allow-claude-setup']);
+  assert.deepEqual(mcp.registered[0].server.args, [SERVER, '--read-only']);
   assert.equal(mcp.registered[0].server.env.WISPLY_MCP_PORT, '51772');
   registration.dispose();
   registration.dispose();
@@ -96,7 +98,8 @@ test('with VS Code\'s MCP API: the provider is registered, Cursor\'s API is not 
   const provider = vs.lm.providers.get('wisply.local');
   const [definition] = await provider.provideMcpServerDefinitions({ isCancellationRequested: false });
   assert.equal(definition.command, EXEC);
-  assert.deepEqual(definition.args, [SERVER]);
+  // No token set: the server will use the Keychain item, read-only.
+  assert.deepEqual(definition.args, [SERVER, '--read-only']);
   activation.dispose();
   assert.equal(vs.lm.providers.has('wisply.local'), false);
 });
@@ -110,7 +113,7 @@ test('without it, Cursor\'s registerServer gets the connector with no token, eve
   assert.equal(activation.mode, 'cursor');
   assert.equal(vs.cursor.mcp.registered.length, 1);
   const [config] = vs.cursor.mcp.registered;
-  assert.deepEqual(config, { name: 'wisply', server: { command: EXEC, args: [SERVER], env: CURSOR_ENV } });
+  assert.deepEqual(config, { name: 'wisply', server: { command: EXEC, args: [SERVER, '--read-only'], env: CURSOR_ENV } });
   assert.doesNotMatch(JSON.stringify(vs.log), TOKEN_SHAPED);
   activation.dispose();
   assert.ok(vs.log.some((entry) => entry.kind === 'cursorUnregister' && entry.name === 'wisply'));
@@ -159,7 +162,7 @@ test('neither API: one notice offers the token-free config, once', async () => {
     mcpServers: {
       wisply: {
         command: EXEC,
-        args: [SERVER],
+        args: [SERVER, '--read-only'],
         env: { ELECTRON_RUN_AS_NODE: '1', WISPLY_MCP_PORT: '51771', WISPLY_MCP_ALLOW_CLAUDE_SETUP: '', WISPLY_MCP_DEBUG: '', NODE_OPTIONS: '' },
       },
     },
@@ -322,5 +325,44 @@ test('a custom port reaches the setup terminal', () => {
   const activation = activate(vs, createFakeContext({ root: ROOT }));
   vs.commands.run(COMMANDS.storeTokenInKeychain);
   assert.deepEqual(vs.log.find((entry) => entry.kind === 'createTerminal').options.shellArgs, [SERVER, 'setup', '--port', '51790']);
+  activation.dispose();
+});
+
+test('the token entered when the server first starts gives no new version: the starting server already has it', async () => {
+  // VS Code stops a running server whose definition changed (version
+  // included), which would cut off the tool call that started it.
+  const secrets = createFakeSecrets();
+  const vs = createFakeVscode({ inputs: [FAKE_TOKENS.connector] });
+  const activation = activate(vs, createFakeContext({ root: ROOT, secrets, state: { 'wisply.welcomeShown': true } }));
+  const provider = vs.lm.providers.get('wisply.local');
+  let changes = 0;
+  provider.onDidChangeMcpServerDefinitions(() => { changes += 1; });
+  const [provided] = await provider.provideMcpServerDefinitions({ isCancellationRequested: false });
+  assert.equal(provided.version, '0.1.0+none');
+  const resolved = await provider.resolveMcpServerDefinition(provided, { isCancellationRequested: false });
+  assert.equal(secrets.values.get('wisply.mcpToken'), FAKE_TOKENS.connector, 'stored');
+  assert.equal(resolved.env.WISPLY_MCP_TOKEN, FAKE_TOKENS.connector, 'and used by this start');
+  assert.deepEqual(resolved.args, [SERVER], 'with its own token, not read-only');
+  await new Promise((resolve) => { setImmediate(resolve); });
+  assert.equal(changes, 0, 'no change event for the token this start stored');
+
+  // A later change is a change again.
+  await secrets.store('wisply.mcpToken', `wspc_${'5e'.repeat(32)}`);
+  await new Promise((resolve) => { setImmediate(resolve); });
+  assert.equal(changes, 1);
+  const [next] = await provider.provideMcpServerDefinitions({ isCancellationRequested: false });
+  assert.equal(next.version, '0.1.0+connector.token1');
+  activation.dispose();
+});
+
+test('with no token set and the prompt cancelled, VS Code\'s server uses the Keychain item read-only', async () => {
+  const vs = createFakeVscode({ inputs: [undefined], config: { 'mcp.allowClaudeSetup': { globalValue: true } } });
+  const activation = activate(vs, createFakeContext({ root: ROOT, state: { 'wisply.welcomeShown': true } }));
+  const provider = vs.lm.providers.get('wisply.local');
+  const [provided] = await provider.provideMcpServerDefinitions({ isCancellationRequested: false });
+  assert.deepEqual(provided.args, [SERVER, '--read-only']);
+  const resolved = await provider.resolveMcpServerDefinition(provided, { isCancellationRequested: false });
+  assert.deepEqual(resolved.args, [SERVER, '--read-only'], 'a full-access Keychain token gets no more than the memo tools');
+  assert.equal(resolved.env.WISPLY_MCP_TOKEN, null);
   activation.dispose();
 });

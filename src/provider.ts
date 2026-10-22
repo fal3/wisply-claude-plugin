@@ -13,6 +13,13 @@
 // to connect to); if the user cancels, the server starts anyway and uses the
 // token saved in the Mac Keychain, if there is one.
 //
+// A token from the Mac Keychain only ever gets the read-only memo tools
+// (--read-only), here and in Cursor's registration and the pasted entry: the
+// extension never confirmed it, and another app's `setup --full-access` may
+// have put a full-access token there. Recording control, follow-ups and
+// setup_claude need a token set with Wisply: Set Token, which asks the user
+// to confirm a full-access token.
+//
 // The editor starts the server with the extension host's environment plus
 // the definition's env, so the definition pins every variable the connector
 // reads: an exported WISPLY_MCP_ALLOW_CLAUDE_SETUP, WISPLY_MCP_TOKEN,
@@ -25,6 +32,15 @@ import type { StoredToken, UsableScope } from './token';
 export const PROVIDER_ID = 'wisply.local';
 export const SERVER_LABEL = 'Wisply (this Mac)';
 export const ALLOW_CLAUDE_SETUP_FLAG = '--allow-claude-setup';
+export const READ_ONLY_FLAG = '--read-only';
+
+/**
+ * Where the server's token comes from: the editor's secret storage (Wisply:
+ * Set Token, which confirms a full-access token) or the Mac Keychain item
+ * (no token of the extension's own: Cursor, a pasted entry, or VS Code with
+ * none set).
+ */
+export type TokenSource = 'secret-storage' | 'keychain';
 
 export interface Launch {
   /** The editor's own executable (process.execPath). */
@@ -57,11 +73,17 @@ export const REMOVED_ENV = Object.freeze({
   NODE_OPTIONS: null,
 } as const satisfies ServerEnv);
 
-/** How to start the bundled connector. No token: callers that may add one do so themselves. */
-export function serverLaunch({ execPath, serverPath, port, allowClaudeSetup }: Launch): ServerLaunch {
+/**
+ * How to start the bundled connector. No token: callers that may add one do
+ * so themselves. With the Keychain as the token source the connector offers
+ * only the read-only memo tools, so --allow-claude-setup would do nothing and
+ * is left out.
+ */
+export function serverLaunch({ execPath, serverPath, port, allowClaudeSetup }: Launch, source: TokenSource): ServerLaunch {
+  const flags = source === 'keychain' ? [READ_ONLY_FLAG] : allowClaudeSetup ? [ALLOW_CLAUDE_SETUP_FLAG] : [];
   return {
     command: execPath,
-    args: [serverPath, ...(allowClaudeSetup ? [ALLOW_CLAUDE_SETUP_FLAG] : [])],
+    args: [serverPath, ...flags],
     env: { ELECTRON_RUN_AS_NODE: '1', WISPLY_MCP_PORT: String(port), ...REMOVED_ENV },
   };
 }
@@ -77,10 +99,11 @@ export function stringEnv(env: ServerEnv): Record<string, string> {
 
 /**
  * The definition's version. It changes with the token's scope, the
- * setup_claude opt-in and every token change in this window (tokenChanges,
- * counted by the provider), so the editor tells the user the tools changed
- * and offers to restart a running server, which still holds the old token in
- * its environment. A count, never anything derived from the token.
+ * setup_claude opt-in and every token change (tokenChanges, counted by the
+ * provider), so the editor restarts a running server, or offers to: that
+ * server still holds the old token in its environment. The one change not
+ * counted is the token resolve stores for the server it is starting. A
+ * count, never anything derived from the token.
  */
 export function definitionVersion(extVersion: string, scope: UsableScope | null, allowClaudeSetup: boolean,
   tokenChanges = 0): string {
@@ -94,9 +117,9 @@ export interface DefinitionOptions extends Launch {
   readonly tokenChanges?: number;
 }
 
-/** The token-free definition. */
+/** The token-free definition. With no token stored, the server will use the Keychain item: read-only. */
 export function buildDefinition(api: Pick<McpApi, 'McpStdioServerDefinition'>, options: DefinitionOptions): McpStdioServerDefinition {
-  const launch = serverLaunch(options);
+  const launch = serverLaunch(options, options.scope ? 'secret-storage' : 'keychain');
   return new api.McpStdioServerDefinition(SERVER_LABEL, launch.command, launch.args, { ...launch.env },
     definitionVersion(options.extVersion, options.scope, options.allowClaudeSetup, options.tokenChanges));
 }
@@ -118,16 +141,26 @@ export interface WisplyProvider {
   readonly provider: McpServerDefinitionProvider;
   /** Tells the editor the definition changed (settings). */
   refresh(): void;
-  /** The stored token changed (set, replaced or forgotten): a new version, then refresh(). */
-  tokenChanged(): void;
+  /**
+   * The stored token changed (set, replaced or forgotten): a new version, then
+   * refresh(). Not for the token resolveMcpServerDefinition itself just
+   * stored: the server it was starting already has that one. Settles when
+   * the event has been handled (for tests).
+   */
+  tokenChanged(): Promise<void>;
   dispose(): void;
 }
 
-/** A copy of `definition` with `extraEnv` added; the original is never changed. */
-function withEnv(api: Pick<McpApi, 'McpStdioServerDefinition'>, definition: McpStdioServerDefinition,
-  extraEnv: ServerEnv): McpStdioServerDefinition {
-  const copy = new api.McpStdioServerDefinition(definition.label, definition.command, [...definition.args],
-    { ...definition.env, ...extraEnv }, definition.version);
+/**
+ * The definition the server starts with: what the provider would list now
+ * for this token source, with the token (if any) in its env. The editor's
+ * copy is never changed; its label, version and working directory are kept.
+ */
+function startDefinition(api: Pick<McpApi, 'McpStdioServerDefinition'>, definition: McpStdioServerDefinition,
+  launchOptions: Launch, stored: StoredToken | null): McpStdioServerDefinition {
+  const launch = serverLaunch(launchOptions, stored ? 'secret-storage' : 'keychain');
+  const copy = new api.McpStdioServerDefinition(definition.label, launch.command, launch.args,
+    { ...launch.env, ...(stored ? { WISPLY_MCP_TOKEN: stored.token } : {}) }, definition.version);
   if (definition.cwd !== undefined) copy.cwd = definition.cwd;
   return copy;
 }
@@ -136,6 +169,19 @@ export function createProvider(api: Pick<McpApi, 'McpStdioServerDefinition'>, de
   const emitter = deps.createEmitter();
   let askedThisSession = false;
   let tokenChanges = 0;
+  /**
+   * The token resolve stored after asking for it, until its change event
+   * arrives. The server being started gets that token at once, so the event
+   * must not give the definition a new version: VS Code stops a running
+   * server whose definition changed, which would cut off the very tool call
+   * that started it.
+   */
+  let storedByResolve: string | null = null;
+
+  const bump = () => {
+    tokenChanges += 1;
+    emitter.fire();
+  };
 
   const provider: McpServerDefinitionProvider = {
     onDidChangeMcpServerDefinitions: emitter.event,
@@ -154,14 +200,21 @@ export function createProvider(api: Pick<McpApi, 'McpStdioServerDefinition'>, de
         askedThisSession = true;
         const entered = await deps.promptForToken();
         if (entered) {
-          await deps.storeToken(entered);
+          storedByResolve = entered.token;
+          try {
+            await deps.storeToken(entered);
+          } catch {
+            // Not saved (so no change event follows): this start still uses it.
+            storedByResolve = null;
+          }
           stored = entered;
         }
       }
       if (cancellation?.isCancellationRequested) return undefined;
-      // The removed variables again, in case the editor handed back a copy
-      // without them, then the stored token (if any) on top.
-      return withEnv(api, definition, { ...REMOVED_ENV, ...(stored ? { WISPLY_MCP_TOKEN: stored.token } : {}) });
+      // Rebuilt for the token source: the removed variables again (in case
+      // the editor handed back a copy without them), --read-only when the
+      // server will use the Keychain item, and the stored token on top.
+      return startDefinition(api, definition, deps.getLaunch(), stored);
     },
   };
 
@@ -169,8 +222,16 @@ export function createProvider(api: Pick<McpApi, 'McpStdioServerDefinition'>, de
     provider,
     refresh: () => emitter.fire(),
     tokenChanged: () => {
-      tokenChanges += 1;
-      emitter.fire();
+      if (storedByResolve === null) {
+        bump();
+        return Promise.resolve();
+      }
+      const expected = storedByResolve;
+      storedByResolve = null;
+      return deps.getToken().then(
+        (now) => { if (now?.token !== expected) bump(); },
+        () => bump(),
+      );
     },
     dispose: () => emitter.dispose(),
   };

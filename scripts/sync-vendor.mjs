@@ -7,10 +7,19 @@
 //                                --plugin <wisply-claude-plugin dir> --plugin-commit <rev>
 //
 // Files are read with `git show <commit>:<path>`, so what lands here is the
-// file as of that commit, not whatever the checkout has on disk. --mcp-ref
-// is recorded only after `git merge-base --is-ancestor` confirms the commit
-// is on that branch in the given repository: the release gate trusts a
-// recorded "main" (scripts/release-gate.mjs).
+// file as of that commit, not whatever the checkout has on disk.
+//
+// --mcp-ref is recorded only after a check, because the release gate trusts
+// a recorded "main" (scripts/release-gate.mjs):
+//   - main: the checkout's origin must be github.com/fal3/wisply-mcp; origin's
+//     main is fetched now, and the commit must be on refs/remotes/origin/main.
+//     The checkout's own `main` never counts: it can hold commits nobody
+//     pushed or reviewed. SOURCE.json then records the remote and the
+//     origin/main tip it checked against.
+//   - any other branch (interim snapshots, which the gate refuses anyway):
+//     `git merge-base --is-ancestor` against that branch in the checkout.
+// Refs and commits must look like git names (REF_RE): nothing that starts
+// with "-" reaches git as an option.
 //
 //   vendor/wisply-mcp/   bin/wisply-mcp.mjs, lib/*.mjs, the generated data
 //                        modules (contract/mcp-contract.mjs,
@@ -36,10 +45,14 @@ import { parseArgs } from 'node:util';
 import {
   EDITOR_MESSAGES, ROOT, SERVER_BUNDLE, SERVER_ENTRY, SOURCE_FILE, VENDORED_MESSAGES, buildServerBundle,
 } from '../esbuild.mjs';
+import { MCP_REMOTE, MCP_REPOSITORY } from './release-gate.mjs';
 
-export { SOURCE_FILE };
+export { MCP_REMOTE, MCP_REPOSITORY, SOURCE_FILE };
 export const VENDOR_SCHEMA = 'wisply-vscode-vendor-v1';
-export const MCP_REPOSITORY = 'github:fal3/wisply-mcp';
+/** origin URLs that are github.com/fal3/wisply-mcp (HTTPS or SSH). */
+export const MCP_REMOTE_RE = /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)fal3\/wisply-mcp(?:\.git)?\/?$/;
+/** A branch name or commit as git spells it; never an option ("-..."), never "..". */
+export const REF_RE = /^(?!-)(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 export const PLUGIN_REPOSITORY = 'github:fal3/wisply-claude-plugin';
 export const MCP_DIR = 'vendor/wisply-mcp';
 
@@ -58,19 +71,57 @@ export const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex'
 const git = (dir, args) => execFileSync('git', ['-C', dir, ...args], {
   maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'inherit'],
 });
-const fullCommit = (dir, rev) => git(dir, ['rev-parse', '--verify', `${rev}^{commit}`]).toString('utf8').trim();
+
+/** Whether `value` can be passed to git as a ref or commit. */
+export const validRef = (value) => typeof value === 'string' && REF_RE.test(value) && !value.endsWith('/') &&
+  !value.endsWith('.lock');
+
+function checkedRef(name, value) {
+  if (!validRef(value)) throw new Error(`--${name} must be a branch name or a commit (got ${JSON.stringify(String(value).slice(0, 80))})`);
+  return value;
+}
+
+const fullCommit = (dir, rev) => git(dir, ['rev-parse', '--verify', '--end-of-options', `${rev}^{commit}`]).toString('utf8').trim();
 
 /**
  * Whether `commit` is on `ref` in the repository at `dir` (an ancestor of, or
- * equal to, the ref's tip). A ref that doesn't resolve counts as no.
+ * equal to, the ref's tip). A ref that doesn't resolve, or that isn't a valid
+ * name, counts as no.
+ * @param {{env?: NodeJS.ProcessEnv}} [options]
  */
-export function isOnRef(dir, commit, ref) {
+export function isOnRef(dir, commit, ref, { env = process.env } = {}) {
+  if (!validRef(commit) || !validRef(ref)) return false;
   try {
-    execFileSync('git', ['-C', dir, 'merge-base', '--is-ancestor', commit, `${ref}^{commit}`], { stdio: 'ignore' });
+    execFileSync('git', ['-C', dir, 'merge-base', '--is-ancestor', commit, `${ref}^{commit}`], { stdio: 'ignore', env });
     return true;
   } catch {
     return false;
   }
+}
+
+/**
+ * Checks that `commit` is on fal3/wisply-mcp's main as GitHub has it: the
+ * checkout's origin is that repository, origin's main is fetched now, and the
+ * commit is on refs/remotes/origin/main. Throws with the reason otherwise.
+ * @param {string} dir a wisply-mcp checkout
+ * @param {string} commit a full commit
+ * @param {{env?: NodeJS.ProcessEnv}} [options]
+ * @returns {{remote: string, mainTip: string}}
+ */
+export function verifyOnUpstreamMain(dir, commit, { env = process.env } = {}) {
+  const run = (args) => execFileSync('git', ['-C', dir, ...args], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  let url = '';
+  try { url = run(['config', '--get', 'remote.origin.url']); } catch { url = ''; }
+  if (!MCP_REMOTE_RE.test(url)) {
+    throw new Error(`${dir} has ${url ? `origin ${url}` : 'no origin remote'}: --mcp-ref main needs a clone of ${MCP_REMOTE}`);
+  }
+  run(['fetch', '--quiet', '--no-tags', 'origin', '+refs/heads/main:refs/remotes/origin/main']);
+  const mainTip = run(['rev-parse', '--verify', 'refs/remotes/origin/main^{commit}']);
+  if (!isOnRef(dir, commit, 'refs/remotes/origin/main', { env })) {
+    throw new Error(`${commit.slice(0, 7)} is not on ${MCP_REMOTE} main (origin/main is ${mainTip.slice(0, 7)}): ` +
+      'push and merge it first');
+  }
+  return { remote: MCP_REMOTE, mainTip };
 }
 
 function writeVendored(local, bytes) {
@@ -96,10 +147,19 @@ async function main(argv) {
     if (!values[name]) throw new Error(`--${name} is required`);
   }
 
+  for (const name of ['mcp-commit', 'mcp-ref', 'plugin-commit']) {
+    if (values[name] !== undefined) checkedRef(name, values[name]);
+  }
+
   // wisply-mcp: a clean copy of the vendored files at the commit.
   const mcpCommit = fullCommit(values.mcp, values['mcp-commit']);
   const mcpRef = values['mcp-ref'];
-  if (mcpRef && !isOnRef(values.mcp, mcpCommit, mcpRef)) {
+  /** For main: the remote and the origin/main tip the commit was checked against. */
+  let upstream = null;
+  if (mcpRef === 'main') {
+    const { remote, mainTip } = verifyOnUpstreamMain(values.mcp, mcpCommit);
+    upstream = { remote, remote_main: mainTip };
+  } else if (mcpRef && !isOnRef(values.mcp, mcpCommit, mcpRef)) {
     throw new Error(`${mcpCommit.slice(0, 7)} is not on ${mcpRef} in ${values.mcp}: pass the branch the commit is on`);
   }
   const paths = git(values.mcp, ['ls-tree', '-r', '--name-only', mcpCommit]).toString('utf8')
@@ -127,6 +187,7 @@ async function main(argv) {
     repository: MCP_REPOSITORY,
     commit: mcpCommit,
     ...(mcpRef ? { ref: mcpRef } : {}),
+    ...(upstream ?? {}),
     contract_provisional: contractProvisional,
     files: mcpFiles,
   };
