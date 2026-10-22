@@ -32,7 +32,8 @@ test('the tarball holds only bin, lib, contract, clients, README, LICENSE and pa
   const allowed = /^(bin\/[^/]+\.mjs|lib\/[^/]+\.mjs|contract\/[^/]+\.(json|mjs)|clients\/[^/]+\.(json|mjs)|README\.md|LICENSE|package\.json)$/;
   for (const file of files) assert.match(file, allowed);
   for (const required of ['bin/wisply-mcp.mjs', 'lib/bridge.mjs', 'lib/identity.mjs', 'lib/contract.mjs', 'lib/messages.mjs',
-    'contract/mcp-contract.json', 'contract/mcp-contract.mjs', 'contract/SOURCE.json', 'README.md', 'LICENSE', 'package.json']) {
+    'lib/cli.mjs', 'lib/clients.mjs', 'contract/mcp-contract.json', 'contract/mcp-contract.mjs', 'contract/SOURCE.json',
+    'clients/mcp-clients.json', 'clients/mcp-clients.mjs', 'README.md', 'LICENSE', 'package.json']) {
     assert.ok(files.includes(required), required);
   }
   for (const file of files) {

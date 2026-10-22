@@ -449,7 +449,7 @@ test('forget runs delete-generic-password through the real function', async () =
 });
 
 test('arguments: each command takes only its own flags; --help; bad ports exit 2', async () => {
-  assert.deepEqual(CLI_COMMANDS, ['setup', 'status', 'forget']);
+  assert.deepEqual(CLI_COMMANDS, ['setup', 'status', 'forget', 'print-config', 'install']);
   for (const command of CLI_COMMANDS) assert.ok(!PLANNED_COMMANDS.includes(command));
   const refused = [
     ['setup', '--read-only'], ['setup', '--allow-claude-setup'], ['setup', 'extra'], ['status', '--full-access'],
@@ -474,10 +474,10 @@ test('arguments: each command takes only its own flags; --help; bad ports exit 2
     assert.equal(h.keychain.writes + h.keychain.reads + h.keychain.deletes, 0);
   }
   assert.deepEqual(parseCliArgs(['status', '--port=51772', '--read-only'], {}), {
-    options: { command: 'status', port: 51772, fullAccess: false, readOnly: true, allowClaudeSetup: false },
+    options: { command: 'status', port: 51772, fullAccess: false, readOnly: true, allowClaudeSetup: false, app: null },
   });
   assert.deepEqual(parseCliArgs(['setup', '--full-access'], { WISPLY_MCP_PORT: ' 51779 ', WISPLY_MCP_ALLOW_CLAUDE_SETUP: '1' }), {
-    options: { command: 'setup', port: 51779, fullAccess: true, readOnly: false, allowClaudeSetup: false },
+    options: { command: 'setup', port: 51779, fullAccess: true, readOnly: false, allowClaudeSetup: false, app: null },
   });
   assert.ok('error' in parseCliArgs(['serve'], {}));
 });

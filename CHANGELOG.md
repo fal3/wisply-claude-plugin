@@ -35,7 +35,21 @@ All notable changes to `@wisply/mcp` are listed here. Versions follow
 - `forget`: removes the Keychain item.
 - Without a usable `WISPLY_MCP_TOKEN`, the connector reads the Keychain item
   (macOS only, 2 s budget).
-- `print-config` and `install` answer "not in this build yet" (exit 1).
+- `print-config [<app>] [--port <n>]`: the token-free setup for 20 AI apps
+  (Claude Code, Claude Desktop, Cursor, VS Code, Windsurf, Zed, JetBrains AI
+  Assistant, Codex, Gemini CLI, GitHub Copilot CLI, Warp, Cline, Roo Code,
+  Goose, LM Studio, Kiro, opencode, Amp, Factory, Grok CLI) from
+  `clients/mcp-clients.json`, the source the Wisply app and wisply.ai copy.
+  The snippet goes to stdout and where it goes to stderr; with no app, the
+  list.
+- `install <app> [--port <n>]`: runs `claude mcp add`, `codex mcp add`,
+  `gemini mcp add` (arguments after `--`) or `code --add-mcp` with a fixed
+  argument list and without the token in their environment, or sets only the
+  `wisply` entry in the JSON settings of Cursor, Windsurf, Claude Desktop,
+  Cline, GitHub Copilot CLI and Zed, after a one-time `<file>.wisply-backup`,
+  with an atomic write that follows symlinks. It refuses files that aren't
+  plain JSON, never reads or writes a token, and warns when the entry it
+  replaced held one in plain text.
 - Snippets pin the exact version (`@wisply/mcp@0.1.0`); `@wisply/mcp@0` is an
   opt-in for automatic 0.x updates.
 - The token from `WISPLY_MCP_TOKEN`; empty values and unresolved `${...}`
@@ -49,4 +63,3 @@ All notable changes to `@wisply/mcp` are listed here. Versions follow
 - The contract is provisional (transcribed from Wisply's tool catalog), so
   `package.json` is `"private"` and npm refuses to publish it until the
   contract is re-vendored from wisply-ai.
-- `print-config` and `install`.

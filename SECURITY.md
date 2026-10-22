@@ -76,6 +76,21 @@ does **not** stop another program running as you on this Mac from reading it,
 because the item trusts `/usr/bin/security`. Use the read-only connector
 token, and regenerate it in Wisply if you suspect malware.
 
+**Setting up apps.** The app setups (`print-config`, `install`, and the
+copies in Wisply and on wisply.ai, all from `clients/mcp-clients.json`) hold
+no token and can't: their only placeholders are the connector's arguments,
+and `tests/clients.test.mjs` refuses token prefixes, `Bearer`,
+`Authorization`, headers and direct HTTP to the port. `install` never reads
+the token or the Keychain item. It starts an app's own command (`claude`,
+`codex`, `gemini`, `code`) with `execFile`, a fixed argument list and no shell,
+in an environment without `WISPLY_MCP_TOKEN` or any other value shaped like a
+token. In a JSON settings file it changes only the `wisply` entry. When that
+entry held a Wisply token in plain text (as the direct-HTTP setups that
+Wisply's own Copy buttons produce until a release switches them to this
+connector do), install replaces it and says so: the one-time
+backup `<file>.wisply-backup` still holds the old file, so delete it once
+Wisply works, and regenerate the token if the file was ever synced or shared.
+
 **What your AI app does with what it reads.** Whatever the AI app reads from
 Wisply goes to the AI service that app uses, under that service's terms.
 Transcripts are recorded speech: treat them as untrusted data.
@@ -131,8 +146,11 @@ package has never been published.
    "Require two-factor authentication and disallow tokens". This repository
    has no release workflow yet; until it does, no release claims provenance.
 5. **Every release** bumps `version` in `package.json` and `VERSION` in
-   `lib/constants.mjs` together. The snippets follow `PACKAGE_SPEC`; update
-   the wisply.ai guide and Wisply's snippets to the new version.
+   `lib/constants.mjs` together, with `package_spec` and `standard_entry` in
+   `clients/mcp-clients.json` (`tests/clients.test.mjs` ties them). The
+   snippets follow `PACKAGE_SPEC`; copy the clients file on to wisply-ai and
+   wisply-web, so the wisply.ai guide and Wisply's snippets name the new
+   version.
 
 ## If a bad release is published (maintainers)
 

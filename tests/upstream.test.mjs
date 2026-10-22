@@ -69,6 +69,18 @@ test('app: once wisply-ai has a contract, the provisional fixture still matches 
   }
 });
 
+// The client templates are owned here (clients/mcp-clients.json); wisply-ai
+// keeps a byte-identical copy for the Settings snippets (DIST-A1).
+const APP_CLIENTS = 'Docs/mcp-clients.json';
+
+test('app: Docs/mcp-clients.json is a byte-identical copy of clients/mcp-clients.json', {
+  skip: !APP_DIR ? 'WISPLY_AI_DIR not set'
+    : !existsSync(join(APP_DIR, APP_CLIENTS)) ? `no ${APP_CLIENTS} in wisply-ai yet (DIST-A1)` : false,
+}, () => {
+  assert.ok(local('clients/mcp-clients.json').equals(readFileSync(join(APP_DIR, APP_CLIENTS))),
+    `${APP_CLIENTS} in wisply-ai differs from clients/mcp-clients.json: copy this file there (DIST-A1), or update it here first`);
+});
+
 // --- The transcription check (provisional only) -----------------------------
 //
 // A small reader for the switches in MCPToolCatalog.swift: it lexes the Swift
