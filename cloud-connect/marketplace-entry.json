@@ -1,0 +1,6 @@
+{
+  "name": "wisply-cloud",
+  "source": "./cloud-connect/plugin",
+  "category": "productivity",
+  "description": "Your Wisply Cloud memos in Codex, read from wisply.ai with Cloud Connect (Wisply Pro). Separate from the local wisply plugin."
+}

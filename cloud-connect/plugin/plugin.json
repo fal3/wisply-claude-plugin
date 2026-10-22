@@ -1,0 +1,15 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "wisply-cloud",
+  "version": "1.0.0",
+  "description": "Search and read the Wisply memos you sync with Cloud Connect (Wisply Pro). Your AI app connects to wisply.ai and signs in to your Wisply account.",
+  "author": {
+    "name": "Wisply",
+    "email": "support@wisply.ai",
+    "url": "https://www.wisply.ai"
+  },
+  "homepage": "https://www.wisply.ai/docs/cloud-connect",
+  "repository": "https://github.com/fal3/wisply-mcp",
+  "license": "MIT",
+  "keywords": ["wisply", "meetings", "transcripts", "mcp", "cloud", "remote"]
+}
