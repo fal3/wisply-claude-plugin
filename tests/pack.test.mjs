@@ -46,30 +46,99 @@ test('the tarball holds only bin, lib, contract, clients, README, LICENSE and pa
   }
 });
 
+/**
+ * What is wrong with a state's "private" flag; [] when it is right. npm publish refuses a private package without
+ * running any script, so a plain `npm publish` can't ship a provisional contract or an npm name nobody owns yet. The
+ * two are separate facts with separate changes: the re-vendor from wisply-ai (DIST-M5) clears the first, Alex's npm
+ * organization (Grok packet G-NPM, recorded as npm_scope in docs/release-checks.json) the second. Dropping the flag
+ * is the explicit release step once both hold.
+ * @param {{provisional: boolean, packageNameFinal: boolean, pkg: Record<string, unknown>}} state
+ * @returns {string[]}
+ */
+function privateProblems({ provisional, packageNameFinal, pkg: data }) {
+  const publishable = provisional === false && packageNameFinal === true;
+  if (data.private === true) {
+    return publishable ? ['remove "private" from package.json: the contract is final and the name is Wisply\'s'] : [];
+  }
+  if (!publishable) {
+    return ['package.json "private" must be true while contract/SOURCE.json is provisional or PACKAGE_NAME_FINAL is false'];
+  }
+  return Object.hasOwn(data, 'private') ? ['remove "private" rather than setting it to false'] : [];
+}
+
+/**
+ * What is wrong with a state's PACKAGE_NAME_FINAL; [] when it is right. Messages may name the package through npx
+ * only once Wisply owns the name on npm (lib/messages.mjs COMMAND_PREFIX). A re-vendored contract says nothing about
+ * who owns the name, so the flag follows the recorded npm check (Alex sets both in one change after G-NPM), never the
+ * contract or "private".
+ * @param {{packageName: string, packageNameFinal: boolean, npmScope: {name?: string, verified?: boolean}}} state
+ * @returns {string[]}
+ */
+function nameProblems({ packageName, packageNameFinal, npmScope }) {
+  const problems = [];
+  if (npmScope?.name !== npmOwner(packageName)) {
+    problems.push('docs/release-checks.json npm_scope.name must be the npm organization (or, unscoped, the name) ' +
+      'PACKAGE_NAME lives under');
+  }
+  if (packageNameFinal !== (npmScope?.verified === true)) {
+    problems.push('lib/constants.mjs PACKAGE_NAME_FINAL must equal docs/release-checks.json npm_scope.verified');
+  }
+  return problems;
+}
+
+const TREE = { provisional: SOURCE.provisional, packageNameFinal: PACKAGE_NAME_FINAL, pkg, packageName: PACKAGE_NAME,
+  npmScope: CHECKS.npm_scope };
+
 test('npm refuses to publish until the contract is final and the name is Wisply\'s ("private": true)', () => {
-  // npm publish refuses a private package without running any script, so a
-  // plain `npm publish` can't ship a provisional contract or an npm name
-  // nobody owns yet. The two are separate facts with separate changes: the
-  // re-vendor from wisply-ai (DIST-M5) clears the first, Alex's npm
-  // organization (Grok packet G-NPM, recorded as npm_scope in
-  // docs/release-checks.json) the second. Dropping the flag is the explicit
-  // release step once both hold.
-  const publishable = !SOURCE.provisional && PACKAGE_NAME_FINAL;
-  assert.equal(pkg.private === true, !publishable,
-    'package.json "private" must be true exactly while contract/SOURCE.json is provisional or PACKAGE_NAME_FINAL is false');
-  if (publishable) assert.equal(Object.hasOwn(pkg, 'private'), false, 'remove "private" rather than setting it to false');
+  assert.equal(typeof SOURCE.provisional, 'boolean');
+  assert.deepEqual(privateProblems(TREE), []);
 });
 
 test('the package name is final exactly when docs/release-checks.json records that Wisply owns it on npm', () => {
-  // Messages may name the package through npx only once Wisply owns the name
-  // on npm (lib/messages.mjs COMMAND_PREFIX). A re-vendored contract says
-  // nothing about who owns the name, so the flag follows the recorded npm
-  // check (Alex sets it after G-NPM), never the contract or "private".
   assert.equal(typeof PACKAGE_NAME_FINAL, 'boolean');
-  assert.equal(CHECKS.npm_scope.name, npmOwner(PACKAGE_NAME),
-    'docs/release-checks.json npm_scope.name must be the npm organization (or, unscoped, the name) PACKAGE_NAME lives under');
-  assert.equal(PACKAGE_NAME_FINAL, CHECKS.npm_scope.verified === true,
-    'lib/constants.mjs PACKAGE_NAME_FINAL must equal docs/release-checks.json npm_scope.verified');
+  assert.deepEqual(nameProblems(TREE), []);
+});
+
+test('the publish and name gates allow every step towards the release and refuse the unsafe states', () => {
+  // The tree checks above only see today's state, which a weaker gate (say, "private" exactly while provisional)
+  // would pass too. This table pins the gates for every state the release passes through, and for the mistakes.
+  const npm = (verified) => ({ name: '@wisply', verified });
+  const state = (change) => ({ provisional: true, packageNameFinal: false, pkg: { private: true }, packageName: '@wisply/mcp',
+    npmScope: npm(false), ...change });
+  const PRIVATE = 'private';
+  const NAME = 'name';
+  const cases = [
+    ['today: provisional contract, name not Wisply\'s yet', state({}), []],
+    // Valid on the way: "private" stays until both facts hold. A SOURCE.json that says final without a real commit
+    // and hash is tests/vendor.test.mjs's to refuse, not this file's.
+    ['the contract re-vendored first (DIST-M5), name not Wisply\'s yet', state({ provisional: false }), []],
+    ['the npm name recorded first (G-NPM), contract still provisional', state({ packageNameFinal: true, npmScope: npm(true) }), []],
+    ['the release change: final contract, Wisply\'s name, no "private"',
+      state({ provisional: false, packageNameFinal: true, npmScope: npm(true), pkg: {} }), []],
+    // Refused: npm could publish too early, messages could name a package nobody owns, or a flag disagrees with the record.
+    ['"private" dropped after the re-vendor while the name isn\'t Wisply\'s', state({ provisional: false, pkg: {} }), [PRIVATE]],
+    ['"private" dropped while the contract is provisional', state({ packageNameFinal: true, npmScope: npm(true), pkg: {} }), [PRIVATE]],
+    ['"private": false instead of true', state({ pkg: { private: false } }), [PRIVATE]],
+    ['"private": false instead of removed at the release',
+      state({ provisional: false, packageNameFinal: true, npmScope: npm(true), pkg: { private: false } }), [PRIVATE]],
+    ['"private" kept once both hold', state({ provisional: false, packageNameFinal: true, npmScope: npm(true) }), [PRIVATE]],
+    ['PACKAGE_NAME_FINAL set without the npm record', state({ packageNameFinal: true }), [NAME]],
+    // The flag claims both hold, so "private" looks stale too; the flag is the mistake.
+    ['PACKAGE_NAME_FINAL set without the npm record, after the re-vendor', state({ provisional: false, packageNameFinal: true }),
+      [PRIVATE, NAME]],
+    ['the npm record without PACKAGE_NAME_FINAL', state({ npmScope: npm(true) }), [NAME]],
+    ['npm_scope names another owner than PACKAGE_NAME\'s', state({ npmScope: { name: 'wisply-mcp', verified: false } }), [NAME]],
+    ['the release change without the npm record', state({ provisional: false, packageNameFinal: true, pkg: {} }), [NAME]],
+  ];
+  for (const [name, input, expected] of cases) {
+    const found = [
+      ...privateProblems(input).map(() => PRIVATE),
+      ...nameProblems(input).map(() => NAME),
+    ];
+    assert.deepEqual(found, expected, name);
+  }
+  // The unscoped fallback is recorded under its own name.
+  assert.deepEqual(nameProblems(state({ packageName: 'wisply-mcp', npmScope: { name: 'wisply-mcp', verified: false } })), []);
 });
 
 test('until the npm name is Wisply\'s, the README tells readers not to run its npx commands yet', () => {
