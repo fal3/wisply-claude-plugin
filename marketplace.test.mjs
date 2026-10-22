@@ -103,34 +103,8 @@ test('the README install lines name this marketplace and plugin', () => {
   }
 });
 
-// Codex reads .agents/plugins/marketplace.json before .claude-plugin/marketplace.json
-// and uses the first one it finds (openai/codex codex-rs/core-plugins/src/marketplace.rs).
-// It doesn't expand ${CLAUDE_PLUGIN_ROOT} or ${user_config.*}, so this repository's
-// own MCP server can't start there. The file ships dark, with no plugins, until
-// Wisply's Codex plugin is released; an entry added then must pin a release tag
-// and its full commit, so Codex never installs another repository's unreviewed
-// default branch.
-const RELEASE_TAG = /^v\d+\.\d+\.\d+$/;
-const COMMIT_SHA = /^[0-9a-f]{40}$/;
-
-test('the Codex marketplace never offers this plugin and pins every plugin it lists', () => {
-  const codex = readJson('.agents/plugins/marketplace.json');
-  assert.deepEqual(Object.keys(codex).filter((key) => !['name', 'interface', 'plugins'].includes(key)), []);
-  assert.equal(codex.name, marketplace.name, 'one marketplace name across clients');
-  assert.ok(Array.isArray(codex.plugins), 'plugins is a list, empty while the Codex plugin is unreleased');
-  const [ownOwner, ownRepo] = githubSlug(plugin.repository).split('/');
-  for (const entry of codex.plugins) {
-    assert.match(entry.name ?? '', KEBAB);
-    assert.notEqual(entry.name, plugin.name, 'never this Claude Code plugin');
-    assert.equal(typeof entry.source, 'object', `${entry.name}: a remote source, never a path in this repository`);
-    assert.equal(entry.source.source, 'url');
-    const [owner, repo] = githubSlug(entry.source.url).split('/');
-    assert.equal(owner, ownOwner, `${entry.name}: a Wisply repository`);
-    assert.notEqual(repo, ownRepo, `${entry.name}: not this repository`);
-    assert.match(entry.source.ref ?? '', RELEASE_TAG, `${entry.name}: pinned to a release tag`);
-    assert.match(entry.source.sha ?? '', COMMIT_SHA, `${entry.name}: pinned to the tag's full commit`);
-  }
-});
+// The Codex marketplace (.agents/plugins/marketplace.json) and the Codex
+// manifests have their own checks in codex.test.mjs.
 
 test('npm test runs every root test file', () => {
   const script = pkg.scripts.test;

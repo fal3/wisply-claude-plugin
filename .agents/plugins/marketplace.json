@@ -1,4 +1,7 @@
 {
-  "name": "wisply",
-  "plugins": []
+  "name": "wisply-claude-plugin",
+  "interface": { "displayName": "Wisply Local Connector" },
+  "plugins": [
+    { "name": "wisply-local", "source": "./", "category": "Productivity" }
+  ]
 }
