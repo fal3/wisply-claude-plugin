@@ -10,7 +10,10 @@ import { join } from 'node:path';
 import contract from '../lib/contract.mjs';
 import { PACKAGE_NAME, PACKAGE_RANGE, PACKAGE_SPEC, SERVER_KEY, VERSION } from '../lib/constants.mjs';
 import { SETUP_COMMAND } from '../lib/messages.mjs';
-import { bundleFileName, jsonText as buildJsonText, mcpbTools, renderManifest } from '../scripts/build-mcpb.mjs';
+import { toolsFor } from '../lib/scopes.mjs';
+import {
+  MCPB_NAME, MCPB_VERSION, PACKER_DIR, bundleFileName, jsonText as buildJsonText, mcpbTools, releaseTag, renderManifest,
+} from '../scripts/build-mcpb.mjs';
 import { validate } from './helpers/json-schema.mjs';
 import { KEYWORD_RE, ROOT, SECRET_LIKE, exists, jsonText, pngSize, readJson, readText } from './helpers/repo.mjs';
 
@@ -31,6 +34,8 @@ const STANDARD_ENTRY = { command: 'npx', args: ['-y', PACKAGE_SPEC] };
 const MANIFESTS = ['plugin.json', 'mcp.json', '.agents/plugins/marketplace.json', 'gemini-extension.json', 'mcpb/manifest.json',
   'glama.json', 'server.json', 'registry/cloud.server.json'];
 const schema = (path) => readJson(`tests/schemas/${path}`);
+/** What a token field must say: use the read-only token, and what a full-access one would allow. */
+const TOKEN_FIELD = /read-only connector token \(wspc_\.\.\.\)[\s\S]*full-access token \(wsp_\.\.\.\) also works here, but it lets this AI app start and stop recordings/;
 
 test('every manifest is canonical JSON (two-space indent, final newline)', () => {
   for (const path of MANIFESTS) assert.equal(readText(path), jsonText(readJson(path)), `${path}: rewrite it as JSON.stringify(doc, null, 2) + "\\n"`);
@@ -130,6 +135,8 @@ test('gemini-extension.json: the bundled bin, the token only as a sensitive sett
   assert.equal(setting.sensitive, true);
   assert.match(setting.description, /^Optional\./);
   assert.ok(setting.description.includes(SETUP_COMMAND), 'the setting names the setup command');
+  // The connector accepts any Wisply token from the environment, so the field says what a full-access one allows.
+  assert.match(setting.description, TOKEN_FIELD);
   // Gemini also loads GEMINI.md, hooks/hooks.json and agents/ from an extension's root. None may exist by accident.
   for (const path of ['GEMINI.md', 'hooks/hooks.json', 'agents']) assert.equal(exists(path), false, path);
 });
@@ -163,6 +170,7 @@ test('mcpb/manifest.json: the token field is optional, masked and defaults to ""
   // Without a default, mcpb leaves ${user_config.wisply_mcp_token} unreplaced (tests/mcpb-config.test.mjs).
   assert.equal(field.default, '');
   assert.ok(field.description.includes(SETUP_COMMAND));
+  assert.match(field.description, TOKEN_FIELD);
 });
 
 test('mcpb/manifest.json: a provider-neutral long_description (the same bundle installs in any MCPB host)', () => {
@@ -172,9 +180,15 @@ test('mcpb/manifest.json: a provider-neutral long_description (the same bundle i
   assert.doesNotMatch(text, /Anthropic|Claude|OpenAI|ChatGPT|Google|Gemini|Microsoft|Copilot|Cursor|Bedrock|Vertex/i);
 });
 
-test('mcpb/manifest.json: tools are every contract tool with its descriptor (node scripts/build-mcpb.mjs --sync)', () => {
+test('mcpb/manifest.json: tools are what the bundle can serve, with their descriptors (node scripts/build-mcpb.mjs --sync)', () => {
   assert.deepEqual(mcpb.tools, mcpbTools(contract));
-  assert.deepEqual(mcpb.tools.map((tool) => tool.name), contract.tools);
+  // The widest token with the bundle's own flags: setup_claude needs --allow-claude-setup, which the bundle never
+  // passes, so a listing that named it (Claude's directory, Smithery) would show a tool no client ever gets.
+  assert.deepEqual(mcpb.tools.map((tool) => tool.name), toolsFor(contract, 'full'));
+  assert.ok(!mcpb.tools.some((tool) => tool.name === 'setup_claude'));
+  const config = JSON.stringify(mcpb.server.mcp_config);
+  assert.doesNotMatch(config, /allow-claude-setup|ALLOW_CLAUDE_SETUP/);
+  assert.deepEqual(Object.keys(mcpb.server.mcp_config.env), ['WISPLY_MCP_TOKEN']);
   assert.equal(mcpb.tools_generated, true, 'the tools a client sees depend on the token scope');
   assert.equal(readText('mcpb/manifest.json'), buildJsonText(renderManifest(mcpb, { contract, version: VERSION })));
 });
@@ -229,7 +243,7 @@ test('the vendored schemas are unchanged copies (tests/schemas/SOURCE.json)', ()
   assert.deepEqual(listed.sort(), onDisk.sort());
 });
 
-test('ci.yml: the mcpb job installs only the pinned MCPB tool, without scripts, and runs the tests with it', () => {
+test('ci.yml: the mcpb job installs only the pinned MCPB tool from its lockfile, without scripts, and runs the tests with it', () => {
   const ci = readText('.github/workflows/ci.yml');
   const jobsAt = ci.indexOf('\njobs:\n');
   assert.ok(jobsAt > 0);
@@ -248,11 +262,34 @@ test('ci.yml: the mcpb job installs only the pinned MCPB tool, without scripts, 
     assert.match(text, /timeout-minutes: \d+/, name);
   }
   const mcpbJob = blocks.mcpb.join('\n');
-  assert.ok(mcpbJob.includes('run: npm install --no-save --ignore-scripts --prefix .ci/mcpb @anthropic-ai/mcpb@2.1.2'));
-  assert.ok(mcpbJob.includes('run: WISPLY_MCPB_LIB=$PWD/.ci/mcpb/node_modules/@anthropic-ai/mcpb/dist/index.js npm test'));
+  assert.ok(mcpbJob.includes(`run: npm ci --ignore-scripts --no-audit --no-fund --prefix ${PACKER_DIR}`));
+  assert.ok(mcpbJob.includes(`run: WISPLY_MCPB_LIB=$PWD/${PACKER_DIR}/node_modules/${MCPB_NAME}/dist/index.js npm test`));
+  assert.doesNotMatch(mcpbJob, /npm install|npx/, 'only npm ci from the lockfile');
   assert.doesNotMatch(blocks.test.join('\n'), /npm (ci|install)/);
-  assert.match(readText('.gitignore'), /^\.ci\/$/m);
   assert.match(readText('.gitignore'), /^dist\/$/m);
+});
+
+test('tools/mcpb pins the MCPB packer and its whole dependency tree, and the build never runs npx', () => {
+  const tool = readJson(`${PACKER_DIR}/package.json`);
+  assert.deepEqual(Object.keys(tool), ['name', 'version', 'private', 'description', 'license', 'dependencies']);
+  assert.equal(tool.private, true);
+  assert.deepEqual(tool.dependencies, { [MCPB_NAME]: MCPB_VERSION }, 'an exact version, no range');
+  assert.equal(Object.hasOwn(tool, 'scripts'), false);
+  const lock = readJson(`${PACKER_DIR}/package-lock.json`);
+  assert.equal(lock.lockfileVersion, 3);
+  assert.deepEqual(lock.packages[''].dependencies, tool.dependencies);
+  assert.equal(lock.packages[`node_modules/${MCPB_NAME}`].version, MCPB_VERSION);
+  const installed = Object.entries(lock.packages).filter(([path]) => path !== '');
+  assert.ok(installed.length > 1);
+  for (const [path, entry] of installed) {
+    assert.match(entry.integrity ?? '', /^sha512-/, `${path}: integrity hash`);
+    assert.equal(new URL(entry.resolved).origin, 'https://registry.npmjs.org', `${path}: from the npm registry`);
+    assert.notEqual(entry.hasInstallScript, true, `${path}: no install script (installed with --ignore-scripts anyway)`);
+  }
+  // .gitignore ignores lockfiles except this one, so it stays committed.
+  assert.match(readText('.gitignore'), /^!tools\/mcpb\/package-lock\.json$/m);
+  assert.doesNotMatch(readText('scripts/build-mcpb.mjs'), /['"]npx['"]/, 'the build packs with the pinned copy, never npx');
+  assert.equal(releaseTag(VERSION), `v${VERSION}`);
 });
 
 // --- README install matrix ------------------------------------------------------------------------
@@ -329,6 +366,10 @@ test('README names the plugin, extension and bundle installs from this repositor
   assert.ok(readme.includes('codex plugin marketplace add fal3/wisply-mcp'));
   assert.ok(readme.includes('copilot plugin install fal3/wisply-mcp'));
   assert.ok(readme.includes(`gemini extensions install ${REPO_URL}`));
+  // Where the app takes a git ref, the README gives the release tag, so a push to main never reaches that install.
+  assert.ok(readme.includes(`codex plugin marketplace add fal3/wisply-mcp --ref ${releaseTag(VERSION)}`));
+  assert.ok(readme.includes(`gemini extensions install ${REPO_URL} --ref ${releaseTag(VERSION)}`));
+  for (const match of readme.matchAll(/--ref (v[0-9][^\s`]*)/g)) assert.equal(match[1], releaseTag(VERSION), match[0]);
   assert.ok(readme.replace(/\s+/g, ' ').includes(`**Chat: Install Plugin From Source** with \`${REPO_URL}\``));
   assert.ok(readme.includes(`\`${bundleFileName(VERSION)}\``));
   for (const command of ['recap', 'live', 'find']) {

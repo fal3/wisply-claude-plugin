@@ -5,7 +5,10 @@
 // the release gates for the bundle's sha256:
 //
 //   WISPLY_REGISTRY_RELEASE=1                       refuses the all-zero fileSha256 placeholder
-//   WISPLY_MCPB_FILE=dist/wisply-mcp-<v>.mcpb        fileSha256 must equal that file's sha256
+//   WISPLY_MCPB_FILE=<the asset downloaded back from the draft release>
+//                                                   fileSha256 must equal that file's sha256, and the file must
+//                                                   unpack to exactly the files of tag v<version> (verifyBundle,
+//                                                   with the pinned packer in tools/mcpb)
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -14,7 +17,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PACKAGE_NAME, VERSION } from '../lib/constants.mjs';
-import { bundleFileName } from '../scripts/build-mcpb.mjs';
+import { bundleFileName, packerLib, verifyBundle } from '../scripts/build-mcpb.mjs';
 import { validate } from './helpers/json-schema.mjs';
 import { ROOT, exists, readJson } from './helpers/repo.mjs';
 
@@ -148,11 +151,14 @@ test('fileSha256 is the placeholder until the release, and the release gate refu
   }
 });
 
-test('with WISPLY_MCPB_FILE, fileSha256 is that file\'s sha256 and the file is this version\'s bundle', { skip: process.env.WISPLY_MCPB_FILE ? false : 'WISPLY_MCPB_FILE not set' }, () => {
+test('with WISPLY_MCPB_FILE, fileSha256 is that file\'s sha256 and the file is exactly the tag\'s bundle', { skip: process.env.WISPLY_MCPB_FILE ? false : 'WISPLY_MCPB_FILE not set' }, async () => {
   const file = resolve(process.env.WISPLY_MCPB_FILE);
   assert.ok(file.endsWith(`/${bundleFileName(VERSION)}`), `${file} is not ${bundleFileName(VERSION)}`);
   const sha = createHash('sha256').update(readFileSync(file)).digest('hex');
   assert.equal(mcpbPackage.fileSha256, sha, 'server.json fileSha256 must equal the uploaded bundle\'s sha256');
+  // The hash only says which file was uploaded; this says the file holds the tag's code and nothing else.
+  assert.deepEqual(await verifyBundle({ file, version: VERSION, lib: packerLib() }), [],
+    'the bundle must unpack to exactly the files of the release tag');
 });
 
 test('the release gate really fails on the placeholder', { skip: process.env.WISPLY_REGISTRY_RELEASE === '1' }, () => {

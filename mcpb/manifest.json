@@ -63,10 +63,6 @@
     {
       "name": "get_action_proposal_status",
       "description": "Report the status of Action Bot proposals (proposed_pending_user_confirmation, committed, undone, dismissed, failed, …) — one by proposal_id or all in this session. Read-only."
-    },
-    {
-      "name": "setup_claude",
-      "description": "Inspect or complete Wisply's Claude setup. Call with no arguments to see whether an Anthropic API key is stored and the cloud-AI consent_status. Pass api_key (sk-ant-…) to store the key in the user's Keychain; Wisply then shows the user its Cloud AI consent sheet. Pass request_consent=true to show that sheet without storing a key. Consent can only be granted by the user inside Wisply — never by this tool. Returns a ready-to-paste Cursor mcp.json snippet."
     }
   ],
   "tools_generated": true,
@@ -93,7 +89,7 @@
     "wisply_mcp_token": {
       "type": "string",
       "title": "Wisply token",
-      "description": "Optional. The read-only connector token from Wisply > Settings > Integrations > MCP Server. Stored in your system keychain. Leave empty if you ran npx -y @wisply/mcp setup.",
+      "description": "Optional. Your read-only connector token (wspc_...) from Wisply > Settings > Integrations > MCP Server. Stored in your system keychain. A full-access token (wsp_...) also works here, but it lets this AI app start and stop recordings and propose follow-ups, so use wspc_. Leave empty if you ran npx -y @wisply/mcp setup.",
       "sensitive": true,
       "required": false,
       "default": ""

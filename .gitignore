@@ -1,7 +1,10 @@
-# Zero dependencies: nothing is installed, and no lockfile is committed.
+# Zero dependencies: nothing is installed, and the package has no lockfile.
 node_modules/
 package-lock.json
 npm-shrinkwrap.json
+# The one exception: the dev-only MCPB packer, pinned with integrity hashes
+# (npm ci --ignore-scripts --prefix tools/mcpb). Never part of the package.
+!tools/mcpb/package-lock.json
 
 # Build and pack output
 dist/

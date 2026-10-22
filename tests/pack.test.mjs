@@ -92,9 +92,9 @@ test('the bin is an executable node script', () => {
   assert.ok((statSync(bin).mode & 0o111) !== 0, 'chmod +x bin/wisply-mcp.mjs');
 });
 
-// The one install CI may run: the pinned MCPB tool for the bundle checks, outside the package and without its
-// scripts (job mcpb; tests/manifests.test.mjs checks the job's shape).
-const MCPB_INSTALL = 'npm install --no-save --ignore-scripts --prefix .ci/mcpb @anthropic-ai/mcpb@2.1.2';
+// The one install CI may run: the pinned MCPB tool for the bundle checks, from tools/mcpb's lockfile, outside the
+// package and without its scripts (job mcpb; tests/manifests.test.mjs checks the job and the lockfile).
+const MCPB_INSTALL = 'npm ci --ignore-scripts --no-audit --no-fund --prefix tools/mcpb';
 
 test('CI is read-only, SHA-pinned and installs nothing but the pinned MCPB tool', () => {
   const workflow = readFileSync(join(ROOT, '.github/workflows/ci.yml'), 'utf8');

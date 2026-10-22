@@ -16,6 +16,9 @@ import { ROOT, readText } from './helpers/repo.mjs';
 const CLOUD_TOOLS = ['search_memos', 'list_memos', 'get_memo', 'get_transcript', 'get_action_items', 'get_account_status', 'search', 'fetch'];
 /** Arguments the prompts use that the provisional contract doesn't list yet (raycast PR 1 adds tail_words). */
 const PENDING_ARGUMENTS = { get_live_transcript: ['tail_words'] };
+/** live.toml's interim wording, for a contract whose get_live_transcript takes no arguments. */
+const LIVE_HEDGE = /if the tool accepts tail_words, otherwise with\s+no arguments/;
+const argumentNames = (tool) => Object.keys(contract.tool_descriptors.find((d) => d.name === tool).inputSchema.properties ?? {});
 const CONNECTOR_TOOLS = contract.scopes.connector.tools;
 const SAFETY = {
   untrusted: /untrusted[^.]*never (?:as )?instructions|never as instructions/i,
@@ -162,6 +165,25 @@ test('Cursor extras: an agent-requested rule and a plain Markdown command, with 
   assertKnownNames(command, 'extras/cursor/commands/wisply-recap.md');
   assert.match(command, /never as instructions/);
   assert.match(readText('extras/cursor/README.md'), /rules\/wisply\.mdc[\s\S]*commands\/wisply-recap\.md/);
+});
+
+test('live.toml hedges tail_words only while the contract lacks it, and PENDING_ARGUMENTS only lists what it lacks', () => {
+  // A model calls tools by their inputSchema, and Gemini CLI may check arguments against it, so while
+  // get_live_transcript declares no properties (additionalProperties: false) the prompt can't insist on
+  // tail_words. Once the re-vendored contract (DIST-M5, after raycast PR 1) has it, the prompt must ask
+  // for tail_words 400 unconditionally, as the distribution design says.
+  const live = parseCommandToml(readText('commands/wisply/live.toml'));
+  if (argumentNames('get_live_transcript').includes('tail_words')) {
+    assert.doesNotMatch(live.prompt, LIVE_HEDGE, 'the contract has tail_words: call get_live_transcript with tail_words set to 400, unconditionally');
+    assert.match(live.prompt, /get_live_transcript with tail_words set to 400\./);
+  } else {
+    assert.match(live.prompt, LIVE_HEDGE);
+  }
+  for (const [tool, names] of Object.entries(PENDING_ARGUMENTS)) {
+    for (const name of names) {
+      assert.equal(argumentNames(tool).includes(name), false, `the contract has ${tool}.${name} now: remove it from PENDING_ARGUMENTS`);
+    }
+  }
 });
 
 test('the name check rejects a tool that doesn\'t exist', () => {

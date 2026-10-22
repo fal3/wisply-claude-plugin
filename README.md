@@ -130,18 +130,29 @@ each time your app starts the connector (see "Versions" above).
 
 ### Plugins, extensions and the Claude Desktop bundle
 
-These run the copy of the connector that comes with them, never `npx`:
+These run the copy of the connector that comes with them, never `npx`. An
+install from this repository copies it at a git ref. Name the release tag
+where your app takes one, so a later change reaches you only when you move to
+a newer release; without a ref, the app copies what is on `main` at install
+and again at each update.
 
 - **Agent Plugin** (Codex, Cursor, VS Code, GitHub Copilot CLI): this
   repository is one plugin (`plugin.json`, `mcp.json` and the
-  `wisply-memos` skill). Codex: `codex plugin marketplace add fal3/wisply-mcp`,
-  then install **wisply** in `/plugins`. VS Code: **Chat: Install Plugin From
-  Source** with `https://github.com/fal3/wisply-mcp`, or
-  `/plugin install fal3/wisply-mcp` in a Copilot chat. GitHub Copilot CLI:
-  `copilot plugin install fal3/wisply-mcp`. Cursor: from the Cursor
-  Marketplace once it's listed. The plugin starts `node`, so Node.js 20 or
-  later must be on the app's `PATH` (see "GUI apps and `npx`" above).
-- **Gemini CLI extension**: `gemini extensions install https://github.com/fal3/wisply-mcp`.
+  `wisply-memos` skill). Codex:
+  `codex plugin marketplace add fal3/wisply-mcp --ref v0.1.0`, then install
+  **wisply** in `/plugins` (`codex plugin marketplace upgrade` fetches the
+  same tag again). VS Code: **Chat: Install Plugin From Source** with
+  `https://github.com/fal3/wisply-mcp`, or `/plugin install fal3/wisply-mcp`
+  in a Copilot chat. GitHub Copilot CLI:
+  `copilot plugin install fal3/wisply-mcp`. These two take no ref: they copy
+  `main` at install and again at each update (`copilot plugin update`).
+  Cursor: from the Cursor Marketplace once it's listed. The plugin starts
+  `node`, so Node.js 20 or later must be on the app's `PATH` (see "GUI apps
+  and `npx`" above).
+- **Gemini CLI extension**:
+  `gemini extensions install https://github.com/fal3/wisply-mcp --ref v0.1.0`.
+  Without `--ref`, Gemini installs the newest GitHub release (`main` until
+  there is one), and `gemini extensions update` moves to newer ones.
   Gemini asks for an optional Wisply token and keeps it in the system
   keychain; leave it empty to use the token saved by `setup` (Gemini then
   says the setting is missing, which is expected). It adds the
@@ -251,8 +262,10 @@ allows, and Wisply enforces the same rule.
 - **No dependencies, no install scripts, no telemetry.** The package has zero
   runtime dependencies and no lifecycle scripts. It sends nothing anywhere
   except `127.0.0.1`.
-- **A pinned version.** The snippets run one exact, unchangeable npm version,
-  so a new release reaches your app only when you choose it.
+- **Pinned versions.** The npm snippets run one exact, unchangeable npm
+  version, so a new release reaches your app only when you choose it.
+  Installs from this repository are pinned only when they name a release tag
+  (`--ref v0.1.0`); the others follow `main` (see [SECURITY.md](SECURITY.md)).
 
 ## Privacy
 
@@ -339,30 +352,43 @@ schemas in `tests/schemas/`.
 
 ### The Claude Desktop bundle
 
+The bundle is packed with `@anthropic-ai/mcpb` 2.1.2 from `tools/mcpb`, whose
+committed lockfile pins every dependency with an integrity hash. Install it
+once; it runs no install scripts, and nothing here runs `npx`:
+
 ```bash
-npm run build:mcpb                                   # dist/wisply-mcp-<version>.mcpb and its sha256
-node scripts/build-mcpb.mjs --sync                   # after the contract or the version changes
-npx -y @anthropic-ai/mcpb@2.1.2 validate mcpb/manifest.json
+npm ci --ignore-scripts --prefix tools/mcpb
+node scripts/build-mcpb.mjs --unreleased    # dist/wisply-mcp-<version>-unreleased.mcpb, from any checkout
+node scripts/build-mcpb.mjs --sync          # after the contract or the version changes
+tools/mcpb/node_modules/.bin/mcpb validate mcpb/manifest.json
 ```
 
-`build:mcpb` stages `bin/`, `lib/`, `contract/`, `clients/`, `LICENSE`, the
-manifest and the icon in `dist/mcpb/`, writes the manifest's `tools` from the
-contract, and packs it with `@anthropic-ai/mcpb` 2.1.2 (through `npx`, or the
-copy `WISPLY_MCPB_LIB` points to). `tests/mcpb-config.test.mjs` runs the real
-library when `WISPLY_MCPB_LIB` is set, as the CI job `mcpb` does:
+The bundle holds the files git tracks in `bin/`, `lib/`, `contract/` and
+`clients/`, `LICENSE`, the manifest (its `tools` written from the contract:
+every tool but `setup_claude`, which the bundle never turns on) and the icon.
+With the packer installed, `npm test` also runs `tests/mcpb-config.test.mjs`
+against the real library, as the CI job `mcpb` does.
+
+**Releasing the bundle.** `npm run build:mcpb` is the release build. It
+refuses to run unless the checkout is clean and `HEAD` is at tag
+`v<version>`, and it stages the tag's own files, so run it in a fresh clone
+of the tag. It writes `dist/wisply-mcp-<version>.mcpb` and
+`dist/SHA256SUMS`. Zip entries carry the build time, so every build has a
+new sha256: build the release asset once and never rebuild it.
+
+1. Upload **both** files to the draft GitHub release, and paste the
+   `SHA256SUMS` line into the release notes. Never publish the bundle alone:
+   Gemini CLI takes a release's only asset for the extension and can't unpack
+   a `.mcpb`, while with two assets it installs the tag's source.
+2. Put the sha256 in `server.json` (`fileSha256`).
+3. Download the asset back from the draft release and run the gate on that
+   copy, in a checkout that has the tag (`git fetch --tags`). The gate checks
+   the hash, then unpacks the bundle and compares every file with the tag,
+   byte for byte:
 
 ```bash
-npm install --no-save --ignore-scripts --prefix .ci/mcpb @anthropic-ai/mcpb@2.1.2
-WISPLY_MCPB_LIB=$PWD/.ci/mcpb/node_modules/@anthropic-ai/mcpb/dist/index.js npm test
-```
-
-Zip entries carry the build time, so every build has a new sha256. For a
-release, build the bundle once from the release tag, upload it to the draft
-GitHub release, put its sha256 in `server.json` (`fileSha256`), and check it
-before publishing the registry entry:
-
-```bash
-WISPLY_REGISTRY_RELEASE=1 WISPLY_MCPB_FILE=dist/wisply-mcp-0.1.0.mcpb npm test
+gh release download v0.1.0 --repo fal3/wisply-mcp --pattern '*.mcpb' --dir dist/check
+WISPLY_REGISTRY_RELEASE=1 WISPLY_MCPB_FILE=dist/check/wisply-mcp-0.1.0.mcpb npm test
 ```
 
 Security reports: see [SECURITY.md](SECURITY.md). License: [MIT](LICENSE).

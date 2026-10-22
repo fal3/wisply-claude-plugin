@@ -1,31 +1,40 @@
 // The Claude Desktop bundle (MCPB). Always: scripts/build-mcpb.mjs stages a
-// self-contained bundle whose server runs from any directory. With
-// WISPLY_MCPB_LIB pointing to @anthropic-ai/mcpb 2.1.2's dist/index.js (CI job
-// `mcpb`), also against the real library:
+// self-contained bundle of tracked files only, whose server runs from any
+// directory; the stage guard; the release checks (clean checkout at the tag,
+// the tag's own files). With the pinned @anthropic-ai/mcpb 2.1.2 (tools/mcpb,
+// `npm ci --ignore-scripts --prefix tools/mcpb`, or WISPLY_MCPB_LIB pointing
+// to its dist/index.js, as the CI job `mcpb` does), also against the real
+// library:
 //
 // - an empty optional token field reaches the connector as "" (so it falls
 //   through to the Keychain item), which needs the manifest's `default: ""`;
 //   without it the literal ${user_config.wisply_mcp_token} arrives, and the
 //   connector still treats it as unset;
 // - the manifest validates, and a pack/unpack round trip gives a bundle that
-//   answers tools/list and a tool call through the identity check.
+//   answers tools/list and a tool call through the identity check;
+// - verifyBundle (the release gate) accepts a bundle built from the tag and
+//   names every file that differs, is missing or was added.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import contract from '../lib/contract.mjs';
 import { VERSION } from '../lib/constants.mjs';
 import { resolveToken } from '../lib/token.mjs';
-import { STAGED_DIRS, bundleFileName, listFiles, packBundle, renderManifest, stageBundle } from '../scripts/build-mcpb.mjs';
+import {
+  ICON_PATH, MANIFEST_PATH, SUMS_FILE, STAGED_FILES, assertPacker, assertSafeStageDir, bundleFileName, isBundled, listFiles,
+  packBundle, packerLib, refSource, releaseProblems, releaseTag, renderManifest, stageBundle, sumsLine, trackedSource,
+  verifyBundle,
+} from '../scripts/build-mcpb.mjs';
 import { FAKE_TOKENS, startFakeWisply } from './fixtures/fake-wisply.mjs';
-import { ROOT, exists, readJson } from './helpers/repo.mjs';
+import { ROOT, readJson } from './helpers/repo.mjs';
 
-const LIB = process.env.WISPLY_MCPB_LIB ? resolve(process.env.WISPLY_MCPB_LIB) : null;
-const needsLib = { skip: LIB ? false : 'WISPLY_MCPB_LIB not set (CI job mcpb sets it)' };
+const LIB = packerLib();
+const needsLib = { skip: LIB ? false : 'the MCPB packer is not installed (npm ci --ignore-scripts --prefix tools/mcpb; CI job mcpb)' };
 const manifest = readJson('mcpb/manifest.json');
 const EXTENSION_PATH = '/Users/someone/Library/Application Support/Claude/Claude Extensions/wisply';
 const PLACEHOLDER = '${user_config.wisply_mcp_token}';
@@ -37,14 +46,36 @@ const tempDir = (t) => {
   return dir;
 };
 
-/** The files a bundle must hold: the shipped code, the contract, the license, the manifest and the icon. */
+const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+  '-c', 'commit.gpgsign=false', '-c', 'tag.gpgsign=false', '-c', 'core.hooksPath=/dev/null', ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+
+/** The files a bundle must hold: git's tracked shipped code, contract and license, plus the manifest and the icon. */
 function expectedFiles() {
-  const files = ['LICENSE', 'icon.png', 'manifest.json'];
-  for (const dir of STAGED_DIRS) {
-    if (!exists(dir)) continue;
-    files.push(...listFiles(join(ROOT, dir)).filter((name) => /\.(mjs|json)$/.test(name)).map((name) => `${dir}/${name}`));
+  const tracked = git(ROOT, 'ls-files').split('\n')
+    .filter((path) => /^(bin|lib|contract|clients)\/[^/]+\.(mjs|json)$/.test(path) || STAGED_FILES.includes(path));
+  return [...tracked, 'icon.png', 'manifest.json'].sort();
+}
+
+/**
+ * A throwaway git repository holding this checkout's bundle sources, committed and tagged v<VERSION>,
+ * plus files to add before the commit. Returns its root.
+ */
+function tagRepo(t, extra = {}) {
+  const root = join(tempDir(t), 'wisply-mcp');
+  mkdirSync(root, { recursive: true });
+  for (const path of [...trackedSource(ROOT).paths, MANIFEST_PATH, ICON_PATH]) {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    copyFileSync(join(ROOT, path), join(root, path));
   }
-  return files.sort();
+  for (const [path, text] of Object.entries(extra)) {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), text);
+  }
+  git(root, 'init', '--quiet');
+  git(root, 'add', '--all');
+  git(root, 'commit', '--quiet', '-m', 'release');
+  git(root, 'tag', releaseTag(VERSION));
+  return root;
 }
 
 /** Runs a bundle's server from an unrelated directory with a bare environment and returns its JSON-RPC answers. */
@@ -82,11 +113,82 @@ test('build-mcpb stages exactly the shipped code, the contract, LICENSE, the man
   assert.equal(bundleFileName(VERSION), `wisply-mcp-${VERSION}.mcpb`);
 });
 
-test('build-mcpb refuses to stage into a source folder (it empties the stage first)', () => {
-  for (const stageDir of [ROOT, join(ROOT, 'mcpb'), join(ROOT, 'lib'), join(ROOT, 'tests', 'mcpb')]) {
-    assert.throws(() => stageBundle({ stageDir, contract, version: VERSION }), /under dist\/ or outside the repository/, stageDir);
+test('build-mcpb refuses to stage into a source folder, the repository or a folder that holds it (it empties the stage first)', (t) => {
+  // The guard alone for the real checkout, so a broken guard can never empty it.
+  for (const stageDir of [join(ROOT, 'mcpb'), join(ROOT, 'lib'), join(ROOT, 'tests', 'mcpb'), join(ROOT, '..dist'), join(ROOT, 'distx')]) {
+    assert.throws(() => assertSafeStageDir(ROOT, stageDir), /under dist\/ or outside the repository/, stageDir);
   }
+  for (const stageDir of [ROOT, join(ROOT, '..'), join(ROOT, '..', '..'), '/']) {
+    assert.throws(() => assertSafeStageDir(ROOT, stageDir), /must not be the repository or a folder that contains it/, stageDir);
+  }
+  for (const stageDir of [join(ROOT, 'dist'), join(ROOT, 'dist', 'mcpb'), join(tmpdir(), 'elsewhere', 'mcpb')]) {
+    assert.doesNotThrow(() => assertSafeStageDir(ROOT, stageDir), stageDir);
+  }
+  // stageBundle runs the guard before it removes anything: a checkout at <x>/mcpb/wisply-mcp built with --out-dir <x>.
+  const outer = tempDir(t);
+  const root = join(outer, 'mcpb', 'wisply-mcp');
+  mkdirSync(join(root, 'lib'), { recursive: true });
+  writeFileSync(join(root, 'lib', 'keep.mjs'), '');
+  assert.throws(() => stageBundle({ root, stageDir: join(outer, 'mcpb'), contract, version: VERSION }), /contains it/);
+  assert.ok(existsSync(join(root, 'lib', 'keep.mjs')));
   assert.ok(existsSync(join(ROOT, 'mcpb/manifest.json')) && existsSync(join(ROOT, 'lib/bridge.mjs')));
+});
+
+test('only files git tracks reach a bundle: flat .mjs and .json in the staged folders, and LICENSE', (t) => {
+  for (const path of ['bin/wisply-mcp.mjs', 'lib/bridge.mjs', 'contract/mcp-contract.json', 'clients/mcp-clients.json', 'LICENSE']) {
+    assert.ok(isBundled(path), path);
+  }
+  for (const path of ['lib/nested/x.mjs', 'lib/notes.md', 'tests/bridge.test.mjs', 'scripts/build-mcpb.mjs', 'README.md', 'libx/a.mjs',
+    MANIFEST_PATH, ICON_PATH]) {
+    assert.equal(isBundled(path), false, path);
+  }
+  const root = tagRepo(t);
+  writeFileSync(join(root, 'lib', 'untracked.mjs'), 'export const leaked = true;\n');
+  const { paths } = trackedSource(root);
+  assert.ok(paths.includes('lib/bridge.mjs'));
+  assert.equal(paths.includes('lib/untracked.mjs'), false);
+  const staged = stageBundle({ root, stageDir: join(dirname(root), 'stage'), contract, version: VERSION });
+  assert.equal(staged.includes('lib/untracked.mjs'), false);
+});
+
+test('a release build needs a clean checkout at tag v<version>, and stages the tag\'s files', (t) => {
+  const root = tagRepo(t);
+  assert.deepEqual(releaseProblems(root, VERSION), []);
+  assert.deepEqual(releaseProblems(root, '9.9.9'), ['HEAD is not at tag v9.9.9']);
+  const committed = readFileSync(join(root, 'lib', 'bridge.mjs'));
+  writeFileSync(join(root, 'lib', 'bridge.mjs'), 'export const tampered = true;\n');
+  assert.deepEqual(releaseProblems(root, VERSION), ['the checkout has uncommitted or untracked files (git status)']);
+  // The tag's objects, not the working tree.
+  const atTag = refSource(root, releaseTag(VERSION));
+  assert.deepEqual(atTag.read('lib/bridge.mjs'), committed);
+  assert.equal(atTag.mode('bin/wisply-mcp.mjs'), 0o755);
+  const stageDir = join(dirname(root), 'stage');
+  stageBundle({ root, stageDir, contract, version: VERSION, source: atTag });
+  assert.deepEqual(readFileSync(join(stageDir, 'lib', 'bridge.mjs')), committed);
+  git(root, 'checkout', '--quiet', '--', 'lib/bridge.mjs');
+  writeFileSync(join(root, 'stray.txt'), 'x');
+  assert.deepEqual(releaseProblems(root, VERSION), ['the checkout has uncommitted or untracked files (git status)']);
+  rmSync(join(root, 'stray.txt'));
+  git(root, 'commit', '--quiet', '--allow-empty', '-m', 'after the tag');
+  assert.deepEqual(releaseProblems(root, VERSION), [`HEAD is not at tag ${releaseTag(VERSION)}`]);
+  assert.deepEqual(releaseProblems(join(dirname(root), 'not-a-repo'), VERSION), ['git could not read this checkout']);
+});
+
+test('release assets: the bundle, an unreleased name no gate accepts, and a SHA256SUMS line shasum -c reads', () => {
+  assert.equal(bundleFileName(VERSION), `wisply-mcp-${VERSION}.mcpb`);
+  assert.equal(bundleFileName(VERSION, { unreleased: true }), `wisply-mcp-${VERSION}-unreleased.mcpb`);
+  assert.equal(SUMS_FILE, 'SHA256SUMS');
+  assert.equal(sumsLine('a'.repeat(64), bundleFileName(VERSION)), `${'a'.repeat(64)}  wisply-mcp-${VERSION}.mcpb\n`);
+});
+
+test('the packer must be the pinned @anthropic-ai/mcpb 2.1.2', (t) => {
+  assert.throws(() => assertPacker(null), /npm ci --ignore-scripts --prefix tools\/mcpb/);
+  const fake = join(tempDir(t), 'node_modules', '@anthropic-ai', 'mcpb');
+  mkdirSync(join(fake, 'dist'), { recursive: true });
+  writeFileSync(join(fake, 'dist', 'index.js'), '');
+  writeFileSync(join(fake, 'package.json'), JSON.stringify({ name: '@anthropic-ai/mcpb', version: '2.2.0' }));
+  assert.throws(() => assertPacker(join(fake, 'dist', 'index.js')), /isn't @anthropic-ai\/mcpb 2\.1\.2/);
+  assert.equal(packerLib({ WISPLY_MCPB_LIB: join(fake, 'dist', 'missing.js') }), null);
 });
 
 test('the staged server runs on its own, from another directory, with no package.json', async (t) => {
@@ -158,6 +260,35 @@ test('mcpb: the library validates mcpb/manifest.json (schema and icon)', needsLi
   } finally {
     Object.assign(console, original);
   }
+});
+
+test('mcpb: verifyBundle accepts the tag\'s bundle and names every difference', needsLib, async (t) => {
+  const root = tagRepo(t);
+  const dir = dirname(root);
+  const pack = async (name, source) => {
+    const stageDir = join(dir, `stage-${name}`);
+    stageBundle({ root, stageDir, contract, version: VERSION, source });
+    const file = join(dir, name, bundleFileName(VERSION));
+    mkdirSync(dirname(file), { recursive: true });
+    await packBundle({ stageDir, outFile: file, lib: LIB });
+    return file;
+  };
+  const atTag = refSource(root, releaseTag(VERSION));
+  const good = await pack('good', atTag);
+  assert.deepEqual(await verifyBundle({ file: good, version: VERSION, lib: LIB, root }), []);
+  const short = await pack('short', { ...atTag, paths: atTag.paths.filter((path) => path !== 'lib/messages.mjs') });
+  assert.deepEqual(await verifyBundle({ file: short, version: VERSION, lib: LIB, root }), ['lib/messages.mjs is missing from the bundle']);
+
+  // A working tree with a changed file and an extra tracked one (an --unreleased build): both are named.
+  writeFileSync(join(root, 'lib', 'bridge.mjs'), 'export const tampered = true;\n');
+  writeFileSync(join(root, 'lib', 'extra.mjs'), 'export {};\n');
+  git(root, 'add', 'lib/extra.mjs');
+  const bad = await pack('bad', trackedSource(root));
+  assert.deepEqual((await verifyBundle({ file: bad, version: VERSION, lib: LIB, root })).sort(), [
+    `lib/bridge.mjs differs from ${releaseTag(VERSION)}`,
+    `lib/extra.mjs is in the bundle but not at ${releaseTag(VERSION)}`,
+  ]);
+  assert.deepEqual(await verifyBundle({ file: good, version: '9.9.9', lib: LIB, root }), ['tag v9.9.9 isn\'t in this checkout (git fetch --tags)']);
 });
 
 test('mcpb: pack and unpack give a bundle that answers tools/list and a call through the identity check', needsLib, async (t) => {
