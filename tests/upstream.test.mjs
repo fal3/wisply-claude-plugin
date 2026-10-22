@@ -70,47 +70,216 @@ test('app: once wisply-ai has a contract, the provisional fixture still matches 
 });
 
 // --- The transcription check (provisional only) -----------------------------
+//
+// A small reader for the switches in MCPToolCatalog.swift: it lexes the Swift
+// subset the catalog uses and parses each `switch self { case .a, .b: return
+// VALUE ... }` into member -> value, so every descriptor is compared with
+// the Swift source as a whole (property set, types, descriptions, bounds,
+// enums and `required`), not by searching for fragments. Anything outside
+// that subset fails the test, so a new helper in the catalog shows up here.
 
 const CATALOG = 'Wisply/Services/MCP/MCPToolCatalog.swift';
-const swiftString = (value) => `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 const between = (text, start, end) => {
   const from = text.indexOf(start);
   const to = text.indexOf(end, from + start.length);
   assert.ok(from >= 0 && to > from, `${start} ... ${end} not found in ${CATALOG}`);
-  return text.slice(from, to);
+  return text.slice(from + start.length, to);
 };
+
+/** Tokens of the catalog's Swift subset. Comments and whitespace are dropped. */
+function lexSwift(text) {
+  const pattern = /\s+|\/\/[^\n]*|"((?:[^"\\\n]|\\.)*)"|([A-Za-z_][A-Za-z0-9_]*)|(-?[0-9]+)|([[\](),:.{}])/y;
+  const tokens = [];
+  while (pattern.lastIndex < text.length) {
+    const at = pattern.lastIndex;
+    const match = pattern.exec(text);
+    assert.ok(match, `${CATALOG}: unexpected Swift: ${JSON.stringify(text.slice(at, at + 40))}`);
+    if (match[1] !== undefined) {
+      for (const [, escaped] of match[1].matchAll(/\\(.)/g)) {
+        assert.ok(escaped === '"' || escaped === '\\', `${CATALOG}: only \\" and \\\\ escapes are read: ${match[1].slice(0, 40)}`);
+      }
+      tokens.push({ kind: 'string', value: match[1].replace(/\\(["\\])/g, '$1') });
+    } else if (match[2] !== undefined) {
+      tokens.push({ kind: 'name', value: match[2] });
+    } else if (match[3] !== undefined) {
+      tokens.push({ kind: 'number', value: Number(match[3]) });
+    } else if (match[4] !== undefined) {
+      tokens.push({ kind: 'punct', value: match[4] });
+    }
+  }
+  return tokens;
+}
+
+/**
+ * Parses the first `switch self { ... }` in `text` into Map(member -> value).
+ * Values: true/false, a string literal, and the schema helpers:
+ * schema(properties:required:), string(_:), integer(_:minimum:maximum:),
+ * .object([...]), [k: v] dictionaries and [s, ...] arrays, which become the
+ * JSON the helpers build.
+ */
+function parseSwitch(text) {
+  const tokens = lexSwift(text);
+  let at = 0;
+  const peek = (offset = 0) => tokens[at + offset];
+  const is = (kind, value, offset = 0) => peek(offset)?.kind === kind && (value === undefined || peek(offset).value === value);
+  const take = (kind, value) => {
+    const token = tokens[at];
+    assert.ok(token && token.kind === kind && (value === undefined || token.value === value),
+      `${CATALOG}: expected ${value ?? kind}, found ${token ? JSON.stringify(token.value) : 'the end'}`);
+    at += 1;
+    return token.value;
+  };
+  const list = (close, item) => {
+    const items = [];
+    while (!is('punct', close)) {
+      items.push(item());
+      if (!is('punct', close)) take('punct', ',');
+    }
+    take('punct', close);
+    return items;
+  };
+  const optionalNumber = () => (is('name', 'nil') ? (take('name', 'nil'), undefined) : take('number'));
+
+  function literal() {
+    // [:] | [k: v, ...] | [s, ...]
+    take('punct', '[');
+    if (is('punct', ':')) {
+      take('punct', ':');
+      take('punct', ']');
+      return {};
+    }
+    if (is('string') && is('punct', ':', 1)) {
+      return Object.fromEntries(list(']', () => {
+        const key = take('string');
+        take('punct', ':');
+        return [key, value()];
+      }));
+    }
+    return list(']', value);
+  }
+
+  function value() {
+    if (is('string')) return take('string');
+    if (is('name', 'true') || is('name', 'false')) return take('name') === 'true';
+    if (is('number')) return take('number');
+    if (is('punct', '[')) return literal();
+    if (is('punct', '.')) {
+      take('punct', '.');
+      take('name', 'object');
+      take('punct', '(');
+      const object = literal();
+      take('punct', ')');
+      return object;
+    }
+    const helper = take('name');
+    take('punct', '(');
+    if (helper === 'string') {
+      const description = take('string');
+      take('punct', ')');
+      return { type: 'string', description };
+    }
+    if (helper === 'integer') {
+      const description = take('string');
+      take('punct', ',');
+      take('name', 'minimum');
+      take('punct', ':');
+      const minimum = optionalNumber();
+      take('punct', ',');
+      take('name', 'maximum');
+      take('punct', ':');
+      const maximum = optionalNumber();
+      take('punct', ')');
+      return {
+        type: 'integer', description,
+        ...(minimum === undefined ? {} : { minimum }),
+        ...(maximum === undefined ? {} : { maximum }),
+      };
+    }
+    assert.equal(helper, 'schema', `${CATALOG}: unknown helper ${helper}(...)`);
+    take('name', 'properties');
+    take('punct', ':');
+    const properties = literal();
+    let required = [];
+    if (is('punct', ',')) {
+      take('punct', ',');
+      take('name', 'required');
+      take('punct', ':');
+      required = literal();
+    }
+    take('punct', ')');
+    // schema(properties:required:) adds "required" only when it isn't empty.
+    return { type: 'object', properties, additionalProperties: false, ...(required.length > 0 ? { required } : {}) };
+  }
+
+  take('name', 'switch');
+  take('name', 'self');
+  take('punct', '{');
+  const values = new Map();
+  while (is('name', 'case')) {
+    take('name', 'case');
+    const members = list(':', () => {
+      take('punct', '.');
+      return take('name');
+    });
+    if (is('name', 'return')) take('name', 'return');
+    const parsed = value();
+    for (const member of members) {
+      assert.ok(!values.has(member), `${CATALOG}: .${member} appears twice in one switch`);
+      values.set(member, parsed);
+    }
+  }
+  take('punct', '}');
+  return values;
+}
 
 test('app: the provisional descriptors are the Swift catalog\'s, word for word', {
   skip: !APP_DIR ? 'WISPLY_AI_DIR not set' : !appSource.provisional ? 'not provisional' : false,
 }, () => {
   const swift = readFileSync(join(APP_DIR, CATALOG), 'utf8');
-  const enumBody = between(swift, 'enum MCPToolName', 'var hasSideEffects');
-  const cases = [...enumBody.matchAll(/case (\w+) = "([a-z_]+)"/g)].map((match) => ({ member: match[1], name: match[2] }));
+  const cases = [...between(swift, 'enum MCPToolName', 'var hasSideEffects').matchAll(/case (\w+) = "([a-z_]+)"/g)]
+    .map((match) => ({ member: match[1], name: match[2] }));
   assert.deepEqual(cases.map((entry) => entry.name), [...contract.tools], 'tool names and order');
-  const nameOf = new Map(cases.map((entry) => [entry.member, entry.name]));
-  const membersIn = (block) => {
-    const line = /case ([^:]+):\s*(?:\/\/[^\n]*\n\s*)*return true/.exec(block);
-    assert.ok(line, 'a "return true" case');
-    return line[1].split(',').map((member) => nameOf.get(member.trim().replace(/^\./, '')));
+  const memberOf = new Map(cases.map((entry) => [entry.name, entry.member]));
+  const switchOf = (start, end) => {
+    const values = parseSwitch(between(swift, start, end));
+    assert.deepEqual([...values.keys()].sort(), cases.map((entry) => entry.member).sort(), `${start}: every tool exactly once`);
+    return values;
   };
-  const sideEffects = new Set(membersIn(between(swift, 'var hasSideEffects', 'var isAvailableToConnector')));
-  const connector = membersIn(between(swift, 'var isAvailableToConnector', 'var returnsTranscriptContent'));
-  assert.deepEqual(connector, [...contract.scopes.connector.tools], 'connector scope');
+  const sideEffects = switchOf('var hasSideEffects: Bool {', 'var isAvailableToConnector: Bool {');
+  const connector = switchOf('var isAvailableToConnector: Bool {', 'var returnsTranscriptContent: Bool {');
+  const titles = switchOf('var title: String {', 'var description: String {');
+  const descriptions = switchOf('var description: String {', 'var inputSchema: JSONValue {');
+  const schemas = switchOf('var inputSchema: JSONValue {', '// MARK: - Schema helpers');
+  assert.deepEqual(cases.filter((entry) => connector.get(entry.member) === true).map((entry) => entry.name),
+    [...contract.scopes.connector.tools], 'connector scope');
+
+  // How `descriptor` and the schema helpers build the JSON the reader assumes.
+  const descriptorBody = between(swift, 'var descriptor: JSONValue {', 'var title: String {');
+  for (const line of ['"name": .string(rawValue)', '"title": .string(title)', '"description": .string(description)',
+    '"inputSchema": inputSchema', '"readOnlyHint": .bool(!hasSideEffects)', '"destructiveHint": .bool(false)',
+    '"idempotentHint": .bool(!hasSideEffects)', '"openWorldHint": .bool(false)']) {
+    assert.ok(descriptorBody.includes(line), `descriptor: ${line}`);
+  }
+  const helpers = swift.slice(swift.indexOf('// MARK: - Schema helpers'));
+  for (const line of ['"type": "object"', '"properties": .object(properties)', '"additionalProperties": false',
+    'if !required.isEmpty', '.object(["type": "string", "description": .string(description)])',
+    'var object: [String: JSONValue] = ["type": "integer", "description": .string(description)]',
+    'if let minimum { object["minimum"]', 'if let maximum { object["maximum"]']) {
+    assert.ok(helpers.includes(line), `schema helpers: ${line}`);
+  }
 
   for (const descriptor of contract.tool_descriptors) {
-    assert.ok(swift.includes(`return ${swiftString(descriptor.title)}`), `${descriptor.name} title`);
-    assert.ok(swift.includes(`return ${swiftString(descriptor.description)}`), `${descriptor.name} description`);
-    assert.equal(descriptor.annotations.readOnlyHint, !sideEffects.has(descriptor.name), `${descriptor.name} side effects`);
-    for (const [property, schema] of Object.entries(descriptor.inputSchema.properties)) {
-      assert.ok(swift.includes(swiftString(property)), `${descriptor.name}.${property} name`);
-      assert.ok(swift.includes(swiftString(schema.description)), `${descriptor.name}.${property} description`);
-      for (const bound of ['minimum', 'maximum']) {
-        if (schema[bound] !== undefined) assert.ok(swift.includes(`${bound}: ${schema[bound]}`), `${descriptor.name}.${property} ${bound}`);
-      }
-    }
+    const member = memberOf.get(descriptor.name);
+    const side = sideEffects.get(member);
+    assert.equal(typeof side, 'boolean', `${descriptor.name} side effects`);
+    assert.deepEqual(Object.keys(descriptor), ['name', 'title', 'description', 'inputSchema', 'annotations'], descriptor.name);
+    assert.equal(descriptor.title, titles.get(member), `${descriptor.name} title`);
+    assert.equal(descriptor.description, descriptions.get(member), `${descriptor.name} description`);
+    assert.deepEqual(descriptor.inputSchema, schemas.get(member), `${descriptor.name} inputSchema`);
+    assert.deepEqual(descriptor.annotations, {
+      title: titles.get(member), readOnlyHint: !side, destructiveHint: false, idempotentHint: !side, openWorldHint: false,
+    }, `${descriptor.name} annotations`);
   }
-  assert.ok(swift.includes('], required: ["query"])'), 'search_transcripts requires query');
-  assert.ok(swift.includes('"enum": ["calendar", "zoom_meeting", "task"]'), 'propose_follow_up kinds');
 
   const scopes = readFileSync(join(APP_DIR, 'Wisply/Services/MCP/MCPTokenScope.swift'), 'utf8');
   assert.ok(scopes.includes('case .full: return "wsp_"') && scopes.includes('case .connector: return "wspc_"'), 'token prefixes');
@@ -119,4 +288,39 @@ test('app: the provisional descriptors are the Swift catalog\'s, word for word',
   assert.equal(Number(port?.replaceAll('_', '')), contract.default_port, 'default port');
   const proof = readFileSync(join(APP_DIR, 'Wisply/Services/MCP/MCPIdentityProof.swift'), 'utf8');
   assert.ok(proof.includes(`static let scheme = "${contract.identity_scheme}"`), 'identity scheme');
+});
+
+test('the Swift reader parses the catalog\'s shapes and rejects anything else', () => {
+  const values = parseSwitch(`switch self {
+    case .a, .b: // a comment
+        return true
+    case .c: return "Say \\"hi\\" \\\\ there"
+    case .d:
+        return schema(properties: [
+            "n": integer("Count (1\u2013100).", minimum: 1, maximum: nil),
+            "k": .object([ "type": "string", "enum": ["x", "y"], "description": "Kind." ]),
+            "s": string("Text.")
+        ], required: ["s"])
+    case .e: return schema(properties: [:])
+    }`);
+  assert.deepEqual(Object.fromEntries(values), {
+    a: true, b: true, c: 'Say "hi" \\ there',
+    d: {
+      type: 'object', additionalProperties: false, required: ['s'], properties: {
+        n: { type: 'integer', description: 'Count (1\u2013100).', minimum: 1 },
+        k: { type: 'string', enum: ['x', 'y'], description: 'Kind.' },
+        s: { type: 'string', description: 'Text.' },
+      },
+    },
+    e: { type: 'object', additionalProperties: false, properties: {} },
+  });
+  for (const text of [
+    'switch self { case .a: return boolean("x") }',
+    'switch self { case .a: return schema(properties: [:], extra: 1) }',
+    'switch self { case .a: return "x\\n" }',
+    'switch self { case .a: return !x }',
+    'switch self { case .a: return true case .a: return false }',
+  ]) {
+    assert.throws(() => parseSwitch(text), assert.AssertionError, text);
+  }
 });

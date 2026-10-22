@@ -4,7 +4,7 @@
 
 Please report security problems privately: use **Report a vulnerability** on
 this repository's Security tab (GitHub private vulnerability reporting), or
-email support@wisply.ai with "security" in the subject. Don't open a public
+email support@fallah.io with "security" in the subject. Don't open a public
 issue. Include the connector version (`wisply-mcp --version`), the AI app, and
 steps to reproduce. Never include a real Wisply token.
 
@@ -30,8 +30,19 @@ is closed. Before every use of the token, the connector asks the listener,
 without the token, for an HMAC-SHA256 proof over a fresh random nonce and the
 port, and checks it for the token's scope in constant time. An answer that is
 oversized, isn't HTTP or doesn't prove the token means the token is not sent.
-There is a gap between the check and the call (a listener could change in
-between); the default token is read-only, which limits what that could expose.
+
+The check has two limits. First, there is a gap between the check and the
+call (a listener could change in between, for example if Wisply quits and
+another program takes the port). Second, it relies on Wisply holding its port
+alone while it runs: the proof binds the token, the port and the nonce, not
+the TCP connection, and the check and the call use separate connections. A
+program that could listen on `127.0.0.1:<port>` next to Wisply could pass the
+check on to Wisply and then receive the token with the call. Whether Wisply's
+listener (`allowLocalEndpointReuse` in `MCPServer.swift`) lets a second
+same-user socket bind that port is still to be checked on a Mac; if it does,
+Wisply has to bind the port exclusively before this connector is released
+(see "Release controls"). The default token is read-only, which limits what
+either gap could expose.
 
 **Network.** The connector talks only to `127.0.0.1`, with its own HTTP agent
 (proxy variables are ignored), never follows redirects, and caps every answer
@@ -56,11 +67,19 @@ Wisply goes to the AI service that app uses, under that service's terms.
 Transcripts are recorded speech: treat them as untrusted data.
 
 **Supply chain.** The package has zero runtime dependencies and no lifecycle
-scripts (`tests/pack.test.mjs` enforces both). Snippets run `@wisply/mcp@0`,
-the newest 0.x release, so a new major version never runs on its own; pin an
-exact version (`@wisply/mcp@0.1.0`) if you prefer. The first release is
-published by hand with two-factor authentication; later releases come only
-from this repository's tag-triggered release workflow, with npm provenance.
+scripts (`tests/pack.test.mjs` enforces both). The snippets in this README
+(and, once they exist, on wisply.ai and in Wisply) run one exact version
+(`@wisply/mcp@0.1.0`), taken from `PACKAGE_SPEC`. npm never lets a published
+version change, so a later release, including a bad one, reaches your app only
+after you change the version in its settings. If you
+write `@wisply/mcp@0` instead, `npx` fetches the newest 0.x release every time
+your app starts the connector: you get fixes on their own, and a bad release
+would run the same way. `npx` doesn't check npm provenance when it installs a
+package, so provenance is an audit trail, not a guard. Publishing is guarded
+by npm's own controls, listed under "Release controls" below.
+
+Until the contract with Wisply is final, `package.json` is marked `"private"`,
+so `npm publish` refuses the package.
 
 ## If you think a token leaked
 
@@ -72,10 +91,40 @@ from this repository's tag-triggered release workflow, with npm provenance.
    answering MCP requests at once; if Wisply Companion is set up, the same
    local listener stays on for it.
 
+## Release controls (maintainers)
+
+Each of these must hold before the step it names. None is met yet: the
+package has never been published.
+
+1. **Before anything public names the package** (the wisply.ai guide,
+   Wisply's snippets, catalog listings): the npm organization `wisply` exists,
+   with two-factor authentication required for every member, and the unscoped
+   fallback name `wisply-mcp` is held by the same owner, so nobody else can
+   register either name and be what `npx -y` runs.
+2. **Before the first publish:** the contract is re-vendored from wisply-ai
+   (`contract/SOURCE.json` no longer provisional, `WISPLY_RELEASE=1 npm test`
+   passes), `"private": true` is removed from `package.json` in the same
+   change (`tests/pack.test.mjs` ties the two), the `setup`, `status` and
+   `forget` commands are in, and a test on a Mac has shown that no second
+   socket can listen on Wisply's port while Wisply runs.
+3. **The first publish** is by hand, by the organization owner, with
+   two-factor authentication.
+4. **From the second release,** only npm trusted publishing (OIDC from a
+   GitHub Actions release workflow in this repository, behind a protected
+   environment) publishes, and the package's publishing access is set to
+   "Require two-factor authentication and disallow tokens". This repository
+   has no release workflow yet; until it does, no release claims provenance.
+5. **Every release** bumps `version` in `package.json` and `VERSION` in
+   `lib/constants.mjs` together. The snippets follow `PACKAGE_SPEC`; update
+   the wisply.ai guide and Wisply's snippets to the new version.
+
 ## If a bad release is published (maintainers)
 
-1. Publish a fixed patch release at once (every `@0` snippet picks it up at the
-   next start), or unpublish the version if npm still allows it.
+1. Publish a fixed patch release at once and unpublish the bad version if npm
+   still allows it. Snippets pinned to an earlier version never ran it; for
+   anyone who moved to it, update the guide and Wisply's snippets to the fix
+   and say which version to write. Installs that use `@wisply/mcp@0` pick up
+   the fix at their next start.
 2. `npm deprecate @wisply/mcp@<version> "Security issue: update to <fixed>"`.
 3. Mark the version deprecated in the MCP Registry.
 4. Publish a GitHub security advisory on this repository.

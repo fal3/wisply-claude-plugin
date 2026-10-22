@@ -7,10 +7,11 @@ import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import contract from '../lib/contract.mjs';
-import { PACKAGE_NAME, PACKAGE_SPEC, VERSION } from '../lib/constants.mjs';
+import { PACKAGE_NAME, PACKAGE_RANGE, PACKAGE_SPEC, VERSION } from '../lib/constants.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
+const SOURCE = JSON.parse(readFileSync(join(ROOT, 'contract/SOURCE.json'), 'utf8'));
 const LIFECYCLE = ['preinstall', 'install', 'postinstall', 'prepare', 'preprepare', 'postprepare', 'prepack', 'postpack',
   'prepublish', 'prepublishOnly', 'publish', 'postpublish', 'preuninstall', 'uninstall', 'postuninstall',
   'preversion', 'version', 'postversion', 'dependencies'];
@@ -40,6 +41,14 @@ test('the tarball holds only bin, lib, contract, clients, README, LICENSE and pa
   }
 });
 
+test('npm refuses to publish while the contract is provisional ("private": true)', () => {
+  // npm publish refuses a private package without running any script, so a
+  // plain `npm publish` can't ship the provisional contract. Dropping the flag
+  // is the explicit release step, together with the re-vendored contract (DIST-M5).
+  assert.equal(pkg.private === true, SOURCE.provisional, 'package.json "private" must equal contract/SOURCE.json "provisional"');
+  if (!SOURCE.provisional) assert.equal(Object.hasOwn(pkg, 'private'), false, 'remove "private" rather than setting it to false');
+});
+
 test('no dependencies and no lifecycle scripts', () => {
   for (const field of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies', 'bundleDependencies', 'bundledDependencies']) {
     assert.equal(Object.hasOwn(pkg, field), false, field);
@@ -52,7 +61,10 @@ test('no dependencies and no lifecycle scripts', () => {
 test('package.json, the constants and the README agree', () => {
   assert.equal(pkg.name, PACKAGE_NAME);
   assert.equal(pkg.version, VERSION);
-  assert.equal(PACKAGE_SPEC, `${PACKAGE_NAME}@${VERSION.split('.')[0]}`);
+  // Snippets pin the exact version; the 0.x range is only ever an opt-in.
+  assert.equal(PACKAGE_SPEC, `${PACKAGE_NAME}@${VERSION}`);
+  assert.match(VERSION, /^\d+\.\d+\.\d+$/);
+  assert.equal(PACKAGE_RANGE, `${PACKAGE_NAME}@${VERSION.split('.')[0]}`);
   assert.equal(pkg.type, 'module');
   assert.deepEqual(pkg.bin, { 'wisply-mcp': 'bin/wisply-mcp.mjs' });
   assert.equal(pkg.mcpName, 'ai.wisply/local');
@@ -68,6 +80,9 @@ test('package.json, the constants and the README agree', () => {
   assert.ok(readme.includes(`npx -y ${PACKAGE_SPEC}`));
   for (const tool of contract.tools) assert.ok(readme.includes(`\`${tool}\``), `README names ${tool}`);
   assert.ok(!readme.includes('@wisply/mcp@latest'));
+  // The range appears only in the opt-in note, never in a snippet.
+  assert.ok(!readme.includes(`"${PACKAGE_RANGE}"`) && !readme.includes(`npx -y ${PACKAGE_RANGE} `) && !readme.includes(`npx -y ${PACKAGE_RANGE}\``),
+    'README snippets run the exact version');
 });
 
 test('the bin is an executable node script', () => {

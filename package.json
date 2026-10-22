@@ -1,6 +1,7 @@
 {
   "name": "@wisply/mcp",
   "version": "0.1.0",
+  "private": true,
   "description": "Use your Wisply meeting notes, action items and live transcript in any MCP client, from the Wisply app on this Mac.",
   "type": "module",
   "bin": {

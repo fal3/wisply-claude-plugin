@@ -7,12 +7,14 @@ MCP server. It talks only to the Wisply app at `127.0.0.1`, checks that it is
 talking to Wisply before it uses your token, and needs no account.
 
 > **Status: not released yet.** This package isn't on npm, and the name
-> `@wisply/mcp` is a placeholder until it is. Its contract with the Wisply app
-> is provisional (transcribed from the app's tool catalog), so it can't be
-> published (`WISPLY_RELEASE=1 npm test` refuses it). The `setup`, `status`
-> and `forget` commands, which keep the token in your login keychain, land
-> before the first release. Until then the token comes from
-> `WISPLY_MCP_TOKEN` only.
+> `@wisply/mcp` is a placeholder until it is (the `wisply` npm organization
+> doesn't exist yet). Its contract with the Wisply app is provisional
+> (transcribed from the app's tool catalog), so `package.json` is marked
+> `"private"`, which makes `npm publish` refuse it, and
+> `WISPLY_RELEASE=1 npm test` fails. The `setup`, `status` and `forget`
+> commands, which keep the token in your login keychain, land before the
+> first release; this build answers them with "not in this build yet". Until
+> then the token comes from `WISPLY_MCP_TOKEN` only.
 
 ## What you need
 
@@ -27,16 +29,16 @@ talking to Wisply before it uses your token, and needs no account.
 Every client runs the same token-free entry:
 
 ```json
-{ "command": "npx", "args": ["-y", "@wisply/mcp@0"] }
+{ "command": "npx", "args": ["-y", "@wisply/mcp@0.1.0"] }
 ```
 
 For example, in `~/.cursor/mcp.json`:
 
 ```json
-{ "mcpServers": { "wisply": { "command": "npx", "args": ["-y", "@wisply/mcp@0"] } } }
+{ "mcpServers": { "wisply": { "command": "npx", "args": ["-y", "@wisply/mcp@0.1.0"] } } }
 ```
 
-or in Claude Code: `claude mcp add --scope user wisply -- npx -y @wisply/mcp@0`.
+or in Claude Code: `claude mcp add --scope user wisply -- npx -y @wisply/mcp@0.1.0`.
 
 Install Wisply once per app. Two entries named `wisply` show the tools twice.
 One-click links and snippets for every client follow with the first release
@@ -58,9 +60,13 @@ Three notes:
 - **Remote windows.** In a VS Code Remote-SSH or Dev Container window, add
   Wisply to your **local** user configuration. A server started on the remote
   machine can't reach Wisply on your Mac.
-- **Versions.** `@wisply/mcp@0` runs the newest 0.x release from npm each time
-  your app starts the connector. To stay on one exact version, write
-  `@wisply/mcp@0.1.0` instead.
+- **Versions.** The snippets name one exact version (`@wisply/mcp@0.1.0`).
+  npm never changes a published version, so your app runs the same connector
+  until you change the version in its settings (the guide on wisply.ai and
+  Wisply's own snippets will show the newest one). If you'd rather get every 0.x
+  release on its own, write `@wisply/mcp@0`: `npx` then fetches the newest 0.x
+  release each time your app starts the connector, which means a bad release
+  would run the same way.
 
 ## Tokens and tools
 
@@ -102,7 +108,8 @@ allows, and Wisply enforces the same rule.
   listener, without the token, to prove it holds the same token: an
   HMAC-SHA256 over a fresh random nonce, bound to the port. The proof is
   checked for your token's own scope, in constant time. Only then is the
-  token sent, as a bearer header.
+  token sent, as a bearer header. The check relies on Wisply holding its port
+  alone while it runs (see [SECURITY.md](SECURITY.md)).
 - **Local answers.** `initialize`, `ping` and `tools/list` are answered by the
   connector itself, from the tool descriptions in this package, never from
   whatever answers on the port.
@@ -114,6 +121,8 @@ allows, and Wisply enforces the same rule.
 - **No dependencies, no install scripts, no telemetry.** The package has zero
   runtime dependencies and no lifecycle scripts. It sends nothing anywhere
   except `127.0.0.1`.
+- **A pinned version.** The snippets run one exact, unchangeable npm version,
+  so a new release reaches your app only when you choose it.
 
 ## Privacy
 
@@ -138,6 +147,8 @@ The connector answers with a plain message instead of a result:
 - **"Wisply identity check failed"**: the program on the port couldn't prove
   it holds your token, so the token wasn't sent. If you regenerated the token
   in Wisply, update it in your app. Otherwise quit whatever uses that port.
+- **"Wisply couldn't run ..."**: Wisply answered the call with an error. The
+  connector passes on Wisply's error code but never Wisply's own error text.
 - **"This version of Wisply has no identity check"**: update Wisply.
 - **"... isn't available with your ... token"**: the tool needs another token.
 

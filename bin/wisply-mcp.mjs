@@ -8,16 +8,16 @@
 // (lib/debug.mjs), and never contain arguments, results or the token.
 import { createInterface } from 'node:readline';
 import contract from '../lib/contract.mjs';
-import { DEFAULT_PORT, VERSION } from '../lib/constants.mjs';
+import { DEFAULT_PORT, PLANNED_COMMANDS, VERSION } from '../lib/constants.mjs';
 import { createBridge } from '../lib/bridge.mjs';
 import { debugLine } from '../lib/debug.mjs';
 import { createLoopback, parsePort } from '../lib/loopback.mjs';
-import { HELP, RPC, badPort, unknownArgument } from '../lib/messages.mjs';
+import { HELP, RPC, badPort, notInThisBuild, unknownArgument } from '../lib/messages.mjs';
 import { resolveToken } from '../lib/token.mjs';
 
-function usage(text) {
+function usage(text, code = 2) {
   process.stderr.write(`${text}\n`);
-  process.exit(2);
+  process.exit(code);
 }
 
 /** Parses the serve flags. Exits for --help, --version and any mistake. */
@@ -39,8 +39,10 @@ function parseArgs(argv, env) {
       const value = argument === '--port' ? argv[(index += 1)] : argument.slice('--port='.length);
       options.port = parsePort(value);
       if (options.port === null) usage(badPort(value ?? ''));
-    } else {
+    } else if (index === 0 && PLANNED_COMMANDS.includes(argument)) {
       // setup, status, forget, print-config and install arrive in later 0.x releases.
+      usage(notInThisBuild(argument), 1);
+    } else {
       usage(unknownArgument(argument));
     }
   }

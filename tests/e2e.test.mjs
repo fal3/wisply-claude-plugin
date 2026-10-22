@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { FAKE_TOKENS, startFakeWisply } from './fixtures/fake-wisply.mjs';
-import { VERSION } from '../lib/constants.mjs';
+import { PLANNED_COMMANDS, VERSION } from '../lib/constants.mjs';
 import * as messages from '../lib/messages.mjs';
 
 const BIN = fileURLToPath(new URL('../bin/wisply-mcp.mjs', import.meta.url));
@@ -170,11 +170,18 @@ test('--port wins over WISPLY_MCP_PORT, and bad ports or arguments exit 2', asyn
   const equals = await run({ args: [`--port=${fake.port}`], env: { WISPLY_MCP_TOKEN: FAKE_TOKENS.connector }, lines });
   assert.equal(equals.responses[0].result.isError, false);
 
-  for (const args of [['--port', '80'], ['--port'], ['--port=abc'], ['--port', '70000'], ['setup'], ['--host', 'example.com'], ['status']]) {
+  for (const args of [['--port', '80'], ['--port'], ['--port=abc'], ['--port', '70000'], ['--host', 'example.com'], ['--read-only', 'setup'], ['bogus']]) {
     const result = await run({ args, lines });
     assert.equal(result.code, 2, args.join(' '));
     assert.equal(result.stdout, '');
     assert.match(result.stderr, /^wisply-mcp: /);
+  }
+  // Commands of later releases say so plainly, and exit 1.
+  for (const command of PLANNED_COMMANDS) {
+    const result = await run({ args: [command], lines });
+    assert.equal(result.code, 1, command);
+    assert.equal(result.stdout, '');
+    assert.equal(result.stderr, `${messages.notInThisBuild(command)}\n`);
   }
   const badEnv = await run({ env: { WISPLY_MCP_PORT: 'eighty' }, lines });
   assert.equal(badEnv.code, 2);
