@@ -43,7 +43,7 @@ function parseArgs(argv, env) {
       options.port = parsePort(value);
       if (options.port === null) usage(badPort(value ?? ''));
     } else if (index === 0 && PLANNED_COMMANDS.includes(argument)) {
-      // setup, status, forget, print-config and install arrive in later 0.x releases.
+      // print-config and install arrive in a later 0.x release (DIST-M4).
       usage(notInThisBuild(argument), 1);
     } else {
       usage(unknownArgument(argument));

@@ -20,19 +20,32 @@ All notable changes to `@wisply/mcp` are listed here. Versions follow
 - Plain tool errors for every failure (token not set or malformed, Wisply not
   answering, identity check failed, Wisply too old, tool outside the scope,
   another platform), none of which contain the token or the app's response.
-  They point at `npx -y @wisply/mcp setup` and at `WISPLY_MCP_TOKEN`.
+  Until the npm name is Wisply's (`PACKAGE_NAME_FINAL`), they point only at
+  `WISPLY_MCP_TOKEN`; from then on also at `npx -y @wisply/mcp@0.1.0 setup`.
 - A JSON-RPC error from Wisply keeps its code, with a fixed message from the
   connector in place of Wisply's own text.
-- `setup [--full-access]`: macOS's `security` asks for the token in the
-  terminal and stores it in the login keychain ("Wisply MCP token"; service
-  `ai.wisply.mcp`, account `token`), so the token never passes through the
-  connector's arguments or output. Setup reads it back once, removes a
-  full-access token unless `--full-access` and anything that isn't a Wisply
-  token, and runs the identity check on what it keeps. It needs a terminal.
+- `setup [--full-access]`: removes every "Wisply MCP token" item saved
+  before, then macOS's `security` asks for the token in the terminal and
+  stores it in the login keychain ("Wisply MCP token"; service
+  `ai.wisply.mcp`, account `token`; created without `-U`, trusting only
+  `/usr/bin/security`), so the token never passes through the connector's
+  arguments or output. Setup reads it back once, removes a full-access token
+  unless `--full-access` and anything that isn't a Wisply token, and runs the
+  identity check on what it keeps. A stored full-access token comes with a
+  note that it reaches every AI app without its own token. It needs a
+  terminal.
 - `status`: where the token comes from (environment or Keychain, and whether
-  a placeholder was ignored), its scope, the port, whether Wisply answered and
-  proved it holds the token, and the tool count. It never prints the token.
-- `forget`: removes the Keychain item.
+  a placeholder was ignored), its scope, the port (also without a token),
+  whether Wisply answered and proved it holds the token, and the tool count
+  ("none" for `--read-only` with a recording-control token). It never prints
+  the token.
+- `forget`: removes the Keychain item, every copy in the keychain search
+  list. It ignores `WISPLY_MCP_PORT`.
+- `security` runs with the environment minus every `WISPLY_MCP_*` variable.
+- An argument or `WISPLY_MCP_PORT` that looks like a token is refused with a
+  fixed message that shows none of it.
+- The setup, status and forget commands that messages and docs name run the
+  pinned version (`npx -y @wisply/mcp@0.1.0 setup`), like the snippets.
 - Without a usable `WISPLY_MCP_TOKEN`, the connector reads the Keychain item
   (macOS only, 2 s budget).
 - `print-config` and `install` answer "not in this build yet" (exit 1).
@@ -43,6 +56,35 @@ All notable changes to `@wisply/mcp` are listed here. Versions follow
 - `WISPLY_MCP_DEBUG=1`: one fixed-field line per request on stderr, never
   arguments, results or tokens.
 - `--help` and `--version`.
+
+### Differences from the distribution design (to fold into the spec)
+
+- **Pinned commands.** The design's texts name the setup, status and forget
+  commands with the bare package name, without a version. This package names
+  them with `PACKAGE_SPEC` (`npx -y @wisply/mcp@0.1.0 setup`), as it already
+  does for every snippet, so the command that decides which token lands in
+  the keychain never runs npm's newest release. The "Errors" texts are
+  otherwise word for word.
+- **No package name before it is Wisply's.** While `PACKAGE_NAME_FINAL` is
+  false, `SETUP`, `MALFORMED` and `NOT_WISPLY` in tool results use the interim
+  wording that names only `WISPLY_MCP_TOKEN`, and terminal texts (setup,
+  status, forget, argument errors) name `wisply-mcp setup`.
+- **`SETUP_MALFORMED`.** When setup's read-back isn't a Wisply token it prints
+  `SETUP_MALFORMED`, not the design's `MALFORMED` (which says
+  "WISPLY_MCP_TOKEN is set", wrong in setup): "That isn't a Wisply token (it
+  should start with wspc_, wspr_ or wsp_ and have 64 hex characters), so it
+  wasn't saved. Copy the read-only connector token from Wisply > Settings >
+  Integrations > MCP Server and run `{setup command}` again." The VS Code
+  extension and the wisply.ai page should use the same text.
+- **Setup replaces instead of updating.** Setup deletes every earlier item
+  before `security` asks for the token, and adds without `-U`, so the item's
+  access list is always the documented one. Cancelling after that leaves no
+  item, and setup says so (`SETUP_CANCELLED_AFTER_REMOVAL`, `PREVIOUS_REMOVED`);
+  `SETUP_CANCELLED` ("Your login keychain wasn't changed") is printed only
+  when there was nothing to remove.
+- **Full-access note.** `setup --full-access` (`FULL_ACCESS_SHARED`) and
+  `status` with a full-access keychain item say that every AI app without its
+  own token gets full access.
 
 ### Not yet
 

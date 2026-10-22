@@ -7,7 +7,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import contract from '../lib/contract.mjs';
-import { PACKAGE_NAME, PACKAGE_RANGE, PACKAGE_SPEC, VERSION } from '../lib/constants.mjs';
+import { PACKAGE_NAME, PACKAGE_NAME_FINAL, PACKAGE_RANGE, PACKAGE_SPEC, VERSION } from '../lib/constants.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
@@ -47,6 +47,28 @@ test('npm refuses to publish while the contract is provisional ("private": true)
   // is the explicit release step, together with the re-vendored contract (DIST-M5).
   assert.equal(pkg.private === true, SOURCE.provisional, 'package.json "private" must equal contract/SOURCE.json "provisional"');
   if (!SOURCE.provisional) assert.equal(Object.hasOwn(pkg, 'private'), false, 'remove "private" rather than setting it to false');
+});
+
+test('the package name is final exactly when package.json is no longer private', () => {
+  // Messages may name the package through npx only once Wisply owns the name
+  // on npm, which has to hold before the first publish anyway.
+  assert.equal(PACKAGE_NAME_FINAL, pkg.private !== true, 'lib/constants.mjs PACKAGE_NAME_FINAL must be !package.json "private"');
+  assert.equal(typeof PACKAGE_NAME_FINAL, 'boolean');
+});
+
+test('every npx or npm install of the package in the docs and messages runs the pinned version', () => {
+  // The exact version, as every snippet. The 0.x range is only ever a version to write, never a command.
+  const escaped = PACKAGE_NAME.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+  const command = new RegExp(`\\b(?:npx(?: -y)?|npm (?:i|install) -g) (${escaped}[^\\s\`"'),]*)`, 'g');
+  for (const file of ['README.md', 'SECURITY.md', 'CHANGELOG.md']) {
+    const text = readFileSync(join(ROOT, file), 'utf8');
+    for (const match of text.matchAll(command)) assert.equal(match[1], PACKAGE_SPEC, `${file}: ${match[0]}`);
+  }
+  // In messages.mjs, npx appears once: COMMAND_PREFIX, with the pinned spec, and only once the name is final.
+  const source = readFileSync(join(ROOT, 'lib/messages.mjs'), 'utf8');
+  assert.deepEqual([...source.matchAll(/npx -y \$\{(\w+)\}/g)].map((match) => match[1]), ['PACKAGE_SPEC']);
+  assert.match(source, /PACKAGE_NAME_FINAL \? `npx -y \$\{PACKAGE_SPEC\}` : 'wisply-mcp'/);
+  assert.doesNotMatch(source, /npx -y @wisply/);
 });
 
 test('no dependencies and no lifecycle scripts', () => {
