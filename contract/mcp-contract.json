@@ -1,0 +1,301 @@
+{
+  "schema": "wisply-mcp-contract-v1",
+  "identity_scheme": "wisply-mcp-identity-v1",
+  "default_port": 51771,
+  "tools": [
+    "list_memos",
+    "search_transcripts",
+    "get_live_transcript",
+    "get_action_items",
+    "start_recording",
+    "stop_recording",
+    "propose_follow_up",
+    "get_action_proposal_status",
+    "setup_claude"
+  ],
+  "scopes": {
+    "full": {
+      "prefix": "wsp_",
+      "tools": [
+        "list_memos",
+        "search_transcripts",
+        "get_live_transcript",
+        "get_action_items",
+        "start_recording",
+        "stop_recording",
+        "propose_follow_up",
+        "get_action_proposal_status",
+        "setup_claude"
+      ]
+    },
+    "connector": {
+      "prefix": "wspc_",
+      "tools": [
+        "list_memos",
+        "search_transcripts",
+        "get_live_transcript",
+        "get_action_items"
+      ]
+    },
+    "recording": {
+      "prefix": "wspr_",
+      "tools": [
+        "start_recording",
+        "stop_recording",
+        "propose_follow_up"
+      ]
+    }
+  },
+  "error_codes": [
+    "invalid_arguments",
+    "memo_not_found",
+    "no_memo_with_insights",
+    "recording_control_disabled",
+    "already_recording",
+    "not_recording",
+    "recording_failed",
+    "invalid_api_key_format",
+    "keychain_failure",
+    "consent_requires_user",
+    "action_bot_unavailable",
+    "action_kind_not_allowed",
+    "action_proposal_not_found",
+    "unavailable",
+    "internal"
+  ],
+  "legacy_error_prefixes": [
+    ["Recording control is disabled for agents", "recording_control_disabled"],
+    ["A recording is already in progress.", "already_recording"],
+    ["No recording is in progress.", "not_recording"],
+    ["Recording could not be started:", "recording_failed"],
+    ["No recording has generated insights yet.", "no_memo_with_insights"],
+    ["No memo found with id", "memo_not_found"],
+    ["Action Bot is turned off", "action_bot_unavailable"],
+    ["Action Bot writes for kind", "action_kind_not_allowed"]
+  ],
+  "live_transcript": {
+    "max_tail_words": 5000
+  },
+  "tool_descriptors": [
+    {
+      "name": "list_memos",
+      "title": "List Memos",
+      "description": "List the user's Wisply recordings (memos), newest first. Read-only. Returns id, title, timestamps, duration, and a short summary when insights exist.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "description": "Maximum memos to return (1–100). Default 20.",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "offset": {
+            "type": "integer",
+            "description": "Number of memos to skip for paging. Default 0.",
+            "minimum": 0
+          }
+        }
+      },
+      "annotations": {
+        "title": "List Memos",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "search_transcripts",
+      "title": "Search Transcripts",
+      "description": "Search recording titles, summaries, and transcripts for a phrase. Read-only. Returns matching memos with a short excerpt around the first hit.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Phrase to look for (case-insensitive)."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Maximum matches to return (1–50). Default 10.",
+            "minimum": 1,
+            "maximum": 50
+          }
+        },
+        "required": ["query"]
+      },
+      "annotations": {
+        "title": "Search Transcripts",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "get_live_transcript",
+      "title": "Get Live Transcript",
+      "description": "Return the transcript of the recording currently in progress, plus its state and duration. Read-only. Empty when nothing is recording.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "annotations": {
+        "title": "Get Live Transcript",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "get_action_items",
+      "title": "Get Action Items",
+      "description": "Return the AI-generated action items and open questions for a memo (default: the newest memo that has insights), plus the Action Bot proposal chips currently awaiting the user in Wisply's Sidekick (action_bot_proposals). Read-only.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "memo_id": {
+            "type": "string",
+            "description": "Memo id from list_memos. Defaults to the newest memo with insights."
+          }
+        }
+      },
+      "annotations": {
+        "title": "Get Action Items",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "start_recording",
+      "title": "Start Recording",
+      "description": "Start a new Wisply recording using the user's configured audio sources. Side effect: captures audio. Only works when the user has enabled agent recording control in Wisply settings.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "annotations": {
+        "title": "Start Recording",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "stop_recording",
+      "title": "Stop Recording",
+      "description": "Stop the recording in progress and save it as a memo. Side effect: ends capture and writes a memo. Requires agent recording control to be enabled.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "annotations": {
+        "title": "Stop Recording",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "propose_follow_up",
+      "title": "Propose Follow-Up",
+      "description": "Draft a follow-up (calendar block, Zoom meeting, or reminder) from a memo's action items and open questions and surface it as an Action Bot chip in Wisply's Sidekick with a confirmation card. Proposal only: nothing is written unless the user confirms in Wisply. Requires Action Bot to be enabled in Wisply settings. Poll get_action_proposal_status for the outcome.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "memo_id": {
+            "type": "string",
+            "description": "Memo id from list_memos. Defaults to the newest memo with insights."
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["calendar", "zoom_meeting", "task"],
+            "description": "What to propose. Default calendar. zoom_meeting needs Zoom connected in Wisply; task is a Reminder."
+          },
+          "start": {
+            "type": "string",
+            "description": "Proposed start as an ISO 8601 date-time (e.g. 2026-09-04T14:00:00-04:00). Optional; the user can set it on the confirmation card."
+          },
+          "duration_minutes": {
+            "type": "integer",
+            "description": "Proposed duration (5–480). Defaults to a length derived from the memo's action items.",
+            "minimum": 5,
+            "maximum": 480
+          },
+          "title": {
+            "type": "string",
+            "description": "Override for the proposed title. Defaults to \"Follow-up: <memo title>\"."
+          }
+        }
+      },
+      "annotations": {
+        "title": "Propose Follow-Up",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "get_action_proposal_status",
+      "title": "Get Action Proposal Status",
+      "description": "Report the status of Action Bot proposals (proposed_pending_user_confirmation, committed, undone, dismissed, failed, …) — one by proposal_id or all in this session. Read-only.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "proposal_id": {
+            "type": "string",
+            "description": "proposal_id returned by propose_follow_up or listed in get_action_items. Omit to list every proposal in this session."
+          }
+        }
+      },
+      "annotations": {
+        "title": "Get Action Proposal Status",
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "setup_claude",
+      "title": "Set Up Claude",
+      "description": "Inspect or complete Wisply's Claude setup. Call with no arguments to see whether an Anthropic API key is stored and the cloud-AI consent_status. Pass api_key (sk-ant-…) to store the key in the user's Keychain; Wisply then shows the user its Cloud AI consent sheet. Pass request_consent=true to show that sheet without storing a key. Consent can only be granted by the user inside Wisply — never by this tool. Returns a ready-to-paste Cursor mcp.json snippet.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "api_key": {
+            "type": "string",
+            "description": "Anthropic API key (sk-ant-…). Omit to only inspect the current setup."
+          },
+          "request_consent": {
+            "type": "boolean",
+            "description": "Ask Wisply to show the user the Cloud AI Data Consent sheet. Only the user can grant consent, inside Wisply; check consent_status on a follow-up call."
+          }
+        }
+      },
+      "annotations": {
+        "title": "Set Up Claude",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    }
+  ]
+}

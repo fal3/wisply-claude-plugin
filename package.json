@@ -1,0 +1,40 @@
+{
+  "name": "@wisply/mcp",
+  "version": "0.1.0",
+  "description": "Use your Wisply meeting notes, action items and live transcript in any MCP client, from the Wisply app on this Mac.",
+  "type": "module",
+  "bin": {
+    "wisply-mcp": "bin/wisply-mcp.mjs"
+  },
+  "mcpName": "ai.wisply/local",
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "contract",
+    "clients",
+    "README.md",
+    "LICENSE"
+  ],
+  "license": "MIT",
+  "author": "Wisply",
+  "repository": "github:fal3/wisply-mcp",
+  "homepage": "https://www.wisply.ai/docs/mcp/install",
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "wisply",
+    "meetings",
+    "transcription",
+    "macos",
+    "local"
+  ],
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "sync-vendor": "node scripts/sync-vendor.mjs",
+    "gen-data": "node scripts/gen-data.mjs",
+    "check": "npm test && npm pack --dry-run"
+  }
+}
