@@ -1,11 +1,17 @@
 # Changelog
 
 All notable changes to `@wisply/mcp` are listed here. Versions follow
-[Semantic Versioning](https://semver.org/).
+[Semantic Versioning](https://semver.org/). A release's heading gets its date
+in the change that prepares the release; `WISPLY_RELEASE=1 npm test` refuses
+to release a version whose heading has none.
 
-## Unreleased
+## 0.1.0 - Unreleased
 
-### Added
+The first release: the connector, its setup commands and the setups for 20
+AI apps, plus the Agent Plugin, Gemini CLI extension, Claude Desktop bundle,
+registry entries and skill built from this repository.
+
+### Added: the connector
 
 - A stdio MCP server (`wisply-mcp`) that bridges any MCP client to the Wisply
   app on this Mac at `127.0.0.1:51771` (`--port` / `WISPLY_MCP_PORT` for
@@ -85,49 +91,7 @@ All notable changes to `@wisply/mcp` are listed here. Versions follow
   arguments, results or tokens.
 - `--help` and `--version`.
 
-### Differences from the distribution design (to fold into the spec)
-
-- **Pinned commands.** The design's texts name the setup, status and forget
-  commands with the bare package name, without a version. This package names
-  them with `PACKAGE_SPEC` after npx's flags
-  (`npx -y --prefix / @wisply/mcp@0.1.0 setup`), as it already
-  does for every snippet, so the command that decides which token lands in
-  the keychain never runs npm's newest release. The "Errors" texts are
-  otherwise word for word.
-- **No package name before it is Wisply's.** While `PACKAGE_NAME_FINAL` is
-  false, `SETUP`, `MALFORMED` and `NOT_WISPLY` in tool results use the interim
-  wording that names only `WISPLY_MCP_TOKEN`, and terminal texts (setup,
-  status, forget, argument errors) name `wisply-mcp setup`.
-- **`SETUP_MALFORMED`.** When setup's read-back isn't a Wisply token it prints
-  `SETUP_MALFORMED`, not the design's `MALFORMED` (which says
-  "WISPLY_MCP_TOKEN is set", wrong in setup): "That isn't a Wisply token (it
-  should start with wspc_, wspr_ or wsp_ and have 64 hex characters), so it
-  wasn't saved. Copy the read-only connector token from Wisply > Settings >
-  Integrations > MCP Server and run `{setup command}` again." The VS Code
-  extension and the wisply.ai page should use the same text.
-- **Setup replaces instead of updating.** Setup deletes every earlier item
-  before `security` asks for the token, and adds without `-U`, so the item's
-  access list is always the documented one. Cancelling after that leaves no
-  item, and setup says so (`SETUP_CANCELLED_AFTER_REMOVAL`, `PREVIOUS_REMOVED`);
-  `SETUP_CANCELLED` ("Your login keychain wasn't changed") is printed only
-  when there was nothing to remove.
-- **Full-access note.** `setup --full-access` (`FULL_ACCESS_SHARED`) and
-  `status` with a full-access keychain item say that every AI app without its
-  own token gets full access.
-- **`forget` off macOS.** The design leaves it open. `forget` prints its own
-  text (`nothingSavedOffMac`: "This connector saves a token only in the macOS
-  Keychain, and this computer runs {platform}, so there's nothing to
-  remove.") and exits 0, instead of `NOT_MAC` and exit 1: setup refuses off
-  macOS, so no saved copy can exist. `setup` and `status` keep `NOT_MAC` and
-  exit 1 there, as the design says for status.
-- **`WISPLY_RELEASE=1 npm test` fails on purpose until DIST-M5.** Exactly one
-  test fails ("a provisional contract is never released"), and the ordinary
-  `npm test` checks that it does. It belongs to the release check (DIST-M5),
-  not to `npm run check`.
-
-### Added outside the npm package
-
-These live in the repository, not in the package:
+### Added in this repository (not in the npm package)
 
 - The Agent Plugin (`plugin.json`, `mcp.json`, Agent Plugins 1.0.0) for
   Codex, Cursor, VS Code and GitHub Copilot CLI, with a Codex marketplace
@@ -159,66 +123,40 @@ These live in the repository, not in the package:
 - The README's install matrix: one-click links for Cursor, VS Code, VS Code
   Insiders, Goose, LM Studio and Kiro, the setup for 20 apps, and
   tag-pinned git installs (`--ref v0.1.0`) for Codex and Gemini CLI.
+- The release workflow `.github/workflows/release.yml`, for the releases
+  after 0.1.0 (0.1.0 itself is published by hand): only for `v*` tags, only
+  while the repository is public and the variable `NPM_TRUSTED_PUBLISHING`
+  is `on`, behind the `release` environment; npm trusted publishing (OIDC,
+  no npm token, `id-token: write` on that one job); actions pinned to full
+  commit SHAs; npm 11.21.0 installed without scripts; `npm run check` and
+  `WISPLY_RELEASE=1 npm test`; then `npm stage publish --provenance`, so a
+  version goes live only after a maintainer approves it on npm with
+  two-factor authentication.
+- The release gate `WISPLY_RELEASE=1 npm test` (`tests/release.test.mjs`):
+  it refuses a provisional contract, a package that is still `"private"`, a
+  package name that isn't final, a clients file that isn't `"published"`, a
+  CHANGELOG heading without this version's date and, in the release
+  workflow, a tag other than `v<version>`.
+- `npm run sync-vendor` refuses a wisply-ai contract the connector can't
+  load (for example one with `tool_descriptors` but no `wspr_` scope, or the
+  other way round) before it writes anything.
 
-### Differences from the distribution design: plugins, extensions and the bundle (to fold into the spec)
+### Known limitations
 
-- **`/wisply:live` hedges `tail_words`.** The design has `live.toml` call
-  `get_live_transcript` with `tail_words` 400. The provisional contract's
-  `get_live_transcript` takes no arguments (`additionalProperties: false`),
-  and a model calls tools by their schema (Gemini CLI may also check
-  arguments against it), so the prompt passes `tail_words` 400 only "if the
-  tool accepts tail_words, otherwise with no arguments". Until raycast PR 1's
-  contract is vendored, `/wisply:live` reads the whole live transcript.
-  `tests/skills.test.mjs` fails once the contract has `tail_words` and the
-  hedge is still there, so the DIST-M5 re-vendor makes the call
-  unconditional.
-- **The remote is its own plugin.** The design's directory table and
-  DIST-M6 row add a second `mcp.json` entry, `wisply-cloud`
-  (streamable-http), to the root plugin. The root `mcp.json` stays
-  local-only instead (`tests/manifests.test.mjs` refuses any non-stdio, URL,
-  header or env entry in it), and the remote is the separate, opt-in Agent
-  Plugin at `cloud-connect/plugin`, listed as a second marketplace entry
-  (as DIST-M6 builds it).
-- **Exact versions.** Snippets, one-click links and the versions note name
-  `@wisply/mcp@0.1.0` (`PACKAGE_SPEC`); `@wisply/mcp@0` is only the opt-in
-  (DIST-M1). The design's standard entry, per-client snippets, deeplinks and
-  the W1 versions-note text still say `@0`, and DIST-M4's templates, the W1
-  page and DIST-A1's Swift snippets should follow the exact version.
-- **No `setup_claude` in the bundle's tools.** The bundle never passes
-  `--allow-claude-setup`, so its manifest (which Claude's directory and
-  Smithery read) lists the eight tools it can serve.
-- **Token fields say what a full-access token allows.** The connector accepts
-  any Wisply token from `WISPLY_MCP_TOKEN`, so the bundle's and the Gemini
-  extension's token fields recommend `wspc_` and say that a `wsp_` token lets
-  the AI app start and stop recordings and propose follow-ups.
-- **Two release assets.** Every release carries the bundle and
-  `SHA256SUMS`, and the notes repeat its line. Gemini CLI installs a GitHub
-  repository from its newest release: with exactly one asset whose name has
-  no platform in it, it takes that asset for the extension and fails to
-  unpack a `.mcpb`; with two, it uses the tag's source archive.
-- **Release build.** The design packs with
-  `npx -y @anthropic-ai/mcpb@2.1.2`; the release build and CI use the copy
-  installed from `tools/mcpb`'s lockfile instead, refuse a checkout that
-  isn't clean or isn't at the tag, and stage the tag's own files. The gate
-  runs on the asset downloaded back from the draft release and compares its
-  contents with the tag, not only its sha256.
-- **Git installs and `main`.** Git-sourced installs (Agent Plugin, Gemini
-  extension) follow the default branch unless they name a ref, so the README
-  gives `--ref v<version>` where the app takes one (Codex, Gemini CLI;
-  GitHub Copilot CLI's `plugin install` and VS Code's **Install Plugin From
-  Source** take none), and the release controls add a `main` ruleset (pull
-  requests with CI only, no force-push or deletion, signed commits) to the
-  design's `v*` tag ruleset and immutable releases.
-
-### Not yet
-
-- The contract is provisional (transcribed from Wisply's tool catalog), so
-  `package.json` is `"private"` and npm refuses to publish it until the
-  contract is re-vendored from wisply-ai.
+- The contract is provisional (transcribed from Wisply's tool catalog at
+  wisply-ai 885cc75): wisply-ai's `Docs/mcp-contract.json` isn't on its
+  `main` yet, and it needs both raycast PR 1 (the `wspr_` scope, error
+  codes, `tail_words`) and DIST-A1 (`tool_descriptors`). Until it is
+  re-vendored and the npm name is Wisply's, `package.json` stays
+  `"private"` and npm refuses to publish the package.
 - The bundle's `fileSha256` in `server.json` is a placeholder until the
   release asset exists; `WISPLY_REGISTRY_RELEASE=1 npm test` refuses it.
-- `setup_claude` (only with `--allow-claude-setup`): Wisply's answer includes
-  a Cursor snippet with its full-access token, and the connector passes it on
-  unchanged. Until Wisply returns a placeholder there (or the connector
-  redacts token-shaped text in results), leave the switch off; SECURITY.md
-  says so.
+- `setup_claude` (only with `--allow-claude-setup`): in Wisply builds without
+  DIST-A1's change, its answer includes a Cursor snippet with the full-access
+  token, and the connector passes it on unchanged. Leave the switch off until
+  every Wisply you use has that change; SECURITY.md says so.
+- `/wisply:live` reads the whole live transcript until the contract is
+  re-vendored with `tail_words` (see the design differences).
+
+Differences from the distribution design, to fold into the spec, are listed
+in [docs/design-differences.md](docs/design-differences.md).

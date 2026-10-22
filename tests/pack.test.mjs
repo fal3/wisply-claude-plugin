@@ -42,19 +42,25 @@ test('the tarball holds only bin, lib, contract, clients, README, LICENSE and pa
   }
 });
 
-test('npm refuses to publish while the contract is provisional ("private": true)', () => {
+test('npm refuses to publish until the contract is final and the name is Wisply\'s ("private": true)', () => {
   // npm publish refuses a private package without running any script, so a
-  // plain `npm publish` can't ship the provisional contract. Dropping the flag
-  // is the explicit release step, together with the re-vendored contract (DIST-M5).
-  assert.equal(pkg.private === true, SOURCE.provisional, 'package.json "private" must equal contract/SOURCE.json "provisional"');
-  if (!SOURCE.provisional) assert.equal(Object.hasOwn(pkg, 'private'), false, 'remove "private" rather than setting it to false');
+  // plain `npm publish` can't ship a provisional contract or an npm name
+  // nobody owns yet. The two are separate facts with separate changes: the
+  // re-vendor from wisply-ai (DIST-M5's follow-up) clears the first, the npm
+  // organization (Alex, G-NPM) the second, and dropping the flag is the
+  // explicit release step once both hold.
+  const publishable = !SOURCE.provisional && PACKAGE_NAME_FINAL;
+  assert.equal(pkg.private === true, !publishable,
+    'package.json "private" must be true exactly while contract/SOURCE.json is provisional or PACKAGE_NAME_FINAL is false');
+  if (publishable) assert.equal(Object.hasOwn(pkg, 'private'), false, 'remove "private" rather than setting it to false');
 });
 
-test('the package name is final exactly when package.json is no longer private', () => {
+test('a publishable package.json needs the final package name', () => {
   // Messages may name the package through npx only once Wisply owns the name
-  // on npm, which has to hold before the first publish anyway.
-  assert.equal(PACKAGE_NAME_FINAL, pkg.private !== true, 'lib/constants.mjs PACKAGE_NAME_FINAL must be !package.json "private"');
+  // on npm (lib/messages.mjs COMMAND_PREFIX). Owning it doesn't make the
+  // package publishable on its own: "private" stays until the contract is final too.
   assert.equal(typeof PACKAGE_NAME_FINAL, 'boolean');
+  if (pkg.private !== true) assert.equal(PACKAGE_NAME_FINAL, true, 'a publishable package.json needs PACKAGE_NAME_FINAL');
 });
 
 test('every npx or npm install of the package in the docs and messages runs the pinned version', () => {
@@ -62,7 +68,7 @@ test('every npx or npm install of the package in the docs and messages runs the 
   // (tests/clients.test.mjs also requires npx's --prefix / before the package.)
   const escaped = PACKAGE_NAME.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
   const command = new RegExp(`\\b(?:npx(?: -y)?(?: --prefix /)?|npm (?:i|install) -g) (${escaped}[^\\s\`"'),]*)`, 'g');
-  for (const file of ['README.md', 'SECURITY.md', 'CHANGELOG.md']) {
+  for (const file of ['README.md', 'SECURITY.md', 'CHANGELOG.md', 'docs/design-differences.md', 'llms-install.md']) {
     const text = readFileSync(join(ROOT, file), 'utf8');
     for (const match of text.matchAll(command)) {
       // `@wisply/mcp@<version>` is how the docs write "this release's version" in general.

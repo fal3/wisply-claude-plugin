@@ -10,10 +10,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import contract from '../lib/contract.mjs';
+import contract, { contractProblems } from '../lib/contract.mjs';
 import { MAX_RESPONSE_BYTES, PROTOCOL_VERSIONS } from '../lib/constants.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -62,8 +62,15 @@ test('app: once wisply-ai has a contract, the provisional fixture still matches 
       : !existsSync(join(APP_DIR, APP_CONTRACT)) ? `no ${APP_CONTRACT} in wisply-ai yet (raycast PR 1)` : false,
 }, () => {
   const upstream = JSON.parse(readFileSync(join(APP_DIR, APP_CONTRACT), 'utf8'));
-  assert.equal(Object.hasOwn(upstream, 'tool_descriptors'), false,
-    'wisply-ai now has tool_descriptors (DIST-A1): re-vendor without --provisional (DIST-M5)');
+  if (Object.hasOwn(upstream, 'tool_descriptors')) {
+    // DIST-A1 is in this checkout. Re-vendor only once raycast PR 1's keys are there too: the connector can't load
+    // a contract without the wspr_ scope, and sync-vendor refuses one (tests/sync-vendor.test.mjs).
+    const problems = contractProblems(upstream);
+    assert.deepEqual(problems, [], `wisply-ai's ${APP_CONTRACT} has tool_descriptors but the connector can't load it yet ` +
+      `(${problems.join(', ')}): wait until raycast PR 1 and DIST-A1 are both on main, then re-vendor from that commit`);
+    assert.fail(`wisply-ai's ${APP_CONTRACT} is final: re-vendor from its commit with npm run sync-vendor (without ` +
+      '--provisional), then follow "Re-vendoring the contract" in SECURITY.md');
+  }
   for (const key of Object.keys(upstream)) {
     assert.deepEqual(contract[key], upstream[key], `${key} drifted from wisply-ai: update the provisional fixture or re-vendor`);
   }
@@ -127,9 +134,13 @@ function lexSwift(text) {
  * Values: true/false, a string literal, and the schema helpers:
  * schema(properties:required:), string(_:), integer(_:minimum:maximum:),
  * .object([...]), [k: v] dictionaries and [s, ...] arrays, which become the
- * JSON the helpers build.
+ * JSON the helpers build. A bound may also name an integer constant
+ * (`MCPLiveTranscript.maxTailWords`), looked up in `constants`
+ * (swiftIntegerConstants).
+ * @param {string} text
+ * @param {Map<string, number>} [constants]
  */
-function parseSwitch(text) {
+function parseSwitch(text, constants = new Map()) {
   const tokens = lexSwift(text);
   let at = 0;
   const peek = (offset = 0) => tokens[at + offset];
@@ -150,7 +161,15 @@ function parseSwitch(text) {
     take('punct', close);
     return items;
   };
-  const optionalNumber = () => (is('name', 'nil') ? (take('name', 'nil'), undefined) : take('number'));
+  const optionalNumber = () => {
+    if (is('name', 'nil')) return (take('name', 'nil'), undefined);
+    if (is('name') && is('punct', '.', 1) && is('name', undefined, 2)) {
+      const key = `${take('name')}.${(take('punct', '.'), take('name'))}`;
+      assert.ok(constants.has(key), `${CATALOG}: ${key} isn't an integer constant in Wisply/Services/MCP`);
+      return constants.get(key);
+    }
+    return take('number');
+  };
 
   function literal() {
     // [:] | [k: v, ...] | [s, ...]
@@ -244,6 +263,24 @@ function parseSwitch(text) {
   return values;
 }
 
+/**
+ * `Type.name` -> value for every `static let name = <integer>` in the given
+ * Swift sources, under the nearest enum, struct, class or extension above it.
+ * @param {string[]} texts
+ */
+function swiftIntegerConstants(texts) {
+  const constants = new Map();
+  for (const text of texts) {
+    const pattern = /\b(?:enum|struct|class|extension)\s+(\w+)|\bstatic let (\w+)(?:\s*:\s*\w+)?\s*=\s*(-?[0-9][0-9_]*)\b(?![ \t]*[.\w])/g;
+    let type = null;
+    for (const match of text.matchAll(pattern)) {
+      if (match[1]) type = match[1];
+      else if (type) constants.set(`${type}.${match[2]}`, Number(match[3].replaceAll('_', '')));
+    }
+  }
+  return constants;
+}
+
 test('app: the provisional descriptors are the Swift catalog\'s, word for word', {
   skip: !APP_DIR ? 'WISPLY_AI_DIR not set' : !appSource.provisional ? 'not provisional' : false,
 }, () => {
@@ -252,8 +289,11 @@ test('app: the provisional descriptors are the Swift catalog\'s, word for word',
     .map((match) => ({ member: match[1], name: match[2] }));
   assert.deepEqual(cases.map((entry) => entry.name), [...contract.tools], 'tool names and order');
   const memberOf = new Map(cases.map((entry) => [entry.name, entry.member]));
+  const mcpFolder = join(APP_DIR, 'Wisply/Services/MCP');
+  const constants = swiftIntegerConstants(readdirSync(mcpFolder).filter((name) => name.endsWith('.swift'))
+    .map((name) => readFileSync(join(mcpFolder, name), 'utf8')));
   const switchOf = (start, end) => {
-    const values = parseSwitch(between(swift, start, end));
+    const values = parseSwitch(between(swift, start, end), constants);
     assert.deepEqual([...values.keys()].sort(), cases.map((entry) => entry.member).sort(), `${start}: every tool exactly once`);
     return values;
   };
@@ -314,7 +354,8 @@ test('the Swift reader parses the catalog\'s shapes and rejects anything else', 
             "s": string("Text.")
         ], required: ["s"])
     case .e: return schema(properties: [:])
-    }`);
+    case .f: return schema(properties: ["t": integer("Tail.", minimum: 1, maximum: Limits.maxTail)])
+    }`, swiftIntegerConstants(['nonisolated extension Limits {\n    static let maxTail = 5_000\n    static let other: Int = 7\n}']));
   assert.deepEqual(Object.fromEntries(values), {
     a: true, b: true, c: 'Say "hi" \\ there',
     d: {
@@ -325,13 +366,17 @@ test('the Swift reader parses the catalog\'s shapes and rejects anything else', 
       },
     },
     e: { type: 'object', additionalProperties: false, properties: {} },
+    f: { type: 'object', additionalProperties: false, properties: { t: { type: 'integer', description: 'Tail.', minimum: 1, maximum: 5000 } } },
   });
+  assert.deepEqual([...swiftIntegerConstants(['enum A {\n static let x = 1_0\n static let y = 2.5\n}\nstruct B { static let z: Int = 3 }'])],
+    [['A.x', 10], ['B.z', 3]]);
   for (const text of [
     'switch self { case .a: return boolean("x") }',
     'switch self { case .a: return schema(properties: [:], extra: 1) }',
     'switch self { case .a: return "x\\n" }',
     'switch self { case .a: return !x }',
     'switch self { case .a: return true case .a: return false }',
+    'switch self { case .a: return integer("x", minimum: nil, maximum: Unknown.limit) }',
   ]) {
     assert.throws(() => parseSwitch(text), assert.AssertionError, text);
   }

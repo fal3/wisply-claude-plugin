@@ -221,14 +221,18 @@ package has never been published.
    least preferred), a ruleset on `v*` tags (only the owner creates them; no
    update and no deletion), and immutable releases turned on.
 3. **Before the first publish:** the contract is re-vendored from wisply-ai
-   (`contract/SOURCE.json` no longer provisional, `WISPLY_RELEASE=1 npm test`
-   passes), `"private": true` is removed from `package.json`,
-   `PACKAGE_NAME_FINAL` becomes `true` and `"published"` becomes `true` in
-   `clients/mcp-clients.json` in the same change (`tests/pack.test.mjs` and
-   `tests/clients.test.mjs` tie all four), `setup`, `status` and `forget` have
-   passed the manual Keychain QA on a Mac (below), each app in the install
-   list has started `npx -y --prefix / ...` on a Mac, and a test on a Mac has
-   shown that no second socket can listen on Wisply's port while Wisply runs.
+   ("Re-vendoring the contract", below), Wisply owns the npm name and
+   `PACKAGE_NAME_FINAL` is `true`, and the release change removes
+   `"private": true` from `package.json`, sets `"published": true` in
+   `clients/mcp-clients.json` and gives the CHANGELOG's version heading its
+   date. `"private"` stays exactly while the contract is provisional or the
+   name isn't final, and `"published"` follows it (`tests/pack.test.mjs`,
+   `tests/clients.test.mjs`); `WISPLY_RELEASE=1 npm test` passes only when
+   all of it holds and lists whatever is missing (`tests/release.test.mjs`).
+   Also: `setup`, `status` and `forget` have passed the manual Keychain QA on
+   a Mac (below), each app in the install list has started
+   `npx -y --prefix / ...` on a Mac, and a test on a Mac has shown that no
+   second socket can listen on Wisply's port while Wisply runs.
 
    Manual Keychain QA, from a checkout (`node bin/wisply-mcp.mjs ...`):
    - `setup` with the connector token: one item, and
@@ -247,11 +251,40 @@ package has never been published.
      note; `WISPLY_MCP_PORT=eighty forget` still removes the item.
 4. **The first publish** is by hand, by the organization owner, with
    two-factor authentication.
-5. **From the second release,** only npm trusted publishing (OIDC from a
-   GitHub Actions release workflow in this repository, behind a protected
-   environment) publishes, and the package's publishing access is set to
-   "Require two-factor authentication and disallow tokens". This repository
-   has no release workflow yet; until it does, no release claims provenance.
+5. **From the second release,** only the release workflow
+   (`.github/workflows/release.yml`) publishes, through npm trusted
+   publishing (OIDC: no npm token exists anywhere). It runs only for a pushed
+   `v*` tag, only while the repository is public and the repository variable
+   `NPM_TRUSTED_PUBLISHING` is `on`, and only after the required reviewer
+   approves the `release` environment. It checks out without credentials,
+   installs npm 11.21.0 without scripts, runs `npm run check` and
+   `WISPLY_RELEASE=1 npm test` (which also requires the tag to be
+   `v<version>`), and then **stages** the version with provenance
+   (`npm stage publish --provenance --access public --ignore-scripts`). A
+   staged version goes live only when a maintainer approves it with two-factor
+   authentication: `npm stage list @wisply/mcp`, `npm stage download <id>` to
+   inspect the tarball if you like, then `npm stage approve <id>` (or
+   npmjs.com > Staged Packages > Approve); `npm stage reject <id>` drops it.
+   Setting it up, in one session (npm drops a trusted publisher that hasn't
+   published within two days):
+   - on npmjs.com, add the trusted publisher for `fal3/wisply-mcp`, workflow
+     filename `release.yml`, environment `release`. Leave its allowed actions
+     at the default, `npm stage publish` only: the workflow never runs
+     `npm publish`;
+   - set the repository variable `NPM_TRUSTED_PUBLISHING` to `on`;
+   - push the tag, approve the `release` run, then approve the staged
+     version on npm;
+   - once a version has gone live with provenance, set the package's
+     publishing access to "Require two-factor authentication and disallow
+     tokens".
+
+   `tests/manifests.test.mjs` pins the workflow step by step: tag trigger
+   only, `permissions: {}` at the top and `id-token: write` on the one job,
+   the `release` environment, every action pinned to the same full commit
+   SHA as in `ci.yml`, no caches, no secrets, no expressions in shell lines.
+   npm makes provenance only for a public repository, which is also the only
+   time the workflow runs. `npx` doesn't check provenance, so it is an audit
+   trail, not a guard.
 6. **Every release** bumps `version` in `package.json` and `VERSION` in
    `lib/constants.mjs` together, with the versions in `plugin.json`,
    `gemini-extension.json`, `mcpb/manifest.json` and `server.json` (its
@@ -278,10 +311,46 @@ package has never been published.
    file with the tag, byte for byte. A rebuilt bundle has a different sha256,
    so never rebuild a released one.
 
+## Re-vendoring the contract (maintainers)
+
+`contract/mcp-contract.json` is provisional: transcribed from Wisply's tool
+catalog at wisply-ai 885cc75, because wisply-ai's own
+`Docs/mcp-contract.json` isn't on its `main` yet. The file the connector
+needs comes from two wisply-ai PRs: raycast PR 1 (the `wspr_` scope, the
+error codes, `live_transcript`, and `tail_words` in the tool catalog) and
+DIST-A1 (`tool_descriptors`). Either one alone gives a file the connector
+can't load, and `npm run sync-vendor` refuses it.
+
+1. Wait until a wisply-ai `main` commit has both (DIST-A1 merged after
+   raycast PR 1), and its Mac CI, which pins the file to the Swift source
+   (`MCPContractDescriptorTests`), is green.
+2. From a clean checkout of this repository:
+
+   ```bash
+   npm run sync-vendor -- --app <wisply-ai checkout> --app-commit <that commit> \
+     --plugin <wisply-claude-plugin checkout> --plugin-commit <its main commit>
+   node scripts/build-mcpb.mjs --sync
+   WISPLY_AI_DIR=<wisply-ai checkout at that commit> WISPLY_PLUGIN_DIR=<plugin checkout> npm test
+   ```
+
+   sync-vendor reads the files with `git show <commit>:<path>`, writes them
+   byte for byte with their sha256 in `contract/SOURCE.json`
+   (`provisional: false`), and regenerates `contract/mcp-contract.mjs`.
+3. Do what the tests then ask for: `tests/skills.test.mjs` wants
+   `commands/wisply/live.toml` to call `get_live_transcript` with
+   `tail_words` set to 400 without the hedge, and `tail_words` gone from its
+   `PENDING_ARGUMENTS`; the CHANGELOG's known limitations lose the
+   provisional-contract and `/wisply:live` items (the release gate refuses a
+   release section that still says the contract is provisional).
+4. Open the PR with the wisply-ai commit and the file's sha256 in its
+   description. `"private"` stays until the npm name is final too (release
+   control 3).
+
 ## If a bad release is published (maintainers)
 
-1. Publish a fixed patch release at once and unpublish the bad version if npm
-   still allows it. Snippets pinned to an earlier version never ran it; for
+1. Reject any version still waiting for approval (`npm stage list
+   @wisply/mcp`, `npm stage reject <id>`). Publish a fixed patch release at
+   once and unpublish the bad version if npm still allows it. Snippets pinned to an earlier version never ran it; for
    anyone who moved to it, update the guide and Wisply's snippets to the fix
    and say which version to write. Installs that use `@wisply/mcp@0` pick up
    the fix at their next start.

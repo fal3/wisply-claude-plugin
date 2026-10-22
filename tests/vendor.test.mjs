@@ -38,7 +38,7 @@ test('SOURCE.json records every vendored file with its sha256', () => {
 test('a provisional contract is never released (WISPLY_RELEASE=1)', () => {
   if (process.env.WISPLY_RELEASE !== '1') return;
   assert.equal(SOURCE.provisional, false,
-    'contract/SOURCE.json says provisional: re-vendor from the DIST-A1 merge commit with npm run sync-vendor (DIST-M5)');
+    'contract/SOURCE.json says provisional: re-vendor with npm run sync-vendor (SECURITY.md, "Re-vendoring the contract")');
 });
 
 test('the release check really fails while the source is provisional', { skip: process.env.WISPLY_RELEASE === '1' }, () => {

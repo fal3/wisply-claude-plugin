@@ -995,7 +995,7 @@ test('every print-config and install text is ASCII and names only real commands,
 });
 
 test('the docs run the pinned connector with --prefix / everywhere', () => {
-  for (const doc of ['README.md', 'SECURITY.md', 'CHANGELOG.md']) {
+  for (const doc of ['README.md', 'SECURITY.md', 'CHANGELOG.md', 'docs/design-differences.md', 'llms-install.md']) {
     const text = readFileSync(join(ROOT, doc), 'utf8');
     assert.doesNotMatch(text, /npx -y @wisply/, `${doc}: npx without --prefix /`);
     assert.doesNotMatch(text, /@wisply\/mcp (setup|status|forget|print-config|install)/, `${doc}: a command without the version`);

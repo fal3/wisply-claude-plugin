@@ -15,6 +15,7 @@ import {
   MCPB_NAME, MCPB_VERSION, PACKER_DIR, bundleFileName, jsonText as buildJsonText, mcpbTools, releaseTag, renderManifest,
 } from '../scripts/build-mcpb.mjs';
 import { validate } from './helpers/json-schema.mjs';
+import { actionPins, parseWorkflow } from './helpers/workflow-yaml.mjs';
 import { KEYWORD_RE, ROOT, SECRET_LIKE, exists, jsonText, pngSize, readJson, readText } from './helpers/repo.mjs';
 
 const pkg = readJson('package.json');
@@ -386,6 +387,19 @@ test('README names the plugin, extension and bundle installs from this repositor
   }
 });
 
+test('every versioned mention of the package in the manifests and llms-install.md is this version', () => {
+  // The setup command in the Gemini setting, the bundle's token field, the registry's environment variable and
+  // llms-install.md all name PACKAGE_SPEC, so a version bump that misses one fails here.
+  let mentions = 0;
+  for (const path of [...MANIFESTS, 'llms-install.md']) {
+    for (const match of readText(path).matchAll(/@wisply\/mcp@[0-9][0-9.]*[0-9]/g)) {
+      mentions += 1;
+      assert.equal(match[0], PACKAGE_SPEC, `${path}: ${match[0]}`);
+    }
+  }
+  assert.ok(mentions >= 4, `${mentions} mentions`);
+});
+
 test('llms-install.md: the setup command, the token-free entry and the keychain, never the token in chat', () => {
   const text = readText('llms-install.md');
   assert.ok(text.includes(SETUP_COMMAND));
@@ -396,4 +410,108 @@ test('llms-install.md: the setup command, the token-free entry and the keychain,
   assert.match(text, /keychain/);
   assert.match(text, /127\.0\.0\.1/);
   assert.match(text, /sent to the AI service/);
+});
+
+// --- release.yml (DIST-M5) --------------------------------------------------------------------------------
+
+/**
+ * npm versions the release job relies on (npm/documentation @7e98ab4, 2026-10-21): trusted publishing needs npm
+ * 11.5.1 and Node 22.14.0, staged publishing (`npm stage publish`) npm 11.15.0. RELEASE_NPM is the exact npm the
+ * job installs, published 2026-09-30; bump it here and in release.yml together.
+ */
+const RELEASE_NPM = '11.21.0';
+const TRUSTED_PUBLISHING_NPM = '11.5.1';
+const STAGED_PUBLISHING_NPM = '11.15.0';
+const RELEASE_GATE = "${{ !github.event.repository.private && vars.NPM_TRUSTED_PUBLISHING == 'on' }}";
+const semver = (version) => version.split('.').map(Number);
+const atLeast = (version, floor) => {
+  const [a, b] = [semver(version), semver(floor)];
+  for (let i = 0; i < 3; i += 1) if (a[i] !== b[i]) return a[i] > b[i];
+  return true;
+};
+const releaseText = readText('.github/workflows/release.yml');
+/** release.yml without its comments, for the checks that read the text itself. */
+const releaseCode = releaseText.replace(/^\s*#.*$/gm, '');
+const release = parseWorkflow(releaseText);
+const ciText = readText('.github/workflows/ci.yml');
+
+test('release.yml runs only for pushed v* tags, and grants nothing at the top level', () => {
+  assert.deepEqual(Object.keys(release), ['name', 'on', 'permissions', 'jobs']);
+  assert.equal(release.name, 'release');
+  // No branches, pull requests, manual runs or other workflows: a tag that only the owner can create (ruleset).
+  assert.deepEqual(release.on, { push: { tags: ['v*'] } });
+  assert.deepEqual(release.permissions, {});
+  assert.deepEqual(Object.keys(release.jobs), ['publish']);
+  assert.doesNotMatch(releaseCode, /pull_request|workflow_dispatch|workflow_call|workflow_run|schedule:|branches/);
+});
+
+test('release.yml: one job, skipped unless the repository is public and trusted publishing is on, behind the release environment', () => {
+  const job = release.jobs.publish;
+  assert.deepEqual(Object.keys(job), ['if', 'runs-on', 'timeout-minutes', 'environment', 'permissions', 'steps']);
+  assert.equal(job.if, RELEASE_GATE);
+  // npm trusted publishing works from GitHub-hosted runners only.
+  assert.equal(job['runs-on'], 'ubuntu-latest');
+  assert.ok(Number.isInteger(job['timeout-minutes']) && job['timeout-minutes'] <= 30);
+  assert.equal(job.environment, 'release');
+  // id-token: write (OIDC for npm) on this job only; nothing else beyond reading the code.
+  assert.deepEqual(job.permissions, { contents: 'read', 'id-token': 'write' });
+  assert.equal(releaseCode.split('id-token').length - 1, 1, 'id-token appears once, in the publish job');
+  // No secrets: trusted publishing needs no npm token, and nothing may reintroduce one.
+  assert.doesNotMatch(releaseText, /secrets\.|NODE_AUTH_TOKEN|NPM_TOKEN|_authToken|GITHUB_TOKEN/);
+  assert.doesNotMatch(releaseCode, /\benv:/, 'no step or job sets environment variables');
+});
+
+test('release.yml steps: pinned checkout and setup-node without credentials or caches, npm, the checks, a staged publish', () => {
+  const pins = Object.fromEntries(actionPins(releaseText).map((pin) => [pin.action, pin.ref]));
+  assert.deepEqual(release.jobs.publish.steps, [
+    { uses: `actions/checkout@${pins['actions/checkout']}`, with: { 'persist-credentials': false } },
+    {
+      uses: `actions/setup-node@${pins['actions/setup-node']}`,
+      // 22.x is the newest Node 22 (trusted publishing needs 22.14.0 or later); the npm registry for OIDC; no cache,
+      // as npm's and setup-node's docs advise for release builds.
+      with: { 'node-version': '22.x', 'registry-url': 'https://registry.npmjs.org', 'package-manager-cache': false },
+    },
+    { run: `npm install -g npm@${RELEASE_NPM} --ignore-scripts` },
+    { run: 'npm run check' },
+    { run: 'WISPLY_RELEASE=1 npm test' },
+    // Staged: the version goes live only after a maintainer approves it with 2FA (npm stage approve, or npmjs.com).
+    { run: 'npm stage publish --provenance --access public --ignore-scripts' },
+  ]);
+  assert.ok(atLeast(RELEASE_NPM, TRUSTED_PUBLISHING_NPM) && atLeast(RELEASE_NPM, STAGED_PUBLISHING_NPM));
+  assert.match(RELEASE_NPM, /^\d+\.\d+\.\d+$/, 'an exact npm version');
+  // No expression is ever expanded into a shell line (script injection through a tag name or a variable).
+  for (const step of release.jobs.publish.steps) if (step.run) assert.doesNotMatch(step.run, /\$\{\{/, step.run);
+  // Nothing but npm itself is installed, and nothing runs a package's lifecycle scripts.
+  const runs = release.jobs.publish.steps.filter((step) => step.run).map((step) => step.run);
+  assert.deepEqual(runs.filter((run) => /\bnpm (i|install|ci)\b|\bnpx\b/.test(run)), [`npm install -g npm@${RELEASE_NPM} --ignore-scripts`]);
+});
+
+test('every action in ci.yml and release.yml is pinned to a full commit SHA with its version tag, the same in both', () => {
+  const release = actionPins(releaseText);
+  const ci = actionPins(ciText);
+  assert.ok(release.length === 2 && ci.length >= 2);
+  for (const pin of [...release, ...ci]) {
+    assert.match(pin.ref, /^[0-9a-f]{40}$/, `${pin.action}: a full commit SHA`);
+    assert.match(pin.comment ?? '', /^v\d+\.\d+\.\d+$/, `${pin.action}: the version tag Dependabot keeps next to the SHA`);
+  }
+  const byAction = new Map();
+  for (const pin of [...release, ...ci]) {
+    const seen = byAction.get(pin.action);
+    if (seen) assert.deepEqual(pin, seen, `${pin.action}: one pin across both workflows`);
+    else byAction.set(pin.action, pin);
+  }
+  assert.deepEqual([...byAction.keys()].sort(), ['actions/checkout', 'actions/setup-node']);
+  // Dependabot covers every workflow in .github/workflows, so one PR bumps a pin in both files.
+  assert.match(readText('.github/dependabot.yml'), /package-ecosystem: github-actions\n\s+directory: \/\n/);
+});
+
+test('the workflow reader understands only its own subset of YAML', () => {
+  assert.deepEqual(parseWorkflow("a: 1\nb:\n  - 'x'\n  - k: v # note\n    l: \"w\"\nc: {}\nd: false\n"),
+    { a: 1, b: ['x', { k: 'v', l: 'w' }], c: {}, d: false });
+  for (const text of [
+    'a: [x]\n', 'a: {b: c}\n', 'a: &anchor x\n', 'a: *alias\n', 'a: !tag x\n', 'a: |\n  x\n', 'a: >\n  x\n', '---\na: 1\n',
+    'a: 1\na: 2\n', 'a:\tb\n', 'a: yes\n', 'a: on\n', 'a: b: c\n', '"a": 1\n', 'a:\n', 'a: 1\n  b: 2\n', 'a: \'x\n',
+  ]) {
+    assert.throws(() => parseWorkflow(text), Error, JSON.stringify(text));
+  }
 });

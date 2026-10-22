@@ -1,0 +1,52 @@
+# Publishes @wisply/mcp to npm from a v* tag, from the second release on:
+# 0.1.0 is published by hand, with two-factor authentication (SECURITY.md,
+# "Release controls").
+#
+# - Runs only for pushed v* tags, which a ruleset lets only the owner create,
+#   and only while the repository is public and the repository variable
+#   NPM_TRUSTED_PUBLISHING is "on".
+# - Waits for the "release" environment, whose required reviewer approves
+#   every run.
+# - npm trusted publishing (OIDC): no npm token anywhere, and id-token: write
+#   on this one job only. Nothing is cached and nothing is installed but npm.
+# - Actions are pinned to full commit SHAs, the same as ci.yml (Dependabot
+#   keeps both current).
+# - Stages the version with provenance (npm stage publish). It goes live only
+#   when a maintainer approves it with two-factor authentication:
+#   npm stage approve <stage id>, or npmjs.com > Staged Packages.
+#
+# tests/manifests.test.mjs pins this file's shape, step by step.
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions: {}
+
+jobs:
+  publish:
+    if: ${{ !github.event.repository.private && vars.NPM_TRUSTED_PUBLISHING == 'on' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22.x'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+      # Trusted publishing needs npm 11.5.1 or later, staged publishing 11.15.0.
+      - run: npm install -g npm@11.21.0 --ignore-scripts
+      - run: npm run check
+      # Refuses a provisional contract, a package that is still private, a tag
+      # that isn't v<version> and a CHANGELOG without this version's date.
+      - run: WISPLY_RELEASE=1 npm test
+      - run: npm stage publish --provenance --access public --ignore-scripts

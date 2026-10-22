@@ -412,7 +412,7 @@ test('debug lines carry no arguments, results or tokens', async () => {
 
 test('messages are the spec\'s exact texts (distribution design, "Errors")', () => {
   // With a setup command, the token texts are the spec's, word for word, around that command (the spec writes
-  // the unpinned `npx -y @wisply/mcp setup`; this package pins the version after npx's --prefix /, CHANGELOG).
+  // the unpinned `npx -y @wisply/mcp setup`; this package pins the version after npx's --prefix /, docs/design-differences.md).
   const pinnedSetup = `${NPX_COMMAND} setup`;
   assert.equal(pinnedSetup, `npx -y --prefix / ${PACKAGE_SPEC} setup`);
   const withSetup = messages.tokenTexts(pinnedSetup);
