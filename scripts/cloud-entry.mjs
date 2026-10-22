@@ -11,14 +11,22 @@
 // adds its disclosure sections to README.md and SECURITY.md and records who approved it, in
 // cloud-connect/LIT.json. cloud-connect/RUNBOOK.md has the whole procedure, including the listings.
 //
+// The README section pins the Codex marketplace to this release's tag (`--ref v<package.json version>`),
+// like the local install: without a ref, Codex follows `main` for the whole marketplace, the local
+// plugin included. A release bump fails `check` until the staged section names the new tag.
+// A `.cursor-plugin/marketplace.json` (added by hand once Cursor confirms its multi-plugin rules) may
+// list wisply-cloud only while it is lit; `remove` unlists it there too.
+//
 //   node scripts/cloud-entry.mjs check
 //       dark or lit; exit 1 if half-lit, drifted, lit without LIT.json, or the root plugin isn't local-only
 //   node scripts/cloud-entry.mjs apply --confirm-cloud-connect-stage-4 --stage-4-date YYYY-MM-DD --approved-by NAME
 //       lists the plugin, adds both sections, writes LIT.json (the date and name may be left out to re-sync
 //       a repo that is already lit)
 //   node scripts/cloud-entry.mjs remove
-//       retract, for new installs only: unlists the plugin and removes the sections and LIT.json. Apps that
-//       already installed wisply-cloud keep it; the kill switches for them are server-side (RUNBOOK.md).
+//       retract, for new installs only: unlists the plugin here (Codex, and Cursor if listed) and removes the
+//       sections and LIT.json. Third-party listings (MCP Registry, awesome-copilot, Cursor) are Alex's steps,
+//       and apps that already installed wisply-cloud keep it until a server-side control stops them
+//       (RUNBOOK.md).
 //
 // Dev-only (not in the npm package). No network, no child processes.
 
@@ -42,6 +50,8 @@ export const PATHS = Object.freeze({
   securitySection: 'cloud-connect/SECURITY-cloud.md',
   lit: 'cloud-connect/LIT.json',
   marketplace: '.agents/plugins/marketplace.json',
+  cursorMarketplace: '.cursor-plugin/marketplace.json',
+  packageJson: 'package.json',
   readme: 'README.md',
   security: 'SECURITY.md',
   rootMcp: 'mcp.json',
@@ -70,13 +80,30 @@ export const SECTIONS = Object.freeze({
 });
 export const blockNote = (source) => `<!-- Generated from ${source} by scripts/cloud-entry.mjs. Edit that file, then re-run the apply command in cloud-connect/RUNBOOK.md. -->`;
 const DISCLOSURE = 'is sent to the AI service that app uses';
+/** What a connection made before sign-in reveals (the privacy policy's Cloud Connect section covers it). */
+const NETWORK_DISCLOSURE = 'sees your IP address';
 const PLUGIN_FIELDS = ['$schema', 'name', 'version', 'description', 'author', 'homepage', 'repository', 'license', 'keywords'];
-const TOKEN_LIKE_RE = /wsp[cr]?_[0-9a-f]{64}/;
+/**
+ * Token shapes: the local connector tokens (wsp_, wspc_, wspr_ + 64 hex) and Cloud Connect's access,
+ * refresh and API-key tokens (wisply_at_, wisply_rt_, wisply_sk_). A bare prefix in prose is fine.
+ */
+export const TOKEN_LIKE_RE = /wsp[cr]?_[0-9a-f]{64}|wisply_(?:at|rt|sk)_[A-Za-z0-9_-]{16,}/;
+const AUTH_HEADER_RE = /\bBearer\b|\bAuthorization\b/;
+const REPO_SLUG = 'fal3/wisply-mcp';
+const CODEX_ADD_RE = /codex plugin marketplace add\b[^`\n]*/g;
+const REF_RE = /--ref(?:\s+|=)([^\s`'")]+)/g;
+const SEMVER_RE = /^\d+\.\d+\.\d+$/;
 const WISPLY_MCP_URL_RE = /[a-z][a-z0-9+.-]*:\/\/[^\s)>\]`'"]*wisply\.ai\/mcp\b[^\s)>\]`'"]*/gi;
 const KEYWORD_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const FIRST_STAGE_4_DATE = '2026-10-21';
 
 export const DEFAULT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+/** A problem when `text` (prose, or a serialized JSON document) holds a token or an auth header. */
+export function secretProblems(text, where) {
+  if (typeof text !== 'string') return [];
+  return TOKEN_LIKE_RE.test(text) || AUTH_HEADER_RE.test(text) ? [`${where} must not contain a token or an auth header`] : [];
+}
 
 /** Problems with the staged plugin: cloud-connect/plugin/plugin.json and mcp.json. */
 export function validateCloudPlugin({ manifest, mcp }) {
@@ -86,7 +113,7 @@ export function validateCloudPlugin({ manifest, mcp }) {
 function validatePluginManifest(doc) {
   const where = PATHS.pluginManifest;
   if (!isPlainObject(doc)) return [`${where} is missing, isn't valid JSON or isn't a JSON object`];
-  const problems = [];
+  const problems = [...secretProblems(JSON.stringify(doc), where)];
   const extra = Object.keys(doc).filter((k) => !PLUGIN_FIELDS.includes(k));
   if (extra.length) problems.push(`${where} has fields outside the Agent Plugins 1.0.0 manifest: ${extra.join(', ')}`);
   if (doc.$schema !== AGENT_PLUGINS_PLUGIN_SCHEMA) problems.push(`${where} $schema must be ${AGENT_PLUGINS_PLUGIN_SCHEMA}`);
@@ -110,7 +137,7 @@ function validatePluginManifest(doc) {
 function validatePluginMcp(doc) {
   const where = PATHS.pluginMcp;
   if (!isPlainObject(doc)) return [`${where} is missing, isn't valid JSON or isn't a JSON object`];
-  const problems = [];
+  const problems = [...secretProblems(JSON.stringify(doc), where)];
   if (!sameKeys(doc, ['$schema', 'mcpServers'])) problems.push(`${where} must have exactly $schema and mcpServers`);
   if (doc.$schema !== AGENT_PLUGINS_MCP_SCHEMA) problems.push(`${where} $schema must be ${AGENT_PLUGINS_MCP_SCHEMA}`);
   if (!isPlainObject(doc.mcpServers) || !sameKeys(doc.mcpServers, [CLOUD_NAME])) {
@@ -138,7 +165,7 @@ function validatePluginMcp(doc) {
 export function validateMarketplaceEntry(entry) {
   const where = PATHS.marketplaceEntry;
   if (!isPlainObject(entry)) return [`${where} is missing, isn't valid JSON or isn't a JSON object`];
-  const problems = [];
+  const problems = [...secretProblems(JSON.stringify(entry), where)];
   // No `policy`: Codex's default is AVAILABLE, so the plugin is never INSTALLED_BY_DEFAULT.
   if (!sameKeys(entry, ['name', 'source', 'category', 'description'])) problems.push(`${where} must have exactly name, source, category and description`);
   if (entry.name !== CLOUD_NAME) problems.push(`${where} name must be ${CLOUD_NAME}`);
@@ -150,13 +177,16 @@ export function validateMarketplaceEntry(entry) {
   return problems;
 }
 
-/** Problems with a staged section (`kind` is 'readme' or 'security'). */
-export function validateSection(text, kind) {
+/**
+ * Problems with a staged section (`kind` is 'readme' or 'security'). `version` is package.json's
+ * version once the package is in the repository (DIST-M1); every `--ref` must then be its tag.
+ */
+export function validateSection(text, kind, { version = null } = {}) {
   const spec = SECTIONS[kind];
   const where = spec?.source ?? `section ${kind}`;
   if (!spec) return [`unknown section ${kind}`];
   if (typeof text !== 'string') return [`${where} is missing`];
-  const problems = [];
+  const problems = [...refProblems(text, kind, version)];
   if (!text.startsWith(`${spec.heading}\n`)) problems.push(`${where} must start with "${spec.heading}"`);
   if (!text.endsWith('\n') || text.endsWith('\n\n')) problems.push(`${where} must end with exactly one newline`);
   if (!text.includes(`\`${CLOUD_NAME}\``)) problems.push(`${where} must name the ${CLOUD_NAME} plugin`);
@@ -165,20 +195,47 @@ export function validateSection(text, kind) {
   const otherUrls = (text.match(WISPLY_MCP_URL_RE) ?? []).map((u) => u.replace(/[.,;:]+$/, '')).filter((u) => u !== CLOUD_MCP_URL);
   if (otherUrls.length) problems.push(`${where} may show the remote server only as ${CLOUD_MCP_URL} (found ${otherUrls.join(', ')})`);
   if (!text.includes(DISCLOSURE)) problems.push(`${where} must say that what the app reads ${DISCLOSURE}`);
+  if (!text.includes(NETWORK_DISCLOSURE)) problems.push(`${where} must say what a connection before sign-in reveals ("wisply.ai ${NETWORK_DISCLOSURE}")`);
   // Cloud Connect's Access history shows the last 100 events and keeps them for 90 days: never "every read".
   if (/Access history/.test(text) && (!/kept for 90 days/.test(text) || /\bevery\b[^.]*\bread/i.test(text))) {
     problems.push(`${where} must describe Access history as Cloud Connect does (recent reads, kept for 90 days)`);
   }
-  if (TOKEN_LIKE_RE.test(text) || /\bBearer\b|\bAuthorization\b/.test(text)) problems.push(`${where} must not contain a token or an auth header`);
+  problems.push(...secretProblems(text, where));
   if (text.includes(MARKER_PREFIX)) problems.push(`${where} must not contain the wisply-cloud markers`);
   return problems;
+}
+
+/**
+ * Git installs are version-pinned only with a release tag (SECURITY.md). Codex keeps one ref per
+ * marketplace, and the cloud plugin shares the `wisply` marketplace with the local one, so an unpinned
+ * add would move the local plugin to `main` too. Every Codex add names this repository at the release
+ * tag, and every `--ref` is that tag.
+ */
+function refProblems(text, kind, version) {
+  const where = SECTIONS[kind].source;
+  const tag = typeof version === 'string' && SEMVER_RE.test(version) ? `v${version}` : null;
+  const wanted = `codex plugin marketplace add ${REPO_SLUG} --ref ${tag ?? 'v<version>'}`;
+  const bump = tag ? ` (package.json is ${version}: bump this file with every release, SECURITY.md "Release controls" step 6)` : '';
+  const problems = [];
+  const adds = [...text.matchAll(CODEX_ADD_RE)].map((m) => m[0].trimEnd());
+  if (kind === 'readme' && adds.length === 0) problems.push(`${where} must show the Codex install, ${wanted}`);
+  for (const add of adds) {
+    const pinned = new RegExp(`^codex plugin marketplace add ${REPO_SLUG.replace('/', '\\/')} --ref v(\\d+\\.\\d+\\.\\d+)$`).exec(add);
+    if (!pinned || (tag && `v${pinned[1]}` !== tag)) problems.push(`${where} must pin the Codex marketplace: "${add}" must be "${wanted}"${bump}`);
+  }
+  for (const match of text.matchAll(REF_RE)) {
+    const ref = match[1].replace(/[.,;:]+$/, '');
+    const ok = tag ? ref === tag : /^v\d+\.\d+\.\d+$/.test(ref);
+    if (!ok) problems.push(`${where} --ref ${ref} must be the release tag ${tag ?? 'v<version>'}${bump}`);
+  }
+  return [...new Set(problems)];
 }
 
 /** Problems with cloud-connect/LIT.json, the reviewable record of who lit the plugin, and when. */
 export function validateLitRecord(doc) {
   const where = PATHS.lit;
   if (!isPlainObject(doc)) return [`${where} isn't valid JSON or isn't a JSON object`];
-  const problems = [];
+  const problems = [...secretProblems(JSON.stringify(doc), where)];
   if (!sameKeys(doc, ['stage4Date', 'approvedBy'])) problems.push(`${where} must have exactly stage4Date and approvedBy`);
   if (!isIsoDate(doc.stage4Date) || doc.stage4Date < FIRST_STAGE_4_DATE) problems.push(`${where} stage4Date must be a real date (YYYY-MM-DD), the day Cloud Connect reached stage 4`);
   if (typeof doc.approvedBy !== 'string' || !/^[^\p{Cc}]{1,100}$/u.test(doc.approvedBy) || doc.approvedBy.trim() !== doc.approvedBy || doc.approvedBy === '') {
@@ -247,13 +304,12 @@ export function blockBody(kind, sectionText) {
  */
 export function cloudState(repo) {
   const { staged } = repo;
+  const cursor = cursorListing(repo.cursorMarketplaceText);
   const problems = [
-    ...validateCloudPlugin(staged),
-    ...validateMarketplaceEntry(staged.entry),
-    ...validateSection(staged.readmeSection, 'readme'),
-    ...validateSection(staged.securitySection, 'security'),
+    ...stagedProblems(repo),
     ...rootPluginProblems(repo.rootMcpText),
     ...rootParityProblems(repo.rootPluginText, staged.manifest),
+    ...cursor.problems,
   ];
   const parts = {};
   let marketplace = null;
@@ -283,6 +339,8 @@ export function cloudState(repo) {
   const present = Object.keys(parts).filter((k) => parts[k]);
   const missing = Object.keys(parts).filter((k) => !parts[k]);
   if (present.length && missing.length) problems.push(`half-lit: has ${present.join(', ')} but not ${missing.join(', ')}`);
+  // The Cursor listing is optional (added by hand once Cursor confirms), but never while dark.
+  if (cursor.listed && present.length === 0) problems.push(`${PATHS.cursorMarketplace} lists ${CLOUD_NAME} while it is dark; remove that entry`);
   if (problems.length) return { state: 'invalid', problems };
   return present.length ? { state: 'lit', problems, lit } : { state: 'dark', problems };
 }
@@ -293,17 +351,16 @@ export function cloudState(repo) {
  */
 export function applyCloudEntry(repo, record = {}) {
   const { staged } = repo;
-  const stagedProblems = [
-    ...validateCloudPlugin(staged),
-    ...validateMarketplaceEntry(staged.entry),
-    ...validateSection(staged.readmeSection, 'readme'),
-    ...validateSection(staged.securitySection, 'security'),
-  ];
-  if (stagedProblems.length) throw new Error(`the staged files are invalid: ${stagedProblems.join('; ')}`);
+  const invalid = stagedProblems(repo);
+  if (invalid.length) throw new Error(`the staged files are invalid: ${invalid.join('; ')}`);
   if (repo.marketplaceText == null) throw new Error(`${PATHS.marketplace} not found: the Agent Plugin and Codex marketplace (DIST-M3) must land first`);
   if (repo.readmeText == null) throw new Error(`${PATHS.readme} not found: DIST-M1 must land first`);
   if (repo.securityText == null) throw new Error(`${PATHS.security} not found: DIST-M1 must land first`);
-  const rootProblems = [...rootPluginProblems(repo.rootMcpText), ...rootParityProblems(repo.rootPluginText, staged.manifest)];
+  const rootProblems = [
+    ...rootPluginProblems(repo.rootMcpText),
+    ...rootParityProblems(repo.rootPluginText, staged.manifest),
+    ...cursorListing(repo.cursorMarketplaceText).problems,
+  ];
   if (rootProblems.length) throw new Error(`${rootProblems.join('; ')}; nothing was changed`);
 
   let litText;
@@ -335,22 +392,52 @@ export function applyCloudEntry(repo, record = {}) {
   };
 }
 
-/** Retract (new installs only): unlists the plugin, removes both sections and LIT.json. */
+/** Retract (new installs only): unlists the plugin (Codex, and Cursor if listed), removes both sections and LIT.json. */
 export function removeCloudEntry(repo) {
-  let marketplaceText = repo.marketplaceText;
-  if (marketplaceText != null) {
-    let doc;
-    try { doc = JSON.parse(marketplaceText); } catch { throw new Error(`${PATHS.marketplace} is not valid JSON; nothing was changed`); }
-    if (Array.isArray(doc?.plugins) && doc.plugins.some((p) => p?.name === CLOUD_NAME)) {
-      marketplaceText = serialize({ ...doc, plugins: doc.plugins.filter((p) => p?.name !== CLOUD_NAME) });
-    }
-  }
   return {
-    marketplaceText,
+    marketplaceText: unlist(repo.marketplaceText, PATHS.marketplace),
+    cursorMarketplaceText: unlist(repo.cursorMarketplaceText, PATHS.cursorMarketplace),
     readmeText: removeBlock(repo.readmeText, PATHS.readme),
     securityText: removeBlock(repo.securityText, PATHS.security),
     litText: null,
   };
+}
+
+/** `text` without its wisply-cloud entries (unchanged bytes when it has none). */
+function unlist(text, where) {
+  if (text == null) return text;
+  let doc;
+  try { doc = JSON.parse(text); } catch { throw new Error(`${where} is not valid JSON; nothing was changed`); }
+  if (!Array.isArray(doc?.plugins) || !doc.plugins.some((p) => p?.name === CLOUD_NAME)) return text;
+  return serialize({ ...doc, plugins: doc.plugins.filter((p) => p?.name !== CLOUD_NAME) });
+}
+
+/** Problems with the staged files, the sections checked against package.json's version. */
+function stagedProblems(repo) {
+  const { staged } = repo;
+  return [
+    ...validateCloudPlugin(staged),
+    ...validateMarketplaceEntry(staged.entry),
+    ...validateSection(staged.readmeSection, 'readme', { version: repo.version }),
+    ...validateSection(staged.securitySection, 'security', { version: repo.version }),
+  ];
+}
+
+/**
+ * The optional Cursor multi-plugin marketplace (RUNBOOK.md, Cursor Marketplace). Codex reads
+ * .agents/plugins/marketplace.json first, so this file only matters to Cursor. A wisply-cloud entry there
+ * must point at the plugin folder; whether it may exist at all depends on the lit state (cloudState).
+ */
+export function cursorListing(text) {
+  if (text == null) return { listed: false, problems: [] };
+  let doc;
+  try { doc = JSON.parse(text); } catch { return { listed: false, problems: [`${PATHS.cursorMarketplace} is not valid JSON`] }; }
+  const entries = Array.isArray(doc?.plugins) ? doc.plugins.filter((p) => p?.name === CLOUD_NAME) : [];
+  const problems = [...secretProblems(text, PATHS.cursorMarketplace)];
+  if (entries.length > 1) problems.push(`${PATHS.cursorMarketplace} lists ${CLOUD_NAME} more than once`);
+  if (entries.some((p) => p.source !== CLOUD_PLUGIN_SOURCE)) problems.push(`${PATHS.cursorMarketplace} ${CLOUD_NAME} source must be ${CLOUD_PLUGIN_SOURCE}`);
+  if (entries.some((p) => p.policy !== undefined)) problems.push(`${PATHS.cursorMarketplace} ${CLOUD_NAME} must not set policy (it is never installed by default)`);
+  return { listed: entries.length > 0, problems };
 }
 
 function insertBlock(text, kind, sectionText) {
@@ -399,10 +486,13 @@ export function readRepo(root = DEFAULT_ROOT) {
     const text = read(rel);
     try { return text == null ? null : JSON.parse(text); } catch { return null; }
   };
+  const version = json(PATHS.packageJson)?.version;
   return {
+    version: typeof version === 'string' ? version : null,
     rootMcpText: read(PATHS.rootMcp),
     rootPluginText: read(PATHS.rootPlugin),
     marketplaceText: read(PATHS.marketplace),
+    cursorMarketplaceText: read(PATHS.cursorMarketplace),
     readmeText: read(PATHS.readme),
     securityText: read(PATHS.security),
     litText: read(PATHS.lit),
@@ -416,11 +506,17 @@ export function readRepo(root = DEFAULT_ROOT) {
   };
 }
 
-const KEYS = { marketplaceText: PATHS.marketplace, readmeText: PATHS.readme, securityText: PATHS.security, litText: PATHS.lit };
+const KEYS = {
+  marketplaceText: PATHS.marketplace,
+  cursorMarketplaceText: PATHS.cursorMarketplace,
+  readmeText: PATHS.readme,
+  securityText: PATHS.security,
+  litText: PATHS.lit,
+};
 /** Write order that leaves only the safe half behind if it stops: disclosures before the listing, unlisting first. */
 export const WRITE_ORDER = Object.freeze({
   apply: Object.freeze(['readmeText', 'securityText', 'litText', 'marketplaceText']),
-  remove: Object.freeze(['marketplaceText', 'readmeText', 'securityText', 'litText']),
+  remove: Object.freeze(['marketplaceText', 'cursorMarketplaceText', 'readmeText', 'securityText', 'litText']),
 });
 
 /**
@@ -522,13 +618,15 @@ export function main(argv, { root = DEFAULT_ROOT, out = process.stdout, err = pr
     err.write(`${error.message}\n`);
     return 1;
   }
-  const { state, problems, lit } = cloudState(readRepo(root));
+  const after = readRepo(root);
+  const { state, problems, lit } = cloudState(after);
   if (state === 'invalid') {
     for (const p of problems) err.write(`${p}\n`);
     return 1;
   }
   out.write(state === 'lit'
-    ? `${CLOUD_NAME}: lit since ${lit.stage4Date} (approved by ${lit.approvedBy}): listed in ${PATHS.marketplace}; README.md and SECURITY.md have its sections\n`
+    ? `${CLOUD_NAME}: lit since ${lit.stage4Date} (approved by ${lit.approvedBy}): listed in ${PATHS.marketplace}`
+      + `${cursorListing(after.cursorMarketplaceText).listed ? ` and ${PATHS.cursorMarketplace}` : ''}; README.md and SECURITY.md have its sections\n`
     : `${CLOUD_NAME}: dark (the plugin is in cloud-connect/plugin/ but isn't listed; README.md and SECURITY.md don't have its sections)\n`);
   return 0;
 }

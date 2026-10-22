@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import * as realFs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as ce from '../scripts/cloud-entry.mjs';
 
 const { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } = realFs;
@@ -17,6 +17,10 @@ const repo = ce.readRepo(ROOT);
 const { staged } = repo;
 const RECORD = { stage4Date: '2027-02-01', approvedBy: 'Alex Fallah' };
 const RECORD_ARGS = ['--stage-4-date', RECORD.stage4Date, '--approved-by', RECORD.approvedBy];
+/** The release the staged README section pins (`--ref v<version>`); package.json's version once DIST-M1 is here. */
+const STAGED_VERSION = /--ref v(\d+\.\d+\.\d+)/.exec(staged.readmeSection)?.[1];
+/** OS files Finder or Explorer drop into a folder someone opened; .gitignore keeps them out of git. */
+const OS_FILES = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini']);
 
 // Root files as DIST-M1 and DIST-M3 specify them (canonical 2-space JSON).
 const json = (doc) => `${JSON.stringify(doc, null, 2)}\n`;
@@ -48,11 +52,13 @@ const SERVER_VARIANTS = {
   'streamable-http': { required: ['type', 'url'], allowed: ['type', 'url', 'headers'] },
 };
 
-function repoWith({ rootMcp = M3_MCP, rootPlugin = M3_PLUGIN, marketplace = M3_MARKETPLACE, readme = README, security = SECURITY, lit = null, stagedOverride = {} } = {}) {
+function repoWith({ version = STAGED_VERSION, rootMcp = M3_MCP, rootPlugin = M3_PLUGIN, marketplace = M3_MARKETPLACE, cursor = null, readme = README, security = SECURITY, lit = null, stagedOverride = {} } = {}) {
   return {
+    version,
     rootMcpText: rootMcp,
     rootPluginText: rootPlugin,
     marketplaceText: marketplace,
+    cursorMarketplaceText: cursor,
     readmeText: readme,
     securityText: security,
     litText: lit,
@@ -69,7 +75,7 @@ function files(r) {
   return { marketplaceText: r.marketplaceText, readmeText: r.readmeText, securityText: r.securityText, litText: r.litText };
 }
 
-function tmpRepo({ rootMcp = M3_MCP, rootPlugin = M3_PLUGIN, marketplace = M3_MARKETPLACE, readme = README, security = SECURITY } = {}) {
+function tmpRepo({ version = STAGED_VERSION, rootMcp = M3_MCP, rootPlugin = M3_PLUGIN, marketplace = M3_MARKETPLACE, readme = README, security = SECURITY } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'wisply-cloud-entry-'));
   cpSync(join(ROOT, 'cloud-connect'), join(dir, 'cloud-connect'), { recursive: true });
   rmSync(join(dir, ce.PATHS.lit), { force: true });
@@ -78,6 +84,7 @@ function tmpRepo({ rootMcp = M3_MCP, rootPlugin = M3_PLUGIN, marketplace = M3_MA
     mkdirSync(dirname(join(dir, rel)), { recursive: true });
     writeFileSync(join(dir, rel), text);
   };
+  put(ce.PATHS.packageJson, version == null ? null : json({ name: '@wisply/mcp', version }));
   put(ce.PATHS.rootMcp, rootMcp);
   put(ce.PATHS.rootPlugin, rootPlugin);
   put(ce.PATHS.marketplace, marketplace);
@@ -112,7 +119,24 @@ test('the staged plugin is a separate Agent Plugin with only the streamable-http
   assert.match(staged.manifest.description, /wisply\.ai/);
   assert.ok(staged.manifest.keywords.includes('remote') && !staged.manifest.keywords.includes('local'));
   // The plugin root holds nothing but the two manifests: no skill that skills.sh could list while dark.
-  assert.deepEqual(readdirSync(join(ROOT, 'cloud-connect', 'plugin')).sort(), ['mcp.json', 'plugin.json']);
+  // (A .DS_Store from opening the folder in Finder is ignored by git and loads nothing.)
+  const contents = readdirSync(join(ROOT, 'cloud-connect', 'plugin')).filter((f) => !OS_FILES.has(f));
+  assert.deepEqual(contents.sort(), ['mcp.json', 'plugin.json']);
+});
+
+test('the staged plugin validates against the vendored Agent Plugins 1.0.0 schemas, like the root plugin', async (t) => {
+  const helper = join(ROOT, 'tests', 'helpers', 'json-schema.mjs');
+  const schemas = join(ROOT, 'tests', 'schemas', 'agent-plugins-1.0.0');
+  if (!existsSync(helper) || !existsSync(schemas)) return t.skip('tests/helpers/json-schema.mjs and the vendored schemas arrive with DIST-M3');
+  const { validate } = await import(pathToFileURL(helper).href);
+  const schema = (name) => JSON.parse(readFileSync(join(schemas, name), 'utf8'));
+  assert.deepEqual(validate(schema('plugin.schema.json'), staged.manifest), []);
+  assert.deepEqual(validate(schema('mcp.schema.json'), staged.mcp), []);
+  // The checker does catch a broken staged manifest (so a pass above means something).
+  assert.notDeepEqual(validate(schema('plugin.schema.json'), { ...staged.manifest, extensions: 1 }), []);
+  assert.notDeepEqual(validate(schema('mcp.schema.json'), { ...staged.mcp, mcpServers: { 'wisply-cloud': { type: 'streamable-http', url: ce.CLOUD_MCP_URL, token: 'x' } } }), []);
+  // The schema also allows an sse variant; validateCloudPlugin stays stricter (streamable-http only).
+  assert.notDeepEqual(ce.validateCloudPlugin({ ...staged, mcp: { ...staged.mcp, mcpServers: { 'wisply-cloud': { type: 'sse', url: ce.CLOUD_MCP_URL } } } }), []);
 });
 
 test('staged plugin validation refuses headers, other transports, other URLs, extra servers and local wording', () => {
@@ -166,8 +190,12 @@ test('the marketplace entry points at the plugin, is never installed by default 
 test('the staged README and SECURITY sections follow their rules', () => {
   assert.deepEqual(ce.validateSection(staged.readmeSection, 'readme'), []);
   assert.deepEqual(ce.validateSection(staged.securitySection, 'security'), []);
+  assert.deepEqual(ce.validateSection(staged.readmeSection, 'readme', { version: STAGED_VERSION }), []);
   assert.ok(staged.readmeSection.includes('codex mcp login wisply-cloud'));
   assert.ok(staged.readmeSection.includes('records are kept for 90 days'));
+  for (const text of [staged.readmeSection, staged.securitySection]) {
+    assert.match(text, /no memo content, but wisply\.ai sees your IP address and your app's (?:name \(its user agent\)|user agent)/);
+  }
   for (const kind of ['readme', 'security']) {
     const text = kind === 'readme' ? staged.readmeSection : staged.securitySection;
     const bad = {
@@ -176,15 +204,76 @@ test('the staged README and SECURITY sections follow their rules', () => {
       'http URL': `${text}- http://www.wisply.ai/mcp\n`,
       'longer URL': `${text}- https://www.wisply.ai/mcp/v2\n`,
       token: `${text}- wspc_${'a'.repeat(64)}\n`,
+      'full-access token': `${text}- wsp_${'0'.repeat(64)}\n`,
+      'recording token': `${text}- wspr_${'f'.repeat(64)}\n`,
+      'cloud access token': `${text}- wisply_at_${'A1b2'.repeat(8)}\n`,
+      'cloud refresh token': `${text}- wisply_rt_${'x'.repeat(16)}\n`,
+      'cloud API key': `${text}- export KEY=wisply_sk_live_${'9'.repeat(20)}\n`,
       bearer: `${text}- Authorization: Bearer x\n`,
       marker: `${text}${ce.BLOCK_END}\n`,
       'no disclosure': text.replace('is sent to the AI service that app uses', 'goes to the app'),
+      'no network disclosure': text.replace('sees your IP address', 'sees a request'),
       'not opt-in': text.replace(ce.SECTIONS[kind].optIn, 'which comes with the plugin'),
       'every read': `${text}- Access history lists every read, kept for 90 days.\n`,
       'two trailing newlines': `${text}\n`,
     };
     for (const [name, input] of Object.entries(bad)) assert.notDeepEqual(ce.validateSection(input, kind), [], `${kind}: ${name}`);
+    // A bare prefix in prose (the security section names wsp_, wspc_ and wspr_) is not a token.
+    assert.deepEqual(ce.validateSection(text.replace(/\n$/, ' Cloud tokens start with `wisply_at_`.\n'), kind), []);
   }
+});
+
+test('the README section pins the Codex marketplace to this release, like the local install', () => {
+  assert.match(STAGED_VERSION ?? '', /^\d+\.\d+\.\d+$/, 'README-cloud.md names a release tag');
+  assert.ok(staged.readmeSection.includes(`codex plugin marketplace add fal3/wisply-mcp --ref v${STAGED_VERSION}`));
+  // package.json (DIST-M1) is the source of truth once it's in the repository: a release bump fails check.
+  if (repo.version != null) assert.equal(STAGED_VERSION, repo.version, 'bump cloud-connect/README-cloud.md with package.json');
+  const section = staged.readmeSection;
+  const add = `codex plugin marketplace add fal3/wisply-mcp --ref v${STAGED_VERSION}`;
+  const bad = {
+    unpinned: section.replace(add, 'codex plugin marketplace add fal3/wisply-mcp'),
+    'branch ref': section.replace(add, 'codex plugin marketplace add fal3/wisply-mcp --ref main'),
+    'sha-less tag': section.replace(add, 'codex plugin marketplace add fal3/wisply-mcp --ref 0.1.0'),
+    'other repository': section.replace(add, `codex plugin marketplace add someone/wisply-mcp --ref v${STAGED_VERSION}`),
+    'owner/repo@ref form': section.replace(add, `codex plugin marketplace add fal3/wisply-mcp@v${STAGED_VERSION}`),
+    'no Codex install': section.replace(add, 'see the Codex docs'),
+    'second, unpinned add': `${section}- Or: \`codex plugin marketplace add fal3/wisply-mcp\`\n`,
+    'stray ref': `${section}- Gemini: \`--ref main\`\n`,
+  };
+  for (const [name, text] of Object.entries(bad)) assert.notDeepEqual(ce.validateSection(text, 'readme'), [], name);
+  // With package.json's version, the tag must be exactly that release.
+  const next = STAGED_VERSION.replace(/\d+$/, (n) => String(Number(n) + 1));
+  const problems = ce.validateSection(section, 'readme', { version: next });
+  assert.match(problems.join('\n'), new RegExp(`--ref v${next.replaceAll('.', '\\.')}.*Release controls`));
+  assert.deepEqual(ce.validateSection(section.replaceAll(`v${STAGED_VERSION}`, `v${next}`), 'readme', { version: next }), []);
+  // check and apply read the version from package.json.
+  assert.equal(ce.cloudState(repoWith({ version: next })).state, 'invalid');
+  assert.throws(() => ce.applyCloudEntry(repoWith({ version: next }), RECORD), /staged files are invalid: .*--ref/);
+  assert.equal(ce.cloudState(repoWith({ version: null })).state, 'dark', 'before DIST-M1, any release tag');
+});
+
+test('SECURITY.md "Release controls" lists the README section\'s tag among the version bumps (once DIST-M1 is here)', (t) => {
+  const path = join(ROOT, ce.PATHS.security);
+  if (!existsSync(path)) return t.skip('SECURITY.md arrives with DIST-M1');
+  const text = readFileSync(path, 'utf8');
+  const start = text.indexOf('## Release controls');
+  if (start === -1) return t.skip('SECURITY.md has no "Release controls" section yet');
+  const end = text.indexOf('\n## ', start + 1);
+  const controls = text.slice(start, end === -1 ? undefined : end);
+  assert.ok(controls.includes('cloud-connect/README-cloud.md'),
+    'add "the `--ref` tag in cloud-connect/README-cloud.md" to the "Every release" bump list in SECURITY.md "Release controls" (DIST-M6)');
+});
+
+test('plugin.json, mcp.json, the marketplace entry and LIT.json are scanned for tokens too', () => {
+  const token = `wisply_sk_${'k'.repeat(24)}`;
+  assert.notDeepEqual(ce.validateCloudPlugin({ ...staged, manifest: { ...staged.manifest, description: `${staged.manifest.description} Key: ${token}` } }), []);
+  assert.notDeepEqual(ce.validateCloudPlugin({ ...staged, manifest: { ...staged.manifest, author: { ...staged.manifest.author, name: `wspc_${'a'.repeat(64)}` } } }), []);
+  // The URL rules refuse this too; the scan names the token itself.
+  assert.match(ce.validateCloudPlugin({ ...staged, mcp: { ...staged.mcp, mcpServers: { 'wisply-cloud': { type: 'streamable-http', url: `https://www.wisply.ai/mcp?t=wisply_at_${'z'.repeat(20)}` } } } }).join('\n'),
+    /cloud-connect\/plugin\/mcp\.json must not contain a token/);
+  assert.notDeepEqual(ce.validateMarketplaceEntry({ ...staged.entry, description: `${staged.entry.description} wisply_rt_${'r'.repeat(16)}` }), []);
+  assert.notDeepEqual(ce.validateLitRecord({ ...RECORD, approvedBy: `wisply_sk_${'q'.repeat(16)}` }), []);
+  assert.deepEqual(ce.secretProblems('prefixes alone: wsp_, wspc_, wspr_, wisply_at_, wisply_sk_', 'x'), []);
 });
 
 test('LIT.json validation: a real stage-4 date and an approver', () => {
@@ -286,12 +375,12 @@ test('apply is idempotent and remove restores the original bytes', () => {
     const once = litRepo(base);
     assert.deepEqual(files(litRepo(once, RECORD)), files(once), 'same record');
     assert.deepEqual(files(litRepo(once, {})), files(once), 'keeps the existing LIT.json');
-    assert.deepEqual(ce.removeCloudEntry(once), { marketplaceText: M3_MARKETPLACE, readmeText: readme, securityText: security, litText: null });
+    assert.deepEqual(ce.removeCloudEntry(once), { marketplaceText: M3_MARKETPLACE, cursorMarketplaceText: null, readmeText: readme, securityText: security, litText: null });
   }
   const noAnchor = litRepo(repoWith({ readme: README_NO_ANCHOR, security: SECURITY_NO_ANCHOR }));
   assert.ok(noAnchor.readmeText.endsWith(`Steps.\n\n${ce.BLOCK_START}\n${ce.blockBody('readme', staged.readmeSection)}${ce.BLOCK_END}\n`));
-  assert.deepEqual(ce.removeCloudEntry(repoWith()), { marketplaceText: M3_MARKETPLACE, readmeText: README, securityText: SECURITY, litText: null });
-  assert.deepEqual(ce.removeCloudEntry(repoWith({ marketplace: null, readme: null, security: null })), { marketplaceText: null, readmeText: null, securityText: null, litText: null });
+  assert.deepEqual(ce.removeCloudEntry(repoWith()), { marketplaceText: M3_MARKETPLACE, cursorMarketplaceText: null, readmeText: README, securityText: SECURITY, litText: null });
+  assert.deepEqual(ce.removeCloudEntry(repoWith({ marketplace: null, readme: null, security: null })), { marketplaceText: null, cursorMarketplaceText: null, readmeText: null, securityText: null, litText: null });
 });
 
 test('the README anchor skips fenced code', () => {
@@ -368,6 +457,35 @@ test('check refuses half-lit and broken states', () => {
   assert.match(ce.cloudState(cases['lit without LIT.json (CI gate)']).problems.join('\n'), /half-lit: .* but not cloud-connect\/LIT\.json/);
   assert.deepEqual(ce.cloudState(repoWith({ rootMcp: null, rootPlugin: null, marketplace: null, readme: null, security: null })), { state: 'dark', problems: [] });
   assert.deepEqual(ce.cloudState(repoWith()), { state: 'dark', problems: [] });
+});
+
+test('a hand-added Cursor marketplace may list wisply-cloud only while lit, only at the plugin folder', () => {
+  const cursorWith = (...plugins) => json({ name: 'wisply', owner: { name: 'Wisply' }, plugins: [{ name: 'wisply', source: './' }, ...plugins] });
+  const listed = cursorWith({ name: 'wisply-cloud', source: './cloud-connect/plugin' });
+  const localOnly = cursorWith();
+  const once = litRepo();
+  assert.equal(ce.cloudState(repoWith({ cursor: localOnly })).state, 'dark');
+  assert.equal(ce.cloudState({ ...once, cursorMarketplaceText: localOnly }).state, 'lit');
+  assert.equal(ce.cloudState({ ...once, cursorMarketplaceText: listed }).state, 'lit');
+  const dark = ce.cloudState(repoWith({ cursor: listed }));
+  assert.equal(dark.state, 'invalid');
+  assert.match(dark.problems.join('\n'), /\.cursor-plugin\/marketplace\.json lists wisply-cloud while it is dark/);
+  for (const bad of [
+    cursorWith({ name: 'wisply-cloud', source: './' }),
+    cursorWith({ name: 'wisply-cloud', source: 'cloud-connect/plugin' }),
+    cursorWith({ name: 'wisply-cloud', source: './cloud-connect/plugin', policy: { installation: 'INSTALLED_BY_DEFAULT' } }),
+    cursorWith({ name: 'wisply-cloud', source: './cloud-connect/plugin' }, { name: 'wisply-cloud', source: './cloud-connect/plugin' }),
+    '{',
+  ]) {
+    assert.equal(ce.cloudState({ ...once, cursorMarketplaceText: bad }).state, 'invalid', bad);
+    assert.throws(() => ce.applyCloudEntry(repoWith({ cursor: bad }), RECORD), /cursor-plugin/, bad);
+  }
+  // apply never writes it; remove unlists it there too and keeps the local entry.
+  assert.equal(ce.applyCloudEntry(repoWith({ cursor: localOnly }), RECORD).cursorMarketplaceText, undefined);
+  const removed = ce.removeCloudEntry({ ...once, cursorMarketplaceText: listed });
+  assert.equal(removed.cursorMarketplaceText, localOnly);
+  assert.equal(ce.removeCloudEntry({ ...once, cursorMarketplaceText: localOnly }).cursorMarketplaceText, localOnly, 'unchanged bytes');
+  assert.equal(ce.cloudState({ ...once, ...removed }).state, 'dark');
 });
 
 // --- writing ------------------------------------------------------------------------------------------
@@ -477,6 +595,30 @@ test('CLI: check, apply only with the stage-4 confirmation and record, remove', 
     assert.equal(run(dir, 'frobnicate').status, 2);
     assert.equal(run(dir, 'check', 'extra').status, 2);
     assert.equal(run(dir, '--help').status, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI: remove unlists a hand-added Cursor entry first; a release bump fails check', () => {
+  const dir = tmpRepo();
+  try {
+    assert.equal(run(dir, 'apply', ce.CONFIRM_FLAG, ...RECORD_ARGS).status, 0);
+    const cursor = { name: 'wisply', owner: { name: 'Wisply' }, plugins: [{ name: 'wisply', source: './' }, { name: 'wisply-cloud', source: './cloud-connect/plugin' }] };
+    mkdirSync(join(dir, '.cursor-plugin'), { recursive: true });
+    writeFileSync(join(dir, ce.PATHS.cursorMarketplace), json(cursor));
+    let r = run(dir, 'check');
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /listed in \.agents\/plugins\/marketplace\.json and \.cursor-plugin\/marketplace\.json/);
+    assert.deepEqual(ce.WRITE_ORDER.remove.slice(0, 2), ['marketplaceText', 'cursorMarketplaceText'], 'unlisting comes first');
+    r = run(dir, 'remove');
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, ce.PATHS.cursorMarketplace), 'utf8')).plugins, [{ name: 'wisply', source: './' }]);
+    const next = STAGED_VERSION.replace(/\d+$/, (n) => String(Number(n) + 1));
+    writeFileSync(join(dir, ce.PATHS.packageJson), json({ name: '@wisply/mcp', version: next }));
+    r = run(dir, 'check');
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /README-cloud\.md .*--ref v/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

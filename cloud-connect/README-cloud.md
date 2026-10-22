@@ -12,14 +12,14 @@ With [Cloud Connect](https://www.wisply.ai/docs/cloud-connect) (Wisply Pro), you
 
 To add `wisply-cloud`:
 
-- **Codex:** `codex plugin marketplace add fal3/wisply-mcp`, then install **wisply-cloud** in `/plugins`. When Codex says the server isn't logged in, run `codex mcp login wisply-cloud`.
+- **Codex:** `codex plugin marketplace add fal3/wisply-mcp --ref v0.1.0`, then install **wisply-cloud** in `/plugins`. If you added the `wisply` marketplace for an earlier release, run `codex plugin marketplace remove wisply` before the add: Codex keeps one tag per marketplace, and `codex plugin marketplace upgrade` fetches that same tag again. Keep the tag: both plugins come from this marketplace, and without one Codex would follow `main` for the local plugin too. When Codex says the server isn't logged in, run `codex mcp login wisply-cloud`.
 - **VS Code:** `code --add-mcp '{"name":"wisply-cloud","type":"http","url":"https://www.wisply.ai/mcp"}'`, or install **wisply-cloud** from the Agent Plugins view once it's listed there.
 - **Other apps that support remote MCP servers:** add `https://www.wisply.ai/mcp` as a remote (Streamable HTTP) server. Claude, ChatGPT, Microsoft 365 Copilot and Gemini connect from their own connector settings. See [wisply.ai/docs/cloud-connect](https://www.wisply.ai/docs/cloud-connect).
 
 Good to know:
 
 - `wisply-cloud` holds only the address, never a token. Your AI app keeps the sign-in in its own storage and makes the connection to wisply.ai itself. `@wisply/mcp` never contacts wisply.ai.
-- Once `wisply-cloud` is installed, your AI app may connect to wisply.ai whenever it starts, even before you sign in. To stop that, turn `wisply-cloud` off or uninstall it in your app.
+- Once `wisply-cloud` is installed, your AI app may connect to wisply.ai whenever it starts, even before you sign in. That connection sends no memo content, but wisply.ai sees your IP address and your app's name (its user agent), as with any website visit (see the Cloud Connect section of the [privacy policy](https://www.wisply.ai/privacy)). To stop that, turn `wisply-cloud` off or uninstall it in your app.
 - What your AI app reads from Wisply Cloud is sent to the AI service that app uses, under that service's terms. Access history at [wisply.ai/account](https://www.wisply.ai/account) shows recent reads by each connected app (what, when, which app); records are kept for 90 days.
 - Disconnect an app at [wisply.ai/account](https://www.wisply.ai/account) or in Wisply > Settings > Integrations > Cloud Connect. Turning Cloud Connect off deletes the cloud copy and disconnects every app.
 - Use one way per app: the plugin or the address added by hand. With both, the cloud tools show up twice.
