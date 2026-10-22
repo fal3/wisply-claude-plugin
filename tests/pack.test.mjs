@@ -7,7 +7,9 @@ import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import contract from '../lib/contract.mjs';
-import { PACKAGE_NAME, PACKAGE_RANGE, PACKAGE_SPEC, VERSION } from '../lib/constants.mjs';
+import {
+  MCP_NAME, NPX_COMMAND, NPX_FLAGS, PACKAGE_NAME, PACKAGE_RANGE, PACKAGE_SPEC, STANDARD_ENTRY, VERSION,
+} from '../lib/constants.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
@@ -49,6 +51,28 @@ test('npm refuses to publish while the contract is provisional ("private": true)
   if (!SOURCE.provisional) assert.equal(Object.hasOwn(pkg, 'private'), false, 'remove "private" rather than setting it to false');
 });
 
+test('docs/design-differences.md re-derives the design\'s one-click links from STANDARD_ENTRY', () => {
+  // The same constructions that reproduce the design's own links from its old entry ["-y", "@wisply/mcp@0"].
+  const links = (args) => {
+    const entry = JSON.stringify({ command: 'npx', args });
+    const base64 = encodeURIComponent(Buffer.from(entry).toString('base64'));
+    const vscode = encodeURIComponent(JSON.stringify({ name: 'wisply', command: 'npx', args }));
+    return [
+      `https://cursor.com/en/install-mcp?name=wisply&config=${base64}`,
+      `https://lmstudio.ai/install-mcp?name=wisply&config=${base64}`,
+      `https://insiders.vscode.dev/redirect?url=${encodeURIComponent(`vscode:mcp/install?${vscode}`)}`,
+      `https://kiro.dev/launch/mcp/add?name=wisply&config=${encodeURIComponent(entry)}`,
+      `cmd=npx&${args.map((arg) => `arg=${encodeURIComponent(arg)}`).join('&')}`,
+    ];
+  };
+  const design = links(['-y', '@wisply/mcp@0']);
+  assert.ok(design[0].endsWith('config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkB3aXNwbHkvbWNwQDAiXX0%3D'));
+  assert.ok(design[2].endsWith('%252C%2522%2540wisply%252Fmcp%25400%2522%255D%257D'));
+  assert.ok(design[3].endsWith('config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40wisply%2Fmcp%400%22%5D%7D'));
+  const text = readFileSync(join(ROOT, 'docs/design-differences.md'), 'utf8');
+  for (const link of links([...STANDARD_ENTRY.args])) assert.ok(text.includes(`\`${link}\``) || text.includes(`\`${link}\` (`), link);
+});
+
 test('no dependencies and no lifecycle scripts', () => {
   for (const field of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies', 'bundleDependencies', 'bundledDependencies']) {
     assert.equal(Object.hasOwn(pkg, field), false, field);
@@ -68,7 +92,8 @@ test('package.json, the constants and the README agree', () => {
   assert.equal(PACKAGE_RANGE, `${PACKAGE_NAME}@${VERSION.split('.')[0]}`);
   assert.equal(pkg.type, 'module');
   assert.deepEqual(pkg.bin, { 'wisply-mcp': 'bin/wisply-mcp.mjs' });
-  assert.equal(pkg.mcpName, 'ai.wisply/local');
+  // The registry name is a placeholder like the package name (constants.mjs MCP_NAME; docs/release-checks.json).
+  assert.equal(pkg.mcpName, MCP_NAME);
   assert.deepEqual(pkg.engines, { node: '>=20' });
   assert.deepEqual(pkg.files, ['bin', 'lib', 'contract', 'clients', 'README.md', 'LICENSE']);
   assert.equal(pkg.license, 'MIT');
@@ -77,13 +102,51 @@ test('package.json, the constants and the README agree', () => {
   assert.match(readFileSync(join(ROOT, 'LICENSE'), 'utf8'), /^MIT License/);
 
   const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
-  assert.ok(readme.includes(`"args": ["-y", "${PACKAGE_SPEC}"]`), 'README shows the standard entry');
-  assert.ok(readme.includes(`npx -y ${PACKAGE_SPEC}`));
+  assert.ok(readme.includes(`{ "command": "npx", "args": ["-y", "--prefix", "/", "${PACKAGE_SPEC}"] }`), 'README shows the standard entry');
+  assert.ok(readme.includes(`-- ${NPX_COMMAND}\``), 'README shows the Claude Code command');
   for (const tool of contract.tools) assert.ok(readme.includes(`\`${tool}\``), `README names ${tool}`);
   assert.ok(!readme.includes('@wisply/mcp@latest'));
   // The range appears only in the opt-in note, never in a snippet.
-  assert.ok(!readme.includes(`"${PACKAGE_RANGE}"`) && !readme.includes(`npx -y ${PACKAGE_RANGE} `) && !readme.includes(`npx -y ${PACKAGE_RANGE}\``),
+  assert.ok(!readme.includes(`"${PACKAGE_RANGE}"`) && !readme.includes(`/ ${PACKAGE_RANGE} `) && !readme.includes(`/ ${PACKAGE_RANGE}\``),
     'README snippets run the exact version');
+});
+
+test('the standard entry and every command people are told to run use npx\'s --prefix / and the exact version', () => {
+  // Without --prefix /, npx resolves the package from the folder the AI app starts it in (the open project's
+  // node_modules and .npmrc) before it asks npm, so a cloned project could run its own @wisply/mcp with the token.
+  assert.deepEqual([...NPX_FLAGS], ['-y', '--prefix', '/']);
+  assert.equal(NPX_COMMAND, `npx -y --prefix / ${PACKAGE_SPEC}`);
+  assert.deepEqual(JSON.parse(JSON.stringify(STANDARD_ENTRY)), { command: 'npx', args: ['-y', '--prefix', '/', PACKAGE_SPEC] });
+
+  const escaped = PACKAGE_NAME.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+  // Any npx run or global install of the package, in prose or in a JSON args array.
+  const npx = new RegExp(`\\bnpx((?: +-[\\w-]+(?: +/(?= ))?)*) +(${escaped}[^\\s\`"'),]*)`, 'g');
+  const args = new RegExp(`"args": \\[([^\\]]*)"(${escaped}[^"]*)"`, 'g');
+  const install = new RegExp(`\\bnpm (?:i|install) -g +(${escaped}[^\\s\`"'),]*)`, 'g');
+  for (const file of ['README.md', 'SECURITY.md', 'CHANGELOG.md', 'docs/design-differences.md']) {
+    const text = readFileSync(join(ROOT, file), 'utf8');
+    let seen = 0;
+    for (const match of text.matchAll(npx)) {
+      seen += 1;
+      // Gemini CLI's `gemini mcp add ... npx -- -y ...` puts dash arguments after `--` (the design's S1).
+      assert.ok(['-y --prefix /', '-- -y --prefix /'].includes(match[1].trim()), `${file}: ${match[0]}`);
+      // `@wisply/mcp@<version>` is how the docs write "this release's version" in general.
+      assert.ok([PACKAGE_SPEC, `${PACKAGE_NAME}@<version>`].includes(match[2]), `${file}: ${match[0]}`);
+    }
+    for (const match of text.matchAll(args)) {
+      assert.equal(match[1], '"-y", "--prefix", "/", ', `${file}: ${match[0]}`);
+      assert.equal(match[2], PACKAGE_SPEC, `${file}: ${match[0]}`);
+    }
+    for (const match of text.matchAll(install)) assert.equal(match[1], PACKAGE_SPEC, `${file}: ${match[0]}`);
+    assert.doesNotMatch(text, new RegExp(`npx -y ${escaped}`), `${file}: npx without --prefix /`);
+    if (file === 'README.md') assert.ok(seen > 0);
+  }
+
+  // In messages.mjs, npx reaches a text only through NPX_COMMAND (npx's flags and the pinned spec).
+  const source = readFileSync(join(ROOT, 'lib/messages.mjs'), 'utf8');
+  const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/^import .*$/gm, '');
+  assert.match(code, /export const SETUP_COMMAND = `\$\{NPX_COMMAND\} setup`;/);
+  assert.doesNotMatch(code, /\$\{(PACKAGE_SPEC|PACKAGE_NAME|PACKAGE_RANGE)\}|\bnpx\b/);
 });
 
 test('the bin is an executable node script', () => {

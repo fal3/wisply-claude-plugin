@@ -27,7 +27,7 @@
       "environmentVariables": [
         {
           "name": "WISPLY_MCP_TOKEN",
-          "description": "Wisply connector token (wspc_…). Optional after `npx -y @wisply/mcp setup`.",
+          "description": "Wisply connector token (wspc_…). Optional after `npx -y --prefix / @wisply/mcp@0.1.0 setup`.",
           "isRequired": false,
           "isSecret": true,
           "format": "string"

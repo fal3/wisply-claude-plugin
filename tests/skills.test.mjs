@@ -111,6 +111,8 @@ test('SKILL.md frontmatter follows the Agent Skills rules', () => {
   assert.match(data.description, /Use when/);
   assert.equal(data.license, 'MIT');
   assert.ok(data.compatibility.length <= 500);
+  // The design's exact text: it names the connector, not a command to run, so it carries neither npx's
+  // --prefix / nor a version and stays the same across releases (docs/design-differences.md, DIST-M3).
   assert.ok(data.compatibility.includes(`npx -y ${PACKAGE_NAME}`), 'compatibility names the package');
   assert.deepEqual(data.metadata, { publisher: 'Wisply', homepage: 'https://www.wisply.ai/docs/mcp/install' });
 });

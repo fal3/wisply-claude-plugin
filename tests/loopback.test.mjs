@@ -105,21 +105,24 @@ test('a wrong proof, a missing proof or a wrong answer is not Wisply', async (t)
   assert.equal((await loopback.identity(FULL, 'full')).outcome, 'ok');
 });
 
-test('status codes: old Wisply (404, or 401 with its realm) versus anything else', async (t) => {
+test('status codes: old Wisply (404, or 401 with its realm), Wisply without its tokens (its 503), anything else', async (t) => {
   const cases = [
     [404, {}, 'old-wisply'],
     [401, { 'WWW-Authenticate': 'Bearer realm="wisply-mcp"' }, 'old-wisply'],
     [401, { 'WWW-Authenticate': 'Bearer realm="other"' }, 'not-wisply'],
     [401, {}, 'not-wisply'],
     [503, {}, 'not-wisply'],
+    [503, { 'Content-Type': 'text/plain' }, 'keychain', 'MCP tokens are unavailable. Check Keychain access in Wisply.'],
+    [503, { 'Content-Type': 'text/plain' }, 'not-wisply', 'Service Unavailable'],
+    [500, { 'Content-Type': 'text/plain' }, 'not-wisply', 'MCP tokens are unavailable. Check Keychain access in Wisply.'],
     [302, { Location: 'http://127.0.0.1:9/mcp/identity' }, 'not-wisply'],
     [500, {}, 'not-wisply'],
   ];
-  for (const [status, headers, outcome] of cases) {
-    const fake = await listen((req, res) => res.writeHead(status, headers).end());
+  for (const [status, headers, outcome, body = ''] of cases) {
+    const fake = await listen((req, res) => res.writeHead(status, headers).end(body));
     t.after(fake.close);
     const result = await createLoopback({ port: fake.port }).identity(FULL, 'full');
-    assert.equal(result.outcome, outcome, `${status} ${JSON.stringify(headers)}`);
+    assert.equal(result.outcome, outcome, `${status} ${JSON.stringify(headers)} ${body}`);
     assert.equal(result.status, status);
   }
 });

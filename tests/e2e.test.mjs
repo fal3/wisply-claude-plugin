@@ -127,6 +127,14 @@ test('an impostor never receives the token; an old Wisply is told to update', as
   });
   assert.equal(toolText(scoped.responses[0]), messages.UPDATE_WISPLY_SCOPE);
   assert.equal(noRecording.state.calls.length, 0);
+
+  // Wisply itself, unable to read its tokens from the Keychain: no advice to quit "whatever is using that port".
+  const locked = await startFakeWisply({ mode: 'keychain-locked' });
+  t.after(locked.close);
+  const keychain = await run({ env: env(locked.port), lines });
+  assert.equal(toolText(keychain.responses[0]), messages.keychainUnavailable(locked.port));
+  assert.equal(locked.state.challenges.length, 1, 'no retry: the token is not in question');
+  assert.equal(locked.state.calls.length, 0);
 });
 
 // Without an env token the real bin falls through to the Keychain, which on

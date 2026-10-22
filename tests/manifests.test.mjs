@@ -8,7 +8,9 @@ import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import contract from '../lib/contract.mjs';
-import { PACKAGE_NAME, PACKAGE_RANGE, PACKAGE_SPEC, SERVER_KEY, VERSION } from '../lib/constants.mjs';
+import {
+  MCP_NAME, NPX_FLAGS, PACKAGE_NAME, PACKAGE_RANGE, PACKAGE_SPEC, SERVER_KEY, STANDARD_ENTRY as ENTRY, VERSION,
+} from '../lib/constants.mjs';
 import { SETUP_COMMAND } from '../lib/messages.mjs';
 import { toolsFor } from '../lib/scopes.mjs';
 import {
@@ -30,7 +32,8 @@ const readme = readText('README.md');
 const AGENT_PLUGIN_SCHEMA = 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json';
 const AGENT_MCP_SCHEMA = 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json';
 const REPO_URL = 'https://github.com/fal3/wisply-mcp';
-const STANDARD_ENTRY = { command: 'npx', args: ['-y', PACKAGE_SPEC] };
+/** The token-free entry every npm snippet and link runs (DIST-M1: npx's --prefix / and the exact version). */
+const STANDARD_ENTRY = { command: ENTRY.command, args: [...ENTRY.args] };
 const MANIFESTS = ['plugin.json', 'mcp.json', '.agents/plugins/marketplace.json', 'gemini-extension.json', 'mcpb/manifest.json',
   'glama.json', 'server.json', 'registry/cloud.server.json'];
 const schema = (path) => readJson(`tests/schemas/${path}`);
@@ -52,6 +55,7 @@ test('names, versions and the package agree with package.json and lib/constants.
   assert.equal(mcpb.name, SERVER_KEY);
   assert.equal(mcpb.version, VERSION);
   assert.equal(server.name, pkg.mcpName);
+  assert.equal(server.name, MCP_NAME);
   assert.equal(server.version, VERSION);
   const npm = server.packages.find((entry) => entry.registryType === 'npm');
   assert.equal(npm.identifier, PACKAGE_NAME);
@@ -213,6 +217,30 @@ test('no manifest, skill, command or install text can hold a token or an auth he
   }
 });
 
+test('every npm command and entry in these files runs npx with --prefix / and the exact version', () => {
+  // DIST-M1: without --prefix /, npx resolves the package from the open project (a planted node_modules or
+  // .npmrc) before npm. tests/pack.test.mjs holds the README, SECURITY.md, the CHANGELOG and the design notes to
+  // this; these are the rest of what this repository publishes. The skill keeps the design's text, which names
+  // the package without a command (docs/design-differences.md), and is checked in tests/skills.test.mjs.
+  const escaped = PACKAGE_NAME.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+  const npx = new RegExp(`\\bnpx((?: +-[\\w-]+(?: +/(?= ))?)*) +(${escaped}[^\\s\`"'),]*)`, 'g');
+  const files = [...MANIFESTS, 'llms-install.md', ...readdirSync(join(ROOT, 'commands/wisply')).map((name) => `commands/wisply/${name}`),
+    'extras/cursor/README.md', 'extras/cursor/rules/wisply.mdc', 'extras/cursor/commands/wisply-recap.md'];
+  let seen = 0;
+  for (const file of files) {
+    const text = readText(file);
+    for (const match of text.matchAll(npx)) {
+      seen += 1;
+      assert.equal(match[1].trim(), NPX_FLAGS.join(' '), `${file}: ${match[0]}`);
+      assert.equal(match[2], PACKAGE_SPEC, `${file}: ${match[0]}`);
+    }
+    assert.doesNotMatch(text, new RegExp(`npx -y ${escaped}`), `${file}: npx without --prefix /`);
+    assert.doesNotMatch(text, new RegExp(`"-y",\\s*"${escaped}`), `${file}: an entry without --prefix /`);
+  }
+  // server.json, gemini-extension.json, mcpb/manifest.json and llms-install.md (twice) name a command.
+  assert.ok(seen >= 5, `only ${seen} npx commands found`);
+});
+
 test('the JSON Schema checker catches what the schemas forbid', () => {
   const pluginSchema = schema('agent-plugins-1.0.0/plugin.schema.json');
   const mcpSchema = schema('agent-plugins-1.0.0/mcp.schema.json');
@@ -359,7 +387,7 @@ test('README covers every client the guide lists, and its JSON snippets parse', 
     assert.doesNotMatch(text, /WISPLY_MCP_TOKEN/);
   }
   // The Gemini command keeps -y after --, or Gemini reads it as its own flag.
-  assert.ok(readme.includes(`gemini mcp add --scope user wisply npx -- -y ${PACKAGE_SPEC}`));
+  assert.ok(readme.includes(`gemini mcp add --scope user wisply npx -- ${NPX_FLAGS.join(' ')} ${PACKAGE_SPEC}`));
 });
 
 test('README names the plugin, extension and bundle installs from this repository', () => {

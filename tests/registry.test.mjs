@@ -16,7 +16,8 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PACKAGE_NAME, VERSION } from '../lib/constants.mjs';
+import { MCP_NAME, PACKAGE_NAME, VERSION } from '../lib/constants.mjs';
+import { SETUP_COMMAND } from '../lib/messages.mjs';
 import { bundleFileName, packerLib, verifyBundle } from '../scripts/build-mcpb.mjs';
 import { validate } from './helpers/json-schema.mjs';
 import { ROOT, exists, readJson } from './helpers/repo.mjs';
@@ -107,7 +108,10 @@ test('the offline checks catch what the registry refuses', () => {
 
 test('ai.wisply/local: the DNS namespace, the npm package and its mcpName', () => {
   // DNS authentication on wisply.ai grants ai.wisply.*; npm ownership is mcpName in the published version.
-  assert.equal(local.name, 'ai.wisply/local');
+  // MCP_NAME is a placeholder until wisply.ai is verified (DIST-M1, docs/release-checks.json); the fallback
+  // is io.github.fal3/wisply-mcp, in lib/constants.mjs, package.json and here together.
+  assert.equal(local.name, MCP_NAME);
+  assert.ok(['ai.wisply/local', 'io.github.fal3/wisply-mcp'].includes(MCP_NAME), MCP_NAME);
   assert.equal(pkg.mcpName, local.name);
   assert.ok(local.description.length <= 100);
   assert.ok(local.title.length <= 100);
@@ -125,7 +129,7 @@ test('ai.wisply/local: the token is an optional secret, and nothing sets its val
   assert.equal(token.isSecret, true);
   assert.equal(token.isRequired, false);
   for (const key of ['value', 'default', 'choices']) assert.equal(Object.hasOwn(token, key), false, key);
-  assert.match(token.description, /setup/);
+  assert.ok(token.description.includes(SETUP_COMMAND), 'names the pinned setup command');
   assert.equal(Object.hasOwn(mcpbPackage, 'environmentVariables'), false, 'the bundle asks for the token itself (user_config)');
 });
 

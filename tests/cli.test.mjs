@@ -502,7 +502,7 @@ test('every CLI text is ASCII, holds no token, and names only commands this buil
       assert.ok(!text.includes(`${PACKAGE_NAME} ${command}`) && !text.includes(`wisply-mcp ${command}`), `${command}: ${text}`);
     }
   }
-  assert.equal(messages.FORGET_COMMAND, 'npx -y @wisply/mcp forget');
+  assert.equal(messages.FORGET_COMMAND, 'npx -y --prefix / @wisply/mcp@0.1.0 forget');
   assert.equal(messages.stored(51771, 'connector', 4),
     'Stored. Wisply answered on 127.0.0.1:51771 and proved it holds this token (read-only connector: 4 tools).');
 });

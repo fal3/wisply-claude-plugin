@@ -18,9 +18,12 @@ All notable changes to `@wisply/mcp` are listed here. Versions follow
   when no token is set; `setup_claude` only with `--allow-claude-setup`;
   `--read-only` to offer only the read-only tools.
 - Plain tool errors for every failure (token not set or malformed, Wisply not
-  answering, identity check failed, Wisply too old, tool outside the scope,
-  another platform), none of which contain the token or the app's response.
-  They point at `npx -y @wisply/mcp setup` and at `WISPLY_MCP_TOKEN`.
+  answering, identity check failed, Wisply too old, Wisply unable to read its
+  tokens from the Keychain, tool outside the scope, another platform), none of
+  which contain the token or the app's response. They point at
+  `npx -y --prefix / @wisply/mcp@0.1.0 setup` and at `WISPLY_MCP_TOKEN`. A
+  missing recording-control proof says that Wisply may be too old or may have
+  failed to read that token.
 - A JSON-RPC error from Wisply keeps its code, with a fixed message from the
   connector in place of Wisply's own text.
 - `setup [--full-access]`: macOS's `security` asks for the token in the
@@ -36,13 +39,22 @@ All notable changes to `@wisply/mcp` are listed here. Versions follow
 - Without a usable `WISPLY_MCP_TOKEN`, the connector reads the Keychain item
   (macOS only, 2 s budget).
 - `print-config` and `install` answer "not in this build yet" (exit 1).
-- Snippets pin the exact version (`@wisply/mcp@0.1.0`); `@wisply/mcp@0` is an
-  opt-in for automatic 0.x updates.
+- Snippets and commands run `npx -y --prefix / @wisply/mcp@0.1.0`: the exact
+  version (`@wisply/mcp@0` is an opt-in for automatic 0.x updates), resolved
+  from `/` so the open project's `node_modules` and `.npmrc` can't supply
+  another copy. `setup`, `status` and `forget` are pinned the same way.
 - The token from `WISPLY_MCP_TOKEN`; empty values and unresolved `${...}`
   placeholders count as unset and fall through to the Keychain item.
 - `WISPLY_MCP_DEBUG=1`: one fixed-field line per request on stderr, never
   arguments, results or tokens.
 - `--help` and `--version`.
+
+- `npm run sync-vendor` reads and checks every upstream file before it
+  writes anything, and refuses a missing file or a contract the connector
+  can't load.
+- `WISPLY_RELEASE=1 npm test` also requires the release checks in
+  `docs/release-checks.json` (the Mac port test, the MCP Registry namespace)
+  and a destructive `setup_claude` in the contract.
 
 ### Added outside the npm package
 
@@ -77,57 +89,13 @@ These live in the repository, not in the package:
   Connect), `glama.json` and `llms-install.md`.
 - The README's install matrix: one-click links for Cursor, VS Code, VS Code
   Insiders, Goose, LM Studio and Kiro, the setup for 20 apps, and
-  tag-pinned git installs (`--ref v0.1.0`) for Codex and Gemini CLI.
+  tag-pinned git installs (`--ref v0.1.0`) for Codex and Gemini CLI. Every
+  npm snippet, link and command in them, `llms-install.md`, the registry
+  entry and the token fields uses the standard entry
+  (`npx -y --prefix / @wisply/mcp@0.1.0`).
 
-### Differences from the distribution design: plugins, extensions and the bundle (to fold into the spec)
-
-- **`/wisply:live` hedges `tail_words`.** The design has `live.toml` call
-  `get_live_transcript` with `tail_words` 400. The provisional contract's
-  `get_live_transcript` takes no arguments (`additionalProperties: false`),
-  and a model calls tools by their schema (Gemini CLI may also check
-  arguments against it), so the prompt passes `tail_words` 400 only "if the
-  tool accepts tail_words, otherwise with no arguments". Until raycast PR 1's
-  contract is vendored, `/wisply:live` reads the whole live transcript.
-  `tests/skills.test.mjs` fails once the contract has `tail_words` and the
-  hedge is still there, so the DIST-M5 re-vendor makes the call
-  unconditional.
-- **The remote is its own plugin.** The design's directory table and
-  DIST-M6 row add a second `mcp.json` entry, `wisply-cloud`
-  (streamable-http), to the root plugin. The root `mcp.json` stays
-  local-only instead (`tests/manifests.test.mjs` refuses any non-stdio, URL,
-  header or env entry in it), and the remote is the separate, opt-in Agent
-  Plugin at `cloud-connect/plugin`, listed as a second marketplace entry
-  (as DIST-M6 builds it).
-- **Exact versions.** Snippets, one-click links and the versions note name
-  `@wisply/mcp@0.1.0` (`PACKAGE_SPEC`); `@wisply/mcp@0` is only the opt-in
-  (DIST-M1). The design's standard entry, per-client snippets, deeplinks and
-  the W1 versions-note text still say `@0`, and DIST-M4's templates, the W1
-  page and DIST-A1's Swift snippets should follow the exact version.
-- **No `setup_claude` in the bundle's tools.** The bundle never passes
-  `--allow-claude-setup`, so its manifest (which Claude's directory and
-  Smithery read) lists the eight tools it can serve.
-- **Token fields say what a full-access token allows.** The connector accepts
-  any Wisply token from `WISPLY_MCP_TOKEN`, so the bundle's and the Gemini
-  extension's token fields recommend `wspc_` and say that a `wsp_` token lets
-  the AI app start and stop recordings and propose follow-ups.
-- **Two release assets.** Every release carries the bundle and
-  `SHA256SUMS`, and the notes repeat its line. Gemini CLI installs a GitHub
-  repository from its newest release: with exactly one asset whose name has
-  no platform in it, it takes that asset for the extension and fails to
-  unpack a `.mcpb`; with two, it uses the tag's source archive.
-- **Release build.** The design packs with
-  `npx -y @anthropic-ai/mcpb@2.1.2`; the release build and CI use the copy
-  installed from `tools/mcpb`'s lockfile instead, refuse a checkout that
-  isn't clean or isn't at the tag, and stage the tag's own files. The gate
-  runs on the asset downloaded back from the draft release and compares its
-  contents with the tag, not only its sha256.
-- **Git installs and `main`.** Git-sourced installs (Agent Plugin, Gemini
-  extension) follow the default branch unless they name a ref, so the README
-  gives `--ref v<version>` where the app takes one (Codex, Gemini CLI;
-  GitHub Copilot CLI's `plugin install` and VS Code's **Install Plugin From
-  Source** take none), and the release controls add a `main` ruleset (pull
-  requests with CI only, no force-push or deletion, signed commits) to the
-  design's `v*` tag ruleset and immutable releases.
+Where these depart from the distribution design is listed in
+`docs/design-differences.md` ("Plugins, extensions and the bundle").
 
 ### Not yet
 
