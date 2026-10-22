@@ -50,9 +50,10 @@ spec text. Not shipped in the npm package.
 - **The setup command is pinned too.** The design's "Errors" texts name the
   setup command with the bare package name (no version, no `--prefix /`),
   which runs npm's newest release in the one command that writes the token
-  to the keychain. `SETUP_COMMAND` is `${NPX_COMMAND} setup`
-  (`npx -y --prefix / @wisply/mcp@0.1.0 setup`); the texts are otherwise word
-  for word.
+  to the keychain. Once the package name is final, `SETUP_COMMAND` is
+  `${NPX_COMMAND} setup` (`npx -y --prefix / @wisply/mcp@0.1.0 setup`); the
+  texts are otherwise word for word. Until then it is `wisply-mcp setup`
+  (DIST-M2, below).
 - **Behavior rule 6, "Any other JSON-RPC error passes through."** The
   connector keeps Wisply's error code but replaces Wisply's message with a
   fixed text (`messages.rpcFailed`), because Wisply's message could one day
@@ -121,6 +122,70 @@ spec text. Not shipped in the npm package.
   `MCPToolCatalog.swift`, and `stop_recording` may deserve the same).
   `MCP_NAME` in `lib/constants.mjs` is a placeholder like `PACKAGE_NAME`.
 
+## setup, status and forget (DIST-M2)
+
+- **No package name before it is Wisply's.** `PACKAGE_NAME_FINAL` in
+  `lib/constants.mjs` (false; `tests/pack.test.mjs` ties it to
+  `!package.json "private"`) gates every command the connector names. While
+  it is false, `SETUP`, `MALFORMED` and `NOT_WISPLY` in tool results (which
+  the model also reads) use the interim wording that names only
+  `WISPLY_MCP_TOKEN`, and terminal texts (setup, status, forget, argument
+  errors) name the bin: `wisply-mcp setup`, `wisply-mcp status`,
+  `wisply-mcp forget` (`COMMAND_PREFIX`). Once it is true they become
+  `NPX_COMMAND` commands, as above. Nobody, person or agent, is told to `npx`
+  an npm name someone else could still register.
+- **`SETUP_MALFORMED`.** When setup's read-back isn't a Wisply token it prints
+  `SETUP_MALFORMED`, not the design's `MALFORMED` (which says
+  "WISPLY_MCP_TOKEN is set", wrong in setup): "That isn't a Wisply token (it
+  should start with wspc_, wspr_ or wsp_ and have 64 hex characters), so it
+  wasn't saved. Copy the read-only connector token from Wisply > Settings >
+  Integrations > MCP Server and run `{setup command}` again." The VS Code
+  extension and the wisply.ai page should use the same text.
+- **Setup replaces instead of updating.** The design's `WRITE_ARGS` use
+  `add-generic-password -U`. On an existing item, `-U` keeps that item's
+  access list and only merges `-T` into it (Apple's `keychain_add.c` /
+  `access_utils.c`), so an item made earlier by another tool could keep
+  trusting other programs. Setup deletes every earlier item first
+  (`deleteAllKeychain`; `REPLACE_FAILED` stops it before `security` asks if
+  that fails) and adds without `-U`, so the item's access list is always the
+  documented one. Cancelling after that leaves no item, and setup says so
+  (`SETUP_CANCELLED_AFTER_REMOVAL`, `PREVIOUS_REMOVED`); `SETUP_CANCELLED`
+  ("Your login keychain wasn't changed") is printed only when there was
+  nothing to remove.
+- **`forget` removes every copy.** The design's `deleteKeychain` runs
+  `delete-generic-password` once, which removes only the first match in the
+  keychain search list. `forget` repeats it until `security` finds none (at
+  most `KEYCHAIN_MAX_COPIES`, plus one run that has to find none) and
+  reports the count. It also ignores `WISPLY_MCP_PORT`, so a stale value
+  can't block it.
+- **`security` gets a filtered environment.** Reads, writes and deletes run
+  `/usr/bin/security` with this process's environment minus every
+  `WISPLY_MCP_*` variable (`securityEnv`), so an env token never reaches the
+  child.
+- **Tokens as arguments.** An argument or `WISPLY_MCP_PORT` that looks like a
+  token (a prefix with hex, or 16+ hex characters) gets the fixed
+  `TOKEN_AS_ARGUMENT` text and is never echoed, not even in part, because AI
+  apps keep the connector's stderr in their log files.
+- **Full-access note.** `setup --full-access` (`FULL_ACCESS_SHARED`) and
+  `status` with a full-access keychain item say that every AI app without its
+  own token gets full access.
+- **`forget` off macOS.** The design leaves it open. `forget` prints its own
+  text (`nothingSavedOffMac`: "This connector saves a token only in the macOS
+  Keychain, and this computer runs {platform}, so there's nothing to
+  remove.") and exits 0, instead of `NOT_MAC` and exit 1: setup refuses off
+  macOS, so no saved copy can exist. `setup` and `status` keep `NOT_MAC` and
+  exit 1 there, as the design says for status.
+- **Exit codes.** The design gives status "0 OK, 1 problem". All three
+  commands use 0 done, 1 a problem the message names, and 2 a usage mistake
+  (an unknown option, a bad port, a token passed as an argument).
+- **The `keychain` and `missing-scope` outcomes in setup and status.** Setup
+  and status print the same texts as tool results for the bridge's
+  `keychain` outcome (`KEYCHAIN_UNAVAILABLE`) and for `missing-scope`
+  (`UPDATE_WISPLY_SCOPE`, both causes). Status's one-line summaries are
+  "answered on 127.0.0.1:{port}, but couldn't read its MCP tokens from the
+  Keychain" and "answered on 127.0.0.1:{port}, but sent no proof for
+  recording-control tokens".
+
 ## Plugins, extensions and the bundle (DIST-M3)
 
 - **The standard entry reaches every surface here.** The design's
@@ -129,11 +194,16 @@ spec text. Not shipped in the npm package.
   bare package name (no version, no `--prefix /`), and its README matrix and
   deeplinks use the old `["-y", "@wisply/mcp@0"]` entry. Here every npm snippet,
   link and command in them is the standard entry above, and the setup command
-  is `SETUP_COMMAND` (`npx -y --prefix / @wisply/mcp@0.1.0 setup`);
-  `tests/manifests.test.mjs` builds what it expects from `STANDARD_ENTRY`,
-  `NPX_FLAGS` and `SETUP_COMMAND`, so these move with the constants. The
-  Agent Plugin, the Gemini extension and the bundle run their own copy with
-  `node`, never `npx`, so their server entries are unchanged.
+  they name is the final one, `NPX_COMMAND` plus `setup`
+  (`npx -y --prefix / @wisply/mcp@0.1.0 setup`), not the interim
+  `wisply-mcp setup` that `PACKAGE_NAME_FINAL` gives the connector's own
+  texts: these files are read only once this repository or its release is
+  public, which waits for the npm organization (SECURITY.md, release control
+  1). `tests/manifests.test.mjs` and `tests/registry.test.mjs` build what
+  they expect from `STANDARD_ENTRY`, `NPX_FLAGS` and `NPX_COMMAND`, so these
+  move with the constants. The Agent Plugin, the Gemini extension and the
+  bundle run their own copy with `node`, never `npx`, so their server entries
+  are unchanged.
 - **The skill keeps the design's text.** `skills/wisply-memos/SKILL.md` is
   the design's exact text. Its `compatibility` line names the connector by
   its bare package name, as a description rather than a command to run, and

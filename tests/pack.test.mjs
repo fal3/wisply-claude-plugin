@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import contract from '../lib/contract.mjs';
 import {
-  MCP_NAME, NPX_COMMAND, NPX_FLAGS, PACKAGE_NAME, PACKAGE_RANGE, PACKAGE_SPEC, STANDARD_ENTRY, VERSION,
+  MCP_NAME, NPX_COMMAND, NPX_FLAGS, PACKAGE_NAME, PACKAGE_NAME_FINAL, PACKAGE_RANGE, PACKAGE_SPEC, STANDARD_ENTRY, VERSION,
 } from '../lib/constants.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -49,6 +49,13 @@ test('npm refuses to publish while the contract is provisional ("private": true)
   // is the explicit release step, together with the re-vendored contract (DIST-M5).
   assert.equal(pkg.private === true, SOURCE.provisional, 'package.json "private" must equal contract/SOURCE.json "provisional"');
   if (!SOURCE.provisional) assert.equal(Object.hasOwn(pkg, 'private'), false, 'remove "private" rather than setting it to false');
+});
+
+test('the package name is final exactly when package.json is no longer private', () => {
+  // Messages may name the package through npx only once Wisply owns the name
+  // on npm, which has to hold before the first publish anyway.
+  assert.equal(PACKAGE_NAME_FINAL, pkg.private !== true, 'lib/constants.mjs PACKAGE_NAME_FINAL must be !package.json "private"');
+  assert.equal(typeof PACKAGE_NAME_FINAL, 'boolean');
 });
 
 test('docs/design-differences.md re-derives the design\'s one-click links from STANDARD_ENTRY', () => {
@@ -142,11 +149,16 @@ test('the standard entry and every command people are told to run use npx\'s --p
     if (file === 'README.md') assert.ok(seen > 0);
   }
 
-  // In messages.mjs, npx reaches a text only through NPX_COMMAND (npx's flags and the pinned spec).
+  // In messages.mjs, npx reaches a text only through NPX_COMMAND (npx's flags and the pinned spec), and
+  // only once the package name is final; until then the commands use the bin's own name.
   const source = readFileSync(join(ROOT, 'lib/messages.mjs'), 'utf8');
   const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/^import .*$/gm, '');
-  assert.match(code, /export const SETUP_COMMAND = `\$\{NPX_COMMAND\} setup`;/);
-  assert.doesNotMatch(code, /\$\{(PACKAGE_SPEC|PACKAGE_NAME|PACKAGE_RANGE)\}|\bnpx\b/);
+  assert.match(code, /export const COMMAND_PREFIX = PACKAGE_NAME_FINAL \? NPX_COMMAND : 'wisply-mcp';/);
+  for (const command of ['setup', 'forget', 'status']) {
+    assert.match(code, new RegExp(`export const ${command.toUpperCase()}_COMMAND = \`\\$\\{COMMAND_PREFIX\\} ${command}\`;`));
+  }
+  assert.equal([...code.matchAll(/\bNPX_COMMAND\b/g)].length, 1, 'NPX_COMMAND appears only in COMMAND_PREFIX');
+  assert.doesNotMatch(code, /\$\{(PACKAGE_SPEC|PACKAGE_NAME|PACKAGE_RANGE|NPX_COMMAND)\}|\bnpx\b/);
 });
 
 test('the bin is an executable node script', () => {

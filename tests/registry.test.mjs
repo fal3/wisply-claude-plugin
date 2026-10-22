@@ -16,8 +16,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { MCP_NAME, PACKAGE_NAME, VERSION } from '../lib/constants.mjs';
-import { SETUP_COMMAND } from '../lib/messages.mjs';
+import { MCP_NAME, NPX_COMMAND, PACKAGE_NAME, VERSION } from '../lib/constants.mjs';
 import { bundleFileName, packerLib, verifyBundle } from '../scripts/build-mcpb.mjs';
 import { validate } from './helpers/json-schema.mjs';
 import { ROOT, exists, readJson } from './helpers/repo.mjs';
@@ -129,7 +128,8 @@ test('ai.wisply/local: the token is an optional secret, and nothing sets its val
   assert.equal(token.isSecret, true);
   assert.equal(token.isRequired, false);
   for (const key of ['value', 'default', 'choices']) assert.equal(Object.hasOwn(token, key), false, key);
-  assert.ok(token.description.includes(SETUP_COMMAND), 'names the pinned setup command');
+  // The final setup command, as in every manifest here (tests/manifests.test.mjs SETUP_COMMAND).
+  assert.ok(token.description.includes(`${NPX_COMMAND} setup`), 'names the pinned setup command');
   assert.equal(Object.hasOwn(mcpbPackage, 'environmentVariables'), false, 'the bundle asks for the token itself (user_config)');
 });
 

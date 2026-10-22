@@ -3,7 +3,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import contract from '../lib/contract.mjs';
-import { PACKAGE_NAME, PACKAGE_SPEC, PLANNED_COMMANDS, PROTOCOL_VERSIONS, VERSION } from '../lib/constants.mjs';
+import {
+  NPX_COMMAND, PACKAGE_NAME, PACKAGE_NAME_FINAL, PACKAGE_SPEC, PLANNED_COMMANDS, PROTOCOL_VERSIONS, VERSION,
+} from '../lib/constants.mjs';
 import { createBridge } from '../lib/bridge.mjs';
 import { createDebug } from '../lib/debug.mjs';
 import * as messages from '../lib/messages.mjs';
@@ -412,23 +414,37 @@ test('debug lines carry no arguments, results or tokens', async () => {
 });
 
 test('messages are the spec\'s exact texts (distribution design, "Errors")', () => {
-  // With the setup command (DIST-M2 on), the token texts are the spec's, except that the command runs this
-  // exact version with npx's --prefix / (docs/design-differences.md).
-  assert.equal(messages.SETUP_COMMAND, 'npx -y --prefix / @wisply/mcp@0.1.0 setup');
-  const withSetup = messages.tokenTexts(messages.SETUP_COMMAND);
+  // With the final setup command, the token texts are the spec's, except that the command runs this
+  // exact version with npx's --prefix / (docs/design-differences.md). It is what SETUP_COMMAND becomes
+  // once PACKAGE_NAME_FINAL is true.
+  const finalSetup = 'npx -y --prefix / @wisply/mcp@0.1.0 setup';
+  assert.equal(`${NPX_COMMAND} setup`, finalSetup);
+  const withSetup = messages.tokenTexts(finalSetup);
   assert.equal(withSetup.SETUP, 'Wisply MCP token is not set. In Wisply on this Mac, open Settings > Integrations > MCP Server and copy the read-only connector token. Then run `npx -y --prefix / @wisply/mcp@0.1.0 setup` in Terminal, or set WISPLY_MCP_TOKEN in this app\'s MCP settings.');
   assert.equal(withSetup.MALFORMED, 'WISPLY_MCP_TOKEN is set but isn\'t a Wisply token (it should start with wspc_, wspr_ or wsp_ and have 64 hex characters). Fix it in this app\'s MCP settings, or remove it to use the token saved by `npx -y --prefix / @wisply/mcp@0.1.0 setup`.');
   assert.equal(withSetup.notWisply(51771), 'Wisply identity check failed: the program on 127.0.0.1:51771 couldn\'t prove it is the Wisply that issued this token, so the token wasn\'t sent. If you regenerated the token in Wisply, run `npx -y --prefix / @wisply/mcp@0.1.0 setup` again. Otherwise quit whatever is using that port.');
-  // This build has no setup command yet, so they point only at WISPLY_MCP_TOKEN.
+  // Without one (the package name isn't final), they point only at WISPLY_MCP_TOKEN.
   const interim = messages.tokenTexts(null);
   assert.equal(interim.SETUP, 'Wisply MCP token is not set. In Wisply on this Mac, open Settings > Integrations > MCP Server and copy the read-only connector token. Then set WISPLY_MCP_TOKEN in this app\'s MCP settings, through its secret storage if it has one.');
   assert.equal(interim.MALFORMED, 'WISPLY_MCP_TOKEN is set but isn\'t a Wisply token (it should start with wspc_, wspr_ or wsp_ and have 64 hex characters). Fix it in this app\'s MCP settings.');
   assert.equal(interim.notWisply(51771), 'Wisply identity check failed: the program on 127.0.0.1:51771 couldn\'t prove it is the Wisply that issued this token, so the token wasn\'t sent. If you regenerated the token in Wisply, update WISPLY_MCP_TOKEN in this app\'s MCP settings. Otherwise quit whatever is using that port.');
-  const current = PLANNED_COMMANDS.includes('setup') ? interim : withSetup;
-  assert.equal(messages.SETUP, current.SETUP);
-  assert.equal(messages.MALFORMED, current.MALFORMED);
-  assert.equal(messages.notWisply(51771), current.notWisply(51771));
-  assert.equal(messages.FULL_ACCESS_REFUSED, 'That is Wisply\'s full-access token, so it wasn\'t saved. Run `npx -y --prefix / @wisply/mcp@0.1.0 setup` again with the read-only connector token. If you need recording control and follow-ups, run `npx -y --prefix / @wisply/mcp@0.1.0 setup --full-access`.');
+  // The commands: pinned through npx (with --prefix /) once the name is final, the bin's own name until then.
+  const prefix = PACKAGE_NAME_FINAL ? NPX_COMMAND : 'wisply-mcp';
+  assert.equal(messages.COMMAND_PREFIX, prefix);
+  assert.deepEqual([messages.SETUP_COMMAND, messages.FORGET_COMMAND, messages.STATUS_COMMAND],
+    [`${prefix} setup`, `${prefix} forget`, `${prefix} status`]);
+  const tool = messages.TOOL_TEXTS_NAME_SETUP ? messages.tokenTexts(messages.SETUP_COMMAND) : interim;
+  assert.equal(messages.TOOL_TEXTS_NAME_SETUP, PACKAGE_NAME_FINAL && !PLANNED_COMMANDS.includes('setup'));
+  assert.equal(messages.SETUP, tool.SETUP);
+  assert.equal(messages.MALFORMED, tool.MALFORMED);
+  assert.equal(messages.notWisply(51771), tool.notWisply(51771));
+  // Terminal texts always name the setup command; with a final name they are the tool texts.
+  const terminal = messages.tokenTexts(messages.SETUP_COMMAND);
+  assert.equal(messages.TERMINAL_TEXTS.SETUP, terminal.SETUP);
+  assert.equal(messages.TERMINAL_TEXTS.MALFORMED, terminal.MALFORMED);
+  assert.equal(messages.TERMINAL_TEXTS.notWisply(51771), terminal.notWisply(51771));
+  if (PACKAGE_NAME_FINAL) assert.equal(messages.TERMINAL_TEXTS.SETUP, messages.SETUP);
+  assert.equal(messages.FULL_ACCESS_REFUSED, `That is Wisply's full-access token, so it wasn't saved. Run \`${prefix} setup\` again with the read-only connector token. If you need recording control and follow-ups, run \`${prefix} setup --full-access\`.`);
   assert.equal(messages.unavailable(51771), 'Wisply isn\'t answering on 127.0.0.1:51771. Open Wisply on this Mac and turn on Settings > Integrations > MCP Server.');
   assert.equal(messages.UPDATE_WISPLY, 'This version of Wisply has no identity check, so the token wasn\'t sent. Update Wisply from the Mac App Store.');
   // The spec's text named only an old Wisply; a current one leaves out the proof of a token it can't read.
@@ -456,5 +472,36 @@ test('no message sends users to a command this build doesn\'t have', () => {
         !text.includes(`wisply-mcp ${command}`), `"${command}" isn't in this build: ${text}`);
     }
   }
-  assert.ok(PLANNED_COMMANDS.includes('setup') !== messages.SETUP.includes(messages.SETUP_COMMAND));
+  assert.equal(messages.SETUP.includes(messages.SETUP_COMMAND), messages.TOOL_TEXTS_NAME_SETUP);
+});
+
+test('until the package name is final, no text an AI app shows names the package, and no text runs npx', () => {
+  // Tool errors also reach the model, which might run what they say. The
+  // scope is unregistered on npm until Alex owns it (constants.mjs), so
+  // `npx -y @wisply/mcp ...` would run whoever registers it first.
+  const toolTexts = [
+    messages.SETUP, messages.MALFORMED, messages.notWisply(51771), messages.unavailable(51771), messages.UPDATE_WISPLY,
+    messages.UPDATE_WISPLY_SCOPE, messages.keychainUnavailable(51771), messages.CLAUDE_SETUP_HIDDEN, messages.notMac('linux'),
+    messages.requestFailed(500), messages.rpcFailed(-32602, 'list_memos'), messages.INSTRUCTIONS,
+    ...['full', 'connector', 'recording'].flatMap((scope) => [messages.scope('list_memos', scope), messages.scope('list_memos', scope, { readOnly: true })]),
+  ];
+  const terminalTexts = [
+    messages.HELP, messages.SETUP_COMMAND, messages.FORGET_COMMAND, messages.STATUS_COMMAND, messages.FULL_ACCESS_REFUSED,
+    messages.SETUP_NEEDS_TERMINAL, messages.KEYCHAIN_NOT_STORED, messages.SETUP_MALFORMED, messages.READ_BACK_FAILED,
+    messages.REPLACE_FAILED, messages.PREVIOUS_REMOVED, messages.FULL_ACCESS_SHARED, messages.removeFailed('full-access'),
+    messages.removeFailed('malformed'), messages.STATUS.fullAccessShared, messages.TOKEN_AS_ARGUMENT,
+    messages.TERMINAL_TEXTS.SETUP, messages.TERMINAL_TEXTS.MALFORMED, messages.TERMINAL_TEXTS.notWisply(51771),
+  ];
+  for (const text of [...toolTexts, ...terminalTexts]) {
+    if (!PACKAGE_NAME_FINAL) {
+      assert.ok(!text.includes(PACKAGE_NAME), `names ${PACKAGE_NAME}: ${text}`);
+      assert.doesNotMatch(text, /\bnpx\b/, text);
+    } else {
+      // Every npx command runs the pinned version from /, never the newest from npm or a project's copy.
+      for (const match of text.matchAll(/\bnpx\b[^`]*/g)) assert.ok(match[0].startsWith(`${NPX_COMMAND} `), match[0]);
+    }
+  }
+  for (const text of toolTexts) {
+    if (!PACKAGE_NAME_FINAL) assert.ok(!text.includes(messages.SETUP_COMMAND), `a tool text names a command: ${text}`);
+  }
 });

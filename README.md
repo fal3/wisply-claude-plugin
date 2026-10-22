@@ -13,7 +13,11 @@ talking to Wisply before it uses your token, and needs no account.
 > `"private"`, which makes `npm publish` refuse it, and
 > `WISPLY_RELEASE=1 npm test` fails. The `print-config` and `install`
 > commands land before the first release; this build answers them with "not
-> in this build yet".
+> in this build yet". Until the name is Wisply's on npm (`PACKAGE_NAME_FINAL`
+> in `lib/constants.mjs`), the connector's own messages never name it: errors
+> in your AI app point at `WISPLY_MCP_TOKEN`, and terminal messages say
+> `wisply-mcp setup` (from a checkout: `node bin/wisply-mcp.mjs setup`). The
+> `npx` commands below are what the first release will print.
 
 ## What you need
 
@@ -88,30 +92,55 @@ Run this once in Terminal:
 npx -y --prefix / @wisply/mcp@0.1.0 setup
 ```
 
-macOS's own `security` tool asks for the token twice and stores it in your
-login keychain as "Wisply MCP token" (service `ai.wisply.mcp`, account
-`token`). The token never passes through the connector's arguments or output.
-Setup then reads the item back once:
+The setup, status and forget commands run the same exact version, with the
+same `--prefix /`, as the snippets, so the command that decides which token
+your apps get never runs whatever npm has as its newest release, or a copy of
+the package in the folder Terminal is in.
+
+Setup first removes any "Wisply MCP token" saved before, so the new item
+starts with a clean access list. Then macOS's own `security` tool asks for the
+token twice and stores it in your keychain as "Wisply MCP token" (service
+`ai.wisply.mcp`, account `token`; your default keychain, which is normally the
+login keychain). The token never passes through the connector's arguments or
+output. If you cancel at that point, the token saved before is already gone,
+and setup says so. Setup then reads the item back once:
 
 - A full-access token (`wsp_...`) is removed again unless you run
   `npx -y --prefix / @wisply/mcp@0.1.0 setup --full-access`. Use the
-  read-only connector token.
+  read-only connector token: a full-access token in the keychain gives full
+  access (recording control and follow-ups) to every AI app on this Mac that
+  starts the connector without its own `WISPLY_MCP_TOKEN`, and setup and
+  status say so.
 - Anything that isn't a Wisply token is removed again.
 - A kept token gets the identity check, and setup says what it found:
   "Stored. Wisply answered on 127.0.0.1:51771 and proved it holds this token
   (read-only connector: 4 tools)."
+
+Don't pass the token as an argument (`setup wspc_...`, or in an app's `args`):
+arguments end up in shell history, config files and logs. The connector
+refuses such an argument without echoing any of it, and asks you to
+regenerate the token.
 
 From then on, every AI app that starts the connector without
 `WISPLY_MCP_TOKEN` uses the saved token, so none of their configs holds a
 secret. Two more commands:
 
 - `npx -y --prefix / @wisply/mcp@0.1.0 status` shows where the token comes
-  from, its scope, whether Wisply answered and proved it holds the token, and
-  the tools your apps get. It never prints the token. It takes the
+  from, its scope, the port, whether Wisply answered and proved it holds the
+  token, and the tools your apps get. It never prints the token. It takes the
   connector's `--port`, `--read-only` and `--allow-claude-setup` options.
-- `npx -y --prefix / @wisply/mcp@0.1.0 forget` removes the saved token.
-  Connectors that are already running keep it until their app restarts them;
-  regenerating the token in Wisply cuts every app off at once.
+- `npx -y --prefix / @wisply/mcp@0.1.0 forget` removes the saved token, every
+  copy of it in your keychains. It ignores `WISPLY_MCP_PORT`. Connectors that
+  are already running keep the token until their app restarts them;
+  regenerating the token in Wisply cuts every app off at once. On another
+  system there is no saved token (setup only saves one on a Mac), so forget
+  says so and succeeds.
+
+The commands exit 0 when they're done (status: a token was found and Wisply
+proved it holds it), 1 when something needs your attention (no token, Wisply
+isn't answering, or setup or status on a computer that isn't a Mac; the
+message says which), and 2 for a usage mistake, such as an unknown option or a
+token passed as an argument.
 
 What the keychain protects: it keeps the token out of config files, Settings
 Sync, dotfile repositories and backups. It doesn't stop another program
@@ -301,14 +330,14 @@ The connector answers with a plain message instead of a result:
 
 - **"Wisply MCP token is not set"**: copy the connector token from Wisply >
   Settings > Integrations > MCP Server and run
-  `npx -y --prefix / @wisply/mcp@0.1.0 setup`, or give it to your app's
-  secret storage (see above).
+  `npx -y --prefix / @wisply/mcp@0.1.0 setup`, or give it to your app's secret
+  storage (see above).
 - **"Wisply isn't answering on 127.0.0.1:51771"**: open Wisply and turn on the
   MCP server.
 - **"Wisply identity check failed"**: the program on the port couldn't prove
   it holds your token, so the token wasn't sent. If you regenerated the token
-  in Wisply, run `npx -y --prefix / @wisply/mcp@0.1.0 setup` again (or
-  update it in your app). Otherwise quit whatever uses that port.
+  in Wisply, run `npx -y --prefix / @wisply/mcp@0.1.0 setup` again (or update
+  it in your app). Otherwise quit whatever uses that port.
 - **"Wisply couldn't run ..."**: Wisply answered the call with an error. The
   connector passes on Wisply's error code but never Wisply's own error text.
 - **"This version of Wisply has no identity check"**: update Wisply.
@@ -321,8 +350,8 @@ The connector answers with a plain message instead of a result:
 - **"... isn't available with your ... token"**: the tool needs another token.
 
 `npx -y --prefix / @wisply/mcp@0.1.0 status` runs the same checks and says
-which one failed. On other platforms the connector explains that it needs Wisply for Mac on the
-same computer.
+which one failed. On other platforms the connector explains that it needs
+Wisply for Mac on the same computer.
 
 ## Development
 
@@ -351,7 +380,8 @@ WISPLY_AI_DIR=../wisply-ai WISPLY_PLUGIN_DIR=../wisply-claude-plugin npm test
   tests that would run the real `security` are skipped. `setup`, `status` and
   `forget` against a real login keychain are manual QA on a Mac, from a
   checkout: `node bin/wisply-mcp.mjs setup`, `node bin/wisply-mcp.mjs status`,
-  `node bin/wisply-mcp.mjs forget`.
+  `node bin/wisply-mcp.mjs forget` (the checks are listed in
+  [SECURITY.md](SECURITY.md), "Release controls").
 
 ### Manifests and listings
 

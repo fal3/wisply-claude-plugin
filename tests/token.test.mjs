@@ -8,11 +8,11 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { execFile as nodeExecFile } from 'node:child_process';
 import {
-  KEYCHAIN_ACCOUNT, KEYCHAIN_LABEL, KEYCHAIN_SERVICE, KEYCHAIN_TIMEOUT_MS, SECURITY_BIN,
+  KEYCHAIN_ACCOUNT, KEYCHAIN_LABEL, KEYCHAIN_MAX_COPIES, KEYCHAIN_SERVICE, KEYCHAIN_TIMEOUT_MS, SECURITY_BIN,
 } from '../lib/constants.mjs';
 import {
-  DELETE_ARGS, ITEM_NOT_FOUND_EXIT, PLACEHOLDER_RE, READ_ARGS, WRITE_ARGS, defaultReadKeychain, deleteKeychain,
-  envToken, redact, resolveToken, writeKeychainInteractive,
+  DELETE_ARGS, ITEM_NOT_FOUND_EXIT, PLACEHOLDER_RE, READ_ARGS, WRITE_ARGS, defaultReadKeychain, deleteAllKeychain,
+  deleteKeychain, envToken, redact, resolveToken, securityEnv, writeKeychainInteractive,
 } from '../lib/token.mjs';
 
 const FULL = `wsp_${'5a'.repeat(32)}`;
@@ -153,8 +153,10 @@ test('the item and the security argument lists are fixed, absolute and token-fre
   assert.equal(KEYCHAIN_TIMEOUT_MS, 2000);
   assert.equal(ITEM_NOT_FOUND_EXIT, (-25300) & 0xff, 'errSecItemNotFound as an exit status');
   assert.deepEqual(READ_ARGS, ['find-generic-password', '-s', 'ai.wisply.mcp', '-a', 'token', '-w']);
-  assert.deepEqual(WRITE_ARGS, ['add-generic-password', '-U', '-s', 'ai.wisply.mcp', '-a', 'token', '-l', 'Wisply MCP token',
+  // No -U: updating an existing item would merge -T into its old access list, so setup deletes first.
+  assert.deepEqual(WRITE_ARGS, ['add-generic-password', '-s', 'ai.wisply.mcp', '-a', 'token', '-l', 'Wisply MCP token',
     '-T', '/usr/bin/security', '-w']);
+  assert.ok(!WRITE_ARGS.includes('-U'));
   assert.deepEqual(DELETE_ARGS, ['delete-generic-password', '-s', 'ai.wisply.mcp', '-a', 'token']);
   // -w last with no value: security prompts for the password itself.
   assert.equal(WRITE_ARGS.at(-1), '-w');
@@ -272,7 +274,7 @@ test('writeKeychainInteractive lets security prompt in the terminal: -w last, st
   assert.deepEqual(args, [...WRITE_ARGS]);
   assert.equal(args.at(-1), '-w');
   assert.equal(options.stdio, 'inherit');
-  assert.equal(Object.hasOwn(options, 'env'), false);
+  assert.deepEqual(options.env, securityEnv(process.env), 'this process\'s environment, minus WISPLY_MCP_*');
   for (const argument of args) assert.doesNotMatch(argument, TOKEN_SHAPE);
   // Ctrl-C is left to security while it runs, and the handler is gone after.
   assert.equal(spawn.listenersDuring, 1);
@@ -336,6 +338,61 @@ test('off macOS the real reader and delete find no security binary and say so qu
   assert.equal(await deleteKeychain(), 'failed');
   const result = await resolveToken({ env: {}, platform: 'darwin' });
   assert.deepEqual(result, { token: null, source: null, problem: 'missing', placeholderIgnored: false });
+});
+
+test('security never gets WISPLY_MCP_* variables: not for a read, a write or a delete', async () => {
+  const env = {
+    WISPLY_MCP_TOKEN: CONNECTOR, WISPLY_MCP_PORT: '51772', WISPLY_MCP_DEBUG: '1', wisply_mcp_token: FULL,
+    PATH: '/usr/bin:/bin', HOME: '/Users/synthetic', LANG: 'en_US.UTF-8', OTHER_TOKEN_NAME: 'kept', EMPTY: '',
+  };
+  const kept = { PATH: '/usr/bin:/bin', HOME: '/Users/synthetic', LANG: 'en_US.UTF-8', OTHER_TOKEN_NAME: 'kept', EMPTY: '' };
+  assert.deepEqual(securityEnv(env), kept);
+  assert.deepEqual(securityEnv(null), {});
+  assert.deepEqual(securityEnv(), securityEnv(process.env), 'the default is this process\'s environment');
+  assert.equal(securityEnv({ A: undefined }).A, undefined);
+  const execFile = fakeExecFile({ stdout: `${RECORDING}\n` });
+  await defaultReadKeychain({ execFile, env });
+  await deleteKeychain({ execFile, env });
+  const spawn = fakeSpawn();
+  await writeKeychainInteractive({ spawn, signals: new EventEmitter(), env });
+  for (const options of [...execFile.calls.map((run) => run.options), spawn.calls[0].options]) {
+    assert.deepEqual(options.env, kept);
+    assert.doesNotMatch(JSON.stringify(options), TOKEN_SHAPE);
+  }
+  // A real child sees no token variable either.
+  const real = (_file, _args, options, callback) => nodeExecFile(process.execPath,
+    ['-e', 'process.stdout.write(JSON.stringify(Object.keys(process.env).filter((key) => /^wisply_mcp_/i.test(key))))'], options, callback);
+  assert.equal(await defaultReadKeychain({ execFile: real, env: { ...process.env, ...env } }), '[]');
+  // An environment that can't be read is a failed run, not a crash.
+  const hostile = new Proxy({}, { ownKeys() { throw new Error('boom'); } });
+  assert.equal(await defaultReadKeychain({ execFile: fakeExecFile({ stdout: CONNECTOR }), env: hostile }), null);
+  assert.equal(await writeKeychainInteractive({ spawn: fakeSpawn(), signals: new EventEmitter(), env: hostile }), 'failed');
+});
+
+test('deleteAllKeychain deletes until security finds none, and never calls a copy it left removed', async () => {
+  const script = (...outcomes) => {
+    const spy = async () => { spy.calls += 1; const next = outcomes.shift(); if (next instanceof Error) throw next; return next; };
+    spy.calls = 0;
+    return spy;
+  };
+  assert.deepEqual(await deleteAllKeychain({ deleteOnce: script('not-found') }), { removed: 0, complete: true });
+  assert.deepEqual(await deleteAllKeychain({ deleteOnce: script('deleted', 'not-found') }), { removed: 1, complete: true });
+  assert.deepEqual(await deleteAllKeychain({ deleteOnce: script('deleted', 'deleted', 'deleted', 'not-found') }), { removed: 3, complete: true });
+  assert.deepEqual(await deleteAllKeychain({ deleteOnce: script('deleted', 'failed') }), { removed: 1, complete: false });
+  assert.deepEqual(await deleteAllKeychain({ deleteOnce: script('failed') }), { removed: 0, complete: false });
+  assert.deepEqual(await deleteAllKeychain({ deleteOnce: script(new Error('boom')) }), { removed: 0, complete: false });
+  assert.deepEqual(await deleteAllKeychain({ deleteOnce: script('surprise') }), { removed: 0, complete: false });
+  // Bounded: up to KEYCHAIN_MAX_COPIES copies, plus the run that has to find none.
+  const endless = script(...Array(100).fill('deleted'));
+  assert.deepEqual(await deleteAllKeychain({ deleteOnce: endless }), { removed: KEYCHAIN_MAX_COPIES + 1, complete: false });
+  assert.equal(endless.calls, KEYCHAIN_MAX_COPIES + 1);
+  // Through the real deleteKeychain: exit 0 twice, then exit 44.
+  let left = 2;
+  const execFile = (file, args, options, callback) => {
+    setImmediate(() => (left > 0 ? (left -= 1, callback(null, '', '')) : callback(Object.assign(new Error('exit 44'), { code: 44 }), '', '')));
+    return { stdin: { end() {} }, kill() {} };
+  };
+  assert.deepEqual(await deleteAllKeychain({ deleteOnce: () => deleteKeychain({ execFile }) }), { removed: 2, complete: true });
 });
 
 test('redact replaces every token shape', () => {

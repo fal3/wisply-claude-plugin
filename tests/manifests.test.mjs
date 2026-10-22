@@ -9,9 +9,8 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import contract from '../lib/contract.mjs';
 import {
-  MCP_NAME, NPX_FLAGS, PACKAGE_NAME, PACKAGE_RANGE, PACKAGE_SPEC, SERVER_KEY, STANDARD_ENTRY as ENTRY, VERSION,
+  MCP_NAME, NPX_COMMAND, NPX_FLAGS, PACKAGE_NAME, PACKAGE_RANGE, PACKAGE_SPEC, SERVER_KEY, STANDARD_ENTRY as ENTRY, VERSION,
 } from '../lib/constants.mjs';
-import { SETUP_COMMAND } from '../lib/messages.mjs';
 import { toolsFor } from '../lib/scopes.mjs';
 import {
   MCPB_NAME, MCPB_VERSION, PACKER_DIR, bundleFileName, jsonText as buildJsonText, mcpbTools, releaseTag, renderManifest,
@@ -34,6 +33,12 @@ const AGENT_MCP_SCHEMA = 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.jso
 const REPO_URL = 'https://github.com/fal3/wisply-mcp';
 /** The token-free entry every npm snippet and link runs (DIST-M1: npx's --prefix / and the exact version). */
 const STANDARD_ENTRY = { command: ENTRY.command, args: [...ENTRY.args] };
+/**
+ * The setup command these files name: the final one. They are read only once this repository or its release
+ * is public, which waits for the npm organization (SECURITY.md, release control 1), so they don't take the
+ * connector's interim `wisply-mcp setup` (lib/messages.mjs SETUP_COMMAND while PACKAGE_NAME_FINAL is false).
+ */
+const SETUP_COMMAND = `${NPX_COMMAND} setup`;
 const MANIFESTS = ['plugin.json', 'mcp.json', '.agents/plugins/marketplace.json', 'gemini-extension.json', 'mcpb/manifest.json',
   'glama.json', 'server.json', 'registry/cloud.server.json'];
 const schema = (path) => readJson(`tests/schemas/${path}`);
