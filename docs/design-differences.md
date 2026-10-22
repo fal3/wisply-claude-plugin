@@ -109,6 +109,16 @@ spec text. Not shipped in the npm package.
   (885cc75), not the checkout, and a separate test fails with "changed since
   885cc75: update the provisional fixture ... or re-vendor" when the
   checkout's sources have moved on (raycast PR 1's `tail_words`).
+- **Drift fails on `main`, and is listed on an unmerged branch.** The
+  fixture follows wisply-ai's `main`. When `WISPLY_AI_DIR` is a branch
+  `origin/main` doesn't have (a lane's worktree, such as raycast PR 1's or
+  DIST-A1's), the contract and catalog checks compare the commit where it
+  left `main` too: drift found only on the branch is listed and the test is
+  skipped, since it reaches the fixture through the re-vendor once it is
+  merged; drift `main` already has fails. A wisply-ai contract with
+  `tool_descriptors` but without raycast PR 1's keys (DIST-A1 alone), which
+  `sync-vendor` refuses, is compared key by key (scope by scope, descriptor
+  by descriptor); one the connector can load asks for the re-vendor.
 - **Release checks the design doesn't list.** `WISPLY_RELEASE=1 npm test`
   also fails until `docs/release-checks.json` records (1) `port_exclusive`
   for the Wisply commit the contract is vendored from (Wisply sets
@@ -230,6 +240,12 @@ spec text. Not shipped in the npm package.
   the Cline entry names `~/.cline/data/settings/cline_mcp_settings.json`,
   which Cline 4.0 and later share between the extension, the CLI and the
   JetBrains plugin.
+- **wisply-ai's copy is pinned, not mirrored.** wisply-ai pins
+  `Docs/mcp-clients.json` to a commit of `clients/mcp-clients.json`
+  (`MCPClientSnippetsTests.vendoredClients`), so the upstream test accepts
+  the file as of any commit here while the copy says `"published": false`
+  (Wisply renders nothing from it), reports it as a TODO, and fails for a
+  copy no commit here has, or a published copy that isn't the current file.
 - **`print-config` with no app lists the apps.** The design has
   `print-config <client>` only. With no app it prints the list (apps that
   `install` handles are marked) and exits 0; an unknown app exits 2 with the
