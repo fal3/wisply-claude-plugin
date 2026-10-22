@@ -7,7 +7,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import contract from '../lib/contract.mjs';
-import { PACKAGE_NAME, PACKAGE_RANGE, PACKAGE_SPEC, VERSION } from '../lib/constants.mjs';
+import { NPX_COMMAND, PACKAGE_NAME, PACKAGE_RANGE, PACKAGE_SPEC, VERSION } from '../lib/constants.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
@@ -77,12 +77,12 @@ test('package.json, the constants and the README agree', () => {
   assert.match(readFileSync(join(ROOT, 'LICENSE'), 'utf8'), /^MIT License/);
 
   const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
-  assert.ok(readme.includes(`"args": ["-y", "${PACKAGE_SPEC}"]`), 'README shows the standard entry');
-  assert.ok(readme.includes(`npx -y ${PACKAGE_SPEC}`));
+  assert.ok(readme.includes(`"args": ["-y", "--prefix", "/", "${PACKAGE_SPEC}"]`), 'README shows the standard entry');
+  assert.ok(readme.includes(NPX_COMMAND));
   for (const tool of contract.tools) assert.ok(readme.includes(`\`${tool}\``), `README names ${tool}`);
   assert.ok(!readme.includes('@wisply/mcp@latest'));
   // The range appears only in the opt-in note, never in a snippet.
-  assert.ok(!readme.includes(`"${PACKAGE_RANGE}"`) && !readme.includes(`npx -y ${PACKAGE_RANGE} `) && !readme.includes(`npx -y ${PACKAGE_RANGE}\``),
+  assert.ok(!readme.includes(`"${PACKAGE_RANGE}"`) && !readme.includes(`/ ${PACKAGE_RANGE} `) && !readme.includes(`/ ${PACKAGE_RANGE}\``),
     'README snippets run the exact version');
 });
 

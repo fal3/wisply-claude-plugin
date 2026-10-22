@@ -10,7 +10,7 @@ import { spawn as nodeSpawn } from 'node:child_process';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import contract from '../lib/contract.mjs';
-import { PACKAGE_NAME, PLANNED_COMMANDS, VERSION } from '../lib/constants.mjs';
+import { PACKAGE_SPEC, PLANNED_COMMANDS, VERSION } from '../lib/constants.mjs';
 import { CLI_COMMANDS, parseCliArgs, runCli } from '../lib/cli.mjs';
 import { createLoopback } from '../lib/loopback.mjs';
 import * as messages from '../lib/messages.mjs';
@@ -499,10 +499,10 @@ test('every CLI text is ASCII, holds no token, and names only commands this buil
     assert.equal(text.search(/[^\x00-\x7f]/), -1, text);
     assert.doesNotMatch(text, TOKEN_SHAPE);
     for (const command of PLANNED_COMMANDS) {
-      assert.ok(!text.includes(`${PACKAGE_NAME} ${command}`) && !text.includes(`wisply-mcp ${command}`), `${command}: ${text}`);
+      assert.ok(!text.includes(`${PACKAGE_SPEC} ${command}`) && !text.includes(`wisply-mcp ${command}`), `${command}: ${text}`);
     }
   }
-  assert.equal(messages.FORGET_COMMAND, 'npx -y @wisply/mcp forget');
+  assert.equal(messages.FORGET_COMMAND, `npx -y --prefix / ${PACKAGE_SPEC} forget`);
   assert.equal(messages.stored(51771, 'connector', 4),
     'Stored. Wisply answered on 127.0.0.1:51771 and proved it holds this token (read-only connector: 4 tools).');
 });

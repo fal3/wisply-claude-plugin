@@ -20,7 +20,8 @@ All notable changes to `@wisply/mcp` are listed here. Versions follow
 - Plain tool errors for every failure (token not set or malformed, Wisply not
   answering, identity check failed, Wisply too old, tool outside the scope,
   another platform), none of which contain the token or the app's response.
-  They point at `npx -y @wisply/mcp setup` and at `WISPLY_MCP_TOKEN`.
+  They point at `npx -y --prefix / @wisply/mcp@0.1.0 setup` and at
+  `WISPLY_MCP_TOKEN`.
 - A JSON-RPC error from Wisply keeps its code, with a fixed message from the
   connector in place of Wisply's own text.
 - `setup [--full-access]`: macOS's `security` asks for the token in the
@@ -41,17 +42,25 @@ All notable changes to `@wisply/mcp` are listed here. Versions follow
   Goose, LM Studio, Kiro, opencode, Amp, Factory, Grok CLI) from
   `clients/mcp-clients.json`, the source the Wisply app and wisply.ai copy.
   The snippet goes to stdout and where it goes to stderr; with no app, the
-  list.
+  list. The file says `"published": false` until the package is on npm, and
+  its copies render nothing while it does.
 - `install <app> [--port <n>]`: runs `claude mcp add`, `codex mcp add`,
-  `gemini mcp add` (arguments after `--`) or `code --add-mcp` with a fixed
-  argument list and without the token in their environment, or sets only the
-  `wisply` entry in the JSON settings of Cursor, Windsurf, Claude Desktop,
-  Cline, GitHub Copilot CLI and Zed, after a one-time `<file>.wisply-backup`,
-  with an atomic write that follows symlinks. It refuses files that aren't
-  plain JSON, never reads or writes a token, and warns when the entry it
+  `gemini mcp add` (arguments after `--`) or `code --add-mcp`, found by
+  absolute path in `PATH`'s absolute folders, with a fixed argument list and
+  without the token or relative `PATH` entries in their environment. For
+  Cursor, Windsurf, Claude Desktop, the Cline CLI and GitHub Copilot CLI it
+  changes only the text of the `wisply` entry in their JSON settings (every
+  other byte of the file stays), after a one-time `<file>.wisply-backup`
+  (mode 0600, Wisply tokens masked), with an atomic write that follows
+  symlinks and gives up if the app wrote the file meanwhile. It refuses JSONC,
+  repeated keys and non-UTF-8 text (Zed's and VS Code's JSONC settings are
+  never edited), never reads or writes a token, and warns when the entry it
   replaced held one in plain text.
-- Snippets pin the exact version (`@wisply/mcp@0.1.0`); `@wisply/mcp@0` is an
-  opt-in for automatic 0.x updates.
+- Snippets and every command in the docs and messages run the exact version
+  with `npx -y --prefix / @wisply/mcp@0.1.0`: the version can't change under
+  you, and `--prefix /` stops npx from running a copy of the package (or
+  reading an `.npmrc`) from the project folder an app starts it in.
+  `@wisply/mcp@0` is an opt-in for automatic 0.x updates.
 - The token from `WISPLY_MCP_TOKEN`; empty values and unresolved `${...}`
   placeholders count as unset and fall through to the Keychain item.
 - `WISPLY_MCP_DEBUG=1`: one fixed-field line per request on stderr, never

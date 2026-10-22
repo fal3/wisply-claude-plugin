@@ -6,6 +6,7 @@ export default {
   "server_key": "wisply",
   "package": "@wisply/mcp",
   "package_spec": "@wisply/mcp@0.1.0",
+  "published": false,
   "default_port": 51771,
   "placeholders": [
     "{{args_list}}",
@@ -15,6 +16,8 @@ export default {
     "command": "npx",
     "args": [
       "-y",
+      "--prefix",
+      "/",
       "@wisply/mcp@0.1.0"
     ]
   },
@@ -78,7 +81,7 @@ export default {
           "label": "Let VS Code keep the token",
           "format": "jsonc",
           "note": "VS Code asks for the token the first time the server starts and keeps it in its secret storage. Copilot harness sessions don't get servers that need input prompts; use the setup command for those.",
-          "text": "{\n  \"inputs\": [\n    { \"type\": \"promptString\", \"id\": \"wisply-token\", \"description\": \"Wisply read-only connector token. Leave empty to use the token saved by npx -y @wisply/mcp setup.\", \"password\": true }\n  ],\n  \"servers\": {\n    \"wisply\": {\n      \"type\": \"stdio\",\n      \"command\": \"npx\",\n      \"args\": [{{args_list}}],\n      \"env\": { \"WISPLY_MCP_TOKEN\": \"${input:wisply-token}\" }\n    }\n  }\n}"
+          "text": "{\n  \"inputs\": [\n    { \"type\": \"promptString\", \"id\": \"wisply-token\", \"description\": \"Wisply read-only connector token. Leave empty to use the token saved by npx -y --prefix / @wisply/mcp@0.1.0 setup.\", \"password\": true }\n  ],\n  \"servers\": {\n    \"wisply\": {\n      \"type\": \"stdio\",\n      \"command\": \"npx\",\n      \"args\": [{{args_list}}],\n      \"env\": { \"WISPLY_MCP_TOKEN\": \"${input:wisply-token}\" }\n    }\n  }\n}"
         }
       ]
     },
@@ -103,12 +106,7 @@ export default {
       "format": "jsonc",
       "destination": "Zed settings.json (zed: open settings)",
       "stdio": "{\n  \"context_servers\": {\n    \"wisply\": {\n      \"command\": \"npx\",\n      \"args\": [{{args_list}}],\n      \"env\": {}\n    }\n  }\n}",
-      "note": "In a remote-development window, keep the default \"remote\": false, so the connector runs on this Mac.",
-      "install": {
-        "type": "json-file",
-        "path": "~/.config/zed/settings.json",
-        "key": "context_servers"
-      }
+      "note": "In a remote-development window, keep the default \"remote\": false, so the connector runs on this Mac."
     },
     {
       "id": "jetbrains",
@@ -178,9 +176,11 @@ export default {
       "note": "The Cline CLI reads ~/.cline/data/settings/cline_mcp_settings.json.",
       "install": {
         "type": "json-file",
+        "target": "Cline CLI",
         "path": "~/.cline/data/settings/cline_mcp_settings.json",
         "key": "mcpServers",
-        "path_env": "CLINE_MCP_SETTINGS_PATH"
+        "path_env": "CLINE_MCP_SETTINGS_PATH",
+        "hint": "The Cline extension keeps its own list: in Cline, open MCP Servers > Configure > Configure MCP Servers and add the same entry there."
       }
     },
     {
