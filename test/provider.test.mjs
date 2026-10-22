@@ -1,0 +1,154 @@
+// src/provider.ts: the token-free definition, and the token added only when the server starts.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  ALLOW_CLAUDE_SETUP_FLAG, PROVIDER_ID, SERVER_LABEL, buildDefinition, createProvider, definitionVersion, serverLaunch,
+} from '../out/test/provider.mjs';
+import { FAKE_TOKENS, FakeEventEmitter, FakeMcpStdioServerDefinition } from './fixtures/fake-vscode.mjs';
+
+const api = { McpStdioServerDefinition: FakeMcpStdioServerDefinition };
+const LAUNCH = Object.freeze({
+  execPath: '/Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper (Plugin).app/Contents/MacOS/Code Helper (Plugin)',
+  serverPath: '/Users/someone/.vscode/extensions/wisply.wisply-0.1.0/server/wisply-mcp.mjs',
+  port: 51771,
+  allowClaudeSetup: false,
+  extVersion: '0.1.0',
+});
+const TOKEN_SHAPED = /wsp[cr]?_[0-9a-f]{64}/;
+const CONNECTOR = Object.freeze({ token: FAKE_TOKENS.connector, scope: 'connector' });
+const FULL = Object.freeze({ token: FAKE_TOKENS.full, scope: 'full' });
+
+function setup({ stored = null, entered, launch = LAUNCH } = {}) {
+  const calls = { prompts: 0, stores: [] };
+  let token = stored;
+  const wisply = createProvider(api, {
+    getLaunch: () => launch,
+    getToken: async () => token,
+    promptForToken: async () => { calls.prompts += 1; return entered; },
+    storeToken: async (value) => { calls.stores.push(value); token = value; },
+    createEmitter: () => new FakeEventEmitter(),
+  });
+  return { wisply, calls, setToken: (value) => { token = value; } };
+}
+
+test('ids and labels match the manifest contribution', () => {
+  assert.equal(PROVIDER_ID, 'wisply.local');
+  assert.equal(SERVER_LABEL, 'Wisply (this Mac)');
+});
+
+test('the definition runs the bundled connector on the editor\'s Node, with no token', () => {
+  const definition = buildDefinition(api, { ...LAUNCH, scope: 'connector' });
+  assert.ok(definition instanceof FakeMcpStdioServerDefinition);
+  assert.equal(definition.label, SERVER_LABEL);
+  assert.equal(definition.command, LAUNCH.execPath);
+  assert.deepEqual(definition.args, [LAUNCH.serverPath]);
+  assert.deepEqual(definition.env, { ELECTRON_RUN_AS_NODE: '1', WISPLY_MCP_PORT: '51771' });
+  assert.equal(definition.version, '0.1.0+connector');
+});
+
+test('--allow-claude-setup is added only with the user setting, and changes the version', () => {
+  assert.deepEqual(serverLaunch(LAUNCH).args, [LAUNCH.serverPath]);
+  const allowed = buildDefinition(api, { ...LAUNCH, allowClaudeSetup: true, scope: 'full' });
+  assert.deepEqual(allowed.args, [LAUNCH.serverPath, ALLOW_CLAUDE_SETUP_FLAG]);
+  assert.equal(ALLOW_CLAUDE_SETUP_FLAG, '--allow-claude-setup');
+  assert.equal(allowed.version, '0.1.0+full.claude-setup');
+});
+
+test('the version follows the scope, so the editor refreshes tools when it changes', () => {
+  assert.equal(definitionVersion('0.1.0', null, false), '0.1.0+none');
+  assert.equal(definitionVersion('0.1.0', 'connector', false), '0.1.0+connector');
+  assert.equal(definitionVersion('0.1.0', 'full', false), '0.1.0+full');
+  assert.notEqual(definitionVersion('0.1.0', 'full', false), definitionVersion('0.1.0', 'connector', false));
+});
+
+test('a custom port reaches the connector through WISPLY_MCP_PORT', () => {
+  const definition = buildDefinition(api, { ...LAUNCH, port: 51772, scope: null });
+  assert.equal(definition.env.WISPLY_MCP_PORT, '51772');
+});
+
+test('provided definitions never hold the token, whatever is stored', async () => {
+  for (const stored of [null, CONNECTOR, FULL]) {
+    const { wisply, calls } = setup({ stored });
+    const definitions = await wisply.provider.provideMcpServerDefinitions({ isCancellationRequested: false });
+    assert.equal(definitions.length, 1);
+    assert.equal(Object.hasOwn(definitions[0].env, 'WISPLY_MCP_TOKEN'), false);
+    assert.doesNotMatch(JSON.stringify(definitions), TOKEN_SHAPED);
+    assert.equal(definitions[0].version, `0.1.0+${stored?.scope ?? 'none'}`);
+    assert.equal(calls.prompts, 0, 'providing never asks the user anything');
+  }
+});
+
+test('resolve adds the stored token to a copy and leaves the provided definition as it was', async () => {
+  const { wisply, calls } = setup({ stored: CONNECTOR });
+  const [provided] = await wisply.provider.provideMcpServerDefinitions({ isCancellationRequested: false });
+  const before = JSON.stringify(provided);
+  const resolved = await wisply.provider.resolveMcpServerDefinition(provided, { isCancellationRequested: false });
+  assert.notEqual(resolved, provided);
+  assert.equal(resolved.env.WISPLY_MCP_TOKEN, FAKE_TOKENS.connector);
+  assert.equal(resolved.env.ELECTRON_RUN_AS_NODE, '1');
+  assert.equal(resolved.env.WISPLY_MCP_PORT, '51771');
+  assert.equal(resolved.command, provided.command);
+  assert.deepEqual(resolved.args, provided.args);
+  assert.equal(resolved.version, provided.version);
+  assert.equal(JSON.stringify(provided), before);
+  assert.equal(calls.prompts, 0);
+});
+
+test('with no token stored, starting asks once, stores the answer and uses it', async () => {
+  const { wisply, calls } = setup({ entered: CONNECTOR });
+  const [provided] = await wisply.provider.provideMcpServerDefinitions({ isCancellationRequested: false });
+  const resolved = await wisply.provider.resolveMcpServerDefinition(provided, { isCancellationRequested: false });
+  assert.equal(calls.prompts, 1);
+  assert.deepEqual(calls.stores, [CONNECTOR]);
+  assert.equal(resolved.env.WISPLY_MCP_TOKEN, FAKE_TOKENS.connector);
+});
+
+test('a cancelled prompt still starts the server without a token (the Keychain item), and isn\'t repeated', async () => {
+  const { wisply, calls } = setup({ entered: undefined });
+  const [provided] = await wisply.provider.provideMcpServerDefinitions({ isCancellationRequested: false });
+  const first = await wisply.provider.resolveMcpServerDefinition(provided, { isCancellationRequested: false });
+  assert.equal(Object.hasOwn(first.env, 'WISPLY_MCP_TOKEN'), false);
+  assert.deepEqual(first.env, provided.env);
+  const second = await wisply.provider.resolveMcpServerDefinition(provided, { isCancellationRequested: false });
+  assert.equal(Object.hasOwn(second.env, 'WISPLY_MCP_TOKEN'), false);
+  assert.equal(calls.prompts, 1, 'asked once per session');
+  assert.deepEqual(calls.stores, []);
+});
+
+test('a token stored later is used at the next start', async () => {
+  const { wisply, setToken } = setup({ entered: undefined });
+  const [provided] = await wisply.provider.provideMcpServerDefinitions({ isCancellationRequested: false });
+  await wisply.provider.resolveMcpServerDefinition(provided, { isCancellationRequested: false });
+  setToken(FULL);
+  const resolved = await wisply.provider.resolveMcpServerDefinition(provided, { isCancellationRequested: false });
+  assert.equal(resolved.env.WISPLY_MCP_TOKEN, FAKE_TOKENS.full);
+});
+
+test('a cancelled start resolves to undefined; another label passes through untouched', async () => {
+  const { wisply } = setup({ stored: CONNECTOR });
+  const [provided] = await wisply.provider.provideMcpServerDefinitions({ isCancellationRequested: false });
+  assert.equal(await wisply.provider.resolveMcpServerDefinition(provided, { isCancellationRequested: true }), undefined);
+  const other = new FakeMcpStdioServerDefinition('Other server', 'node', ['x.js'], {});
+  assert.equal(await wisply.provider.resolveMcpServerDefinition(other, { isCancellationRequested: false }), other);
+  assert.deepEqual(other.env, {});
+});
+
+test('resolve keeps a working directory the editor set', async () => {
+  const { wisply } = setup({ stored: CONNECTOR });
+  const [provided] = await wisply.provider.provideMcpServerDefinitions({ isCancellationRequested: false });
+  provided.cwd = { fsPath: '/tmp' };
+  const resolved = await wisply.provider.resolveMcpServerDefinition(provided, { isCancellationRequested: false });
+  assert.equal(resolved.cwd, provided.cwd);
+});
+
+test('refresh fires the change event; dispose ends it', () => {
+  const { wisply } = setup();
+  let fired = 0;
+  wisply.provider.onDidChangeMcpServerDefinitions(() => { fired += 1; });
+  wisply.refresh();
+  wisply.refresh();
+  assert.equal(fired, 2);
+  wisply.dispose();
+  wisply.refresh();
+  assert.equal(fired, 2);
+});

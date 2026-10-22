@@ -1,0 +1,135 @@
+{
+  "name": "wisply",
+  "displayName": "Wisply",
+  "description": "Use your Wisply meeting notes, action items and live transcript in your editor's AI chat, from the Wisply app on this Mac.",
+  "version": "0.1.0",
+  "publisher": "wisply",
+  "license": "MIT",
+  "private": true,
+  "author": {
+    "name": "Wisply",
+    "email": "support@wisply.ai",
+    "url": "https://www.wisply.ai"
+  },
+  "homepage": "https://www.wisply.ai/docs/mcp/install#vscode",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fal3/wisply-vscode"
+  },
+  "bugs": {
+    "url": "https://www.wisply.ai/support"
+  },
+  "engines": {
+    "vscode": "^1.93.0"
+  },
+  "categories": [
+    "AI",
+    "Chat",
+    "Other"
+  ],
+  "keywords": [
+    "wisply",
+    "mcp",
+    "meetings",
+    "transcripts",
+    "voice memos",
+    "macos"
+  ],
+  "pricing": "Free",
+  "extensionKind": [
+    "ui"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "In Restricted Mode, Wisply reads its settings only from your user settings.",
+      "restrictedConfigurations": [
+        "wisply.port",
+        "wisply.mcp.allowClaudeSetup"
+      ]
+    },
+    "virtualWorkspaces": true
+  },
+  "contributes": {
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "wisply.local",
+        "label": "Wisply (this Mac)"
+      }
+    ],
+    "commands": [
+      {
+        "command": "wisply.setToken",
+        "title": "Set Token…",
+        "category": "Wisply"
+      },
+      {
+        "command": "wisply.forgetToken",
+        "title": "Forget Token",
+        "category": "Wisply"
+      },
+      {
+        "command": "wisply.checkConnection",
+        "title": "Check Connection",
+        "category": "Wisply"
+      },
+      {
+        "command": "wisply.storeTokenInKeychain",
+        "title": "Store Token in the Mac Keychain…",
+        "category": "Wisply"
+      },
+      {
+        "command": "wisply.openSetupGuide",
+        "title": "Open Setup Guide",
+        "category": "Wisply"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "wisply.storeTokenInKeychain",
+          "when": "isMac"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Wisply",
+      "properties": {
+        "wisply.port": {
+          "type": "integer",
+          "default": 51771,
+          "minimum": 1024,
+          "maximum": 65535,
+          "scope": "machine",
+          "markdownDescription": "The port of Wisply's MCP server on this Mac, as shown in Wisply > Settings > Integrations > MCP Server. Wisply reads this setting only from your user settings."
+        },
+        "wisply.mcp.allowClaudeSetup": {
+          "type": "boolean",
+          "default": false,
+          "scope": "application",
+          "markdownDescription": "Offer Wisply's `setup_claude` tool to AI chat when a full-access token is set. The tool can replace the Anthropic API key saved in Wisply, so it is off by default. Wisply reads this setting only from your user settings."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "test": "node esbuild.mjs --tests && node --test \"test/*.test.mjs\"",
+    "typecheck": "tsc --noEmit",
+    "package": "vsce package --no-dependencies",
+    "check": "npm run typecheck && npm test && npm run build && npm run package",
+    "sync-vendor": "node scripts/sync-vendor.mjs",
+    "vscode:prepublish": "node esbuild.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "@types/vscode": "1.93.0",
+    "@vscode/vsce": "4.0.0",
+    "esbuild": "0.28.2",
+    "typescript": "5.9.3"
+  }
+}

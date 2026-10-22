@@ -1,0 +1,15 @@
+# Dependencies and build output (dist/ is built by `vsce package` through vscode:prepublish)
+node_modules/
+dist/
+out/
+*.vsix
+
+# Editor and OS files
+.DS_Store
+*.swp
+.vscode-test/
+.idea/
+
+# Never commit local secrets
+.env
+.env.*

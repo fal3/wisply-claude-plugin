@@ -1,0 +1,94 @@
+{
+  "schema": "wisply-vscode-vendor-v1",
+  "provisional": true,
+  "sources": [
+    {
+      "repository": "github:fal3/wisply-mcp",
+      "commit": "4bda66b782ba4575ef6ea553e93016933f093ac5",
+      "ref": "claude/distribution-5",
+      "contract_provisional": true,
+      "files": {
+        "vendor/wisply-mcp/LICENSE": {
+          "upstream": "LICENSE",
+          "sha256": "a0b1992eb311ae8fa176b29871c969829c3d7c1567561df9b0a6241e5a152313"
+        },
+        "vendor/wisply-mcp/bin/wisply-mcp.mjs": {
+          "upstream": "bin/wisply-mcp.mjs",
+          "sha256": "87e056845ac220c1601c909a3527269d81a9d90ff6eff636c958c6cbbf0d8daa"
+        },
+        "vendor/wisply-mcp/clients/mcp-clients.mjs": {
+          "upstream": "clients/mcp-clients.mjs",
+          "sha256": "00e590ab9ac56cffa94420477dc762ef6e8c60222ca34a7eae83411034507d94"
+        },
+        "vendor/wisply-mcp/contract/SOURCE.json": {
+          "upstream": "contract/SOURCE.json",
+          "sha256": "feca98f147133b938611b53b227b6211ae38c2c2a72711ba3b9192d816046860"
+        },
+        "vendor/wisply-mcp/contract/mcp-contract.mjs": {
+          "upstream": "contract/mcp-contract.mjs",
+          "sha256": "def6c511bc688d03ef0d3c915abc1275f606313824c3c8083b85afa2fcdb2bab"
+        },
+        "vendor/wisply-mcp/lib/bridge.mjs": {
+          "upstream": "lib/bridge.mjs",
+          "sha256": "605a392ee0c9f0479c755ef88cee70c01364290b3289eacf3efa3ced7f6d958b"
+        },
+        "vendor/wisply-mcp/lib/cli.mjs": {
+          "upstream": "lib/cli.mjs",
+          "sha256": "388bfee47a2cd22f751e343448ad7924dc9c2c96908c362f6f662d1c14b791c6"
+        },
+        "vendor/wisply-mcp/lib/clients.mjs": {
+          "upstream": "lib/clients.mjs",
+          "sha256": "fddfaa81a2e27da3f9c4405107858acde46ee4700229671e3704cda1f250c3ec"
+        },
+        "vendor/wisply-mcp/lib/constants.mjs": {
+          "upstream": "lib/constants.mjs",
+          "sha256": "e5c0c9acc64560be3a96155624a00f781d746f4ceeea3f671385ad6b2132cba3"
+        },
+        "vendor/wisply-mcp/lib/contract.mjs": {
+          "upstream": "lib/contract.mjs",
+          "sha256": "fe49ae25a827395732b6560d570c9f9bebbfa326786329708275f0551dc78ee0"
+        },
+        "vendor/wisply-mcp/lib/debug.mjs": {
+          "upstream": "lib/debug.mjs",
+          "sha256": "87c6d577a54791a47113e666257fbbafdb955789330e1b68b41f5a6be159ebaf"
+        },
+        "vendor/wisply-mcp/lib/identity.mjs": {
+          "upstream": "lib/identity.mjs",
+          "sha256": "ee0f8dae85cd69ad1cd10815c9727c26581cfa978e0329c86a468960f6da82a9"
+        },
+        "vendor/wisply-mcp/lib/loopback.mjs": {
+          "upstream": "lib/loopback.mjs",
+          "sha256": "b2154c9e0372803720c20c74ff68a5fb6cbb434104a1ed049135667098d88d28"
+        },
+        "vendor/wisply-mcp/lib/messages.mjs": {
+          "upstream": "lib/messages.mjs",
+          "sha256": "c532db9316c3e8510b7ec2df1c737201b04f77c22fa6b83cf2ef9bd4503278dd"
+        },
+        "vendor/wisply-mcp/lib/scopes.mjs": {
+          "upstream": "lib/scopes.mjs",
+          "sha256": "3eb3d670b8527bb8393f204970823c40ec7315b343bfa1c0119fb0a8b7d2f37e"
+        },
+        "vendor/wisply-mcp/lib/token.mjs": {
+          "upstream": "lib/token.mjs",
+          "sha256": "39da4148c6707e5075049ac6e8ecadfbeeaa038984e458188aa6e9f53a36e706"
+        }
+      }
+    },
+    {
+      "repository": "github:fal3/wisply-claude-plugin",
+      "commit": "3945503dede4b952efa50c39fe56862cab23e3d7",
+      "files": {
+        "vendor/shared.mjs": {
+          "upstream": "lib/shared.mjs",
+          "sha256": "6114be1c119cad7535771dac0964b03c89a047baec4b6af2bece245996dbe767"
+        }
+      }
+    }
+  ],
+  "bundle": {
+    "path": "server/wisply-mcp.mjs",
+    "entry": "vendor/wisply-mcp/bin/wisply-mcp.mjs",
+    "esbuild": "0.28.2",
+    "sha256": "59690184e47501d911540535ebb33d5cae570f12576fa8d7e6390e9ee6002ed6"
+  }
+}

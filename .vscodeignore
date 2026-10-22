@@ -1,0 +1,15 @@
+# The .vsix holds only what runs and what the stores show. Everything else
+# (src/, test/ and its fixtures, scripts/, vendor/wisply-mcp/, out/,
+# node_modules/, source maps, configs) stays out. test/vsix.test.mjs checks
+# the list that `vsce ls` prints.
+**
+!package.json
+!README.md
+!CHANGELOG.md
+!LICENSE
+!SECURITY.md
+!dist/extension.js
+!server/wisply-mcp.mjs
+!vendor/SOURCE.json
+!media/icon.png
+!skills/*/SKILL.md
