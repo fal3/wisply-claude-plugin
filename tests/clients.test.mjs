@@ -19,7 +19,8 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import contract from '../lib/contract.mjs';
 import {
-  DEFAULT_PORT, NPX_COMMAND, NPX_FLAGS, PACKAGE_NAME, PACKAGE_RANGE, PACKAGE_SPEC, SERVER_KEY, VERSION,
+  DEFAULT_PORT, NPX_COMMAND, NPX_FLAGS, PACKAGE_NAME, PACKAGE_NAME_FINAL, PACKAGE_RANGE, PACKAGE_SPEC, SERVER_KEY,
+  STANDARD_ENTRY, VERSION,
 } from '../lib/constants.mjs';
 import {
   ARGS_CLI, ARGS_LIST, BACKUP_SUFFIX, CLIENT_IDS, FORMATS, TOKEN_MASK, applyJsonInstall, bridgeArgs, clientsFile,
@@ -90,6 +91,8 @@ test('the file agrees with the package constants and the contract', () => {
   assert.equal(FILE.default_port, contract.default_port);
   assert.deepEqual(FILE.standard_entry, { command: 'npx', args: bridgeArgs() });
   assert.deepEqual(FILE.standard_entry.args, [...NPX_FLAGS, PACKAGE_SPEC]);
+  // The bridge's own STANDARD_ENTRY (DIST-M1) is the same entry, so every consumer of either one agrees.
+  assert.deepEqual(FILE.standard_entry, JSON.parse(JSON.stringify(STANDARD_ENTRY)));
   // Snippets run the exact version; the 0.x range is only ever an opt-in (README "Versions").
   assert.ok(!RAW.includes(`"${PACKAGE_RANGE}"`) && !RAW.includes(`${PACKAGE_RANGE} `));
   // Every mention of the package names this exact version, with npx's --prefix / in front.
@@ -97,7 +100,9 @@ test('the file agrees with the package constants and the contract', () => {
     if (match.index === RAW.indexOf(`"package": "${PACKAGE_NAME}"`) + '"package": "'.length) continue;
     assert.equal(match[0], PACKAGE_SPEC, `at ${match.index}`);
   }
-  assert.ok(render('vscode-inputs').text.includes(`saved by ${messages.SETUP_COMMAND}.`),
+  // A public text (VS Code shows it, the app and wisply.ai copy it), so it names the setup command as the docs do:
+  // pinned, after npx's flags. The connector's own messages say `wisply-mcp setup` until the name is final.
+  assert.ok(render('vscode-inputs').text.includes(`saved by ${NPX_COMMAND} setup.`),
     'the vscode-inputs description names the pinned setup command (update it with every release)');
 });
 
@@ -161,7 +166,7 @@ test('no template holds a token or anything that could carry one', () => {
   const parsed = JSON.parse(inputs.text);
   assert.deepEqual(parsed.servers.wisply.env, { WISPLY_MCP_TOKEN: '${input:wisply-token}' });
   assert.equal(parsed.inputs[0].password, true);
-  assert.ok(inputs.text.includes(messages.SETUP_COMMAND), 'the input description names this package\'s setup command');
+  assert.ok(inputs.text.includes(`${NPX_COMMAND} setup`), 'the input description names this package\'s setup command');
 });
 
 // --- Rendering -----------------------------------------------------------
@@ -983,10 +988,12 @@ test('every print-config and install text is ASCII and names only real commands,
   assert.equal(messages.unknownApp('a\u0007b"', ['x']), 'wisply-mcp: unknown app "a?b"". Apps: x.');
   assert.match(messages.HELP, /print-config \[<app>\] \[--port <n>\]/);
   assert.match(messages.HELP, /install <app> \[--port <n>\]/);
-  assert.equal(messages.PRINT_CONFIG_COMMAND, `npx -y --prefix / ${PACKAGE_SPEC} print-config`);
-  assert.equal(messages.INSTALL_COMMAND, `npx -y --prefix / ${PACKAGE_SPEC} install`);
-  assert.equal(messages.SETUP_COMMAND, `npx -y --prefix / ${PACKAGE_SPEC} setup`);
-  assert.equal(messages.FORGET_COMMAND, `npx -y --prefix / ${PACKAGE_SPEC} forget`);
+  // Through npx with the pinned spec once the package name is final, by the bin's name until then (DIST-M2).
+  assert.equal(messages.COMMAND_PREFIX, PACKAGE_NAME_FINAL ? `npx -y --prefix / ${PACKAGE_SPEC}` : 'wisply-mcp');
+  for (const [text, command] of [[messages.PRINT_CONFIG_COMMAND, 'print-config'], [messages.INSTALL_COMMAND, 'install'],
+    [messages.SETUP_COMMAND, 'setup'], [messages.FORGET_COMMAND, 'forget']]) {
+    assert.equal(text, `${messages.COMMAND_PREFIX} ${command}`);
+  }
   assert.ok(PACKAGE_SPEC.endsWith(`@${VERSION}`));
 });
 
