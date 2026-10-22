@@ -26,6 +26,7 @@ import { getMcpApi } from './mcp-api';
 import { PROVIDER_ID, createProvider, serverLaunch, stringEnv } from './provider';
 import type { Launch, WisplyProvider } from './provider';
 import { insertQuote } from './quote';
+import { successfulResult } from './results';
 import { KEYS, affectsWisply, readSettings, sameServerSettings, sameSettings, updateUserSetting } from './settings';
 import { CHECK_ARGUMENTS, CHECK_TIMEOUT_MS, CHECK_TOOL, createSidecar, describeConnection } from './sidecar';
 import type { ConnectionReport, SidecarDeps } from './sidecar';
@@ -48,10 +49,17 @@ export const COMMANDS = Object.freeze({
   statusMenu: 'wisply.statusMenu',
 });
 
-/** globalState keys for the one-time notices. */
+/** globalState keys: the one-time notices, and whether Wisply was reached from this editor. */
 export const STATE_KEYS = Object.freeze({
   welcomed: 'wisply.welcomeShown',
   manualNotice: 'wisply.manualSetupNoticeShown',
+  /**
+   * Set when Check Connection or Insert Transcript Quote reached Wisply (a
+   * token from the Keychain counts, as in Cursor); cleared by Forget Token.
+   * Until it is set, or a token is in secret storage, the status bar item
+   * asks Wisply nothing (src/status.ts).
+   */
+  reached: 'wisply.reachedWisply',
 });
 
 export const BUTTONS = Object.freeze({
@@ -149,6 +157,7 @@ export function activateExtension(vs: VscodeModule, context: vscode.ExtensionCon
     call: (tool, args, timeoutMs) => sidecar.call(tool, args, timeoutMs),
     getPort: () => settings.port,
     isEnabled: () => settings.statusBarEnabled && platform === 'darwin',
+    isSetUp: async () => context.globalState.get(STATE_KEYS.reached) === true || (await tokens.get()) !== null,
     ...(deps.timers ? { timers: deps.timers } : {}),
     ...(deps.now ? { now: deps.now } : {}),
   });
@@ -185,6 +194,16 @@ export function activateExtension(vs: VscodeModule, context: vscode.ExtensionCon
 
   // --- Commands ---
   const window = vs.window;
+  /**
+   * Wisply answered a command from this editor: from now on the status bar
+   * item may ask it too, and a paused item asks again at once. `refresh` is
+   * false when the item gets the news anyway: Insert Transcript Quote hands
+   * it the answer, and a new token refreshes it.
+   */
+  async function reachedWisply({ refresh = true } = {}) {
+    if (context.globalState.get(STATE_KEYS.reached) !== true) await context.globalState.update(STATE_KEYS.reached, true);
+    if (refresh) void status.refresh();
+  }
   const openSetupGuide = () => vs.env.openExternal(vs.Uri.parse(SETUP_GUIDE_URL));
   const keychainLaunch = () => ({ execPath, serverPath, port: settings.port, hostEnv });
   const storeInKeychain = () => storeTokenInKeychain(window, keychainLaunch(), platform);
@@ -230,7 +249,9 @@ export function activateExtension(vs: VscodeModule, context: vscode.ExtensionCon
   }
 
   async function checkConnection() {
-    await show(await check());
+    const checked = await check();
+    if (checked.report.kind === 'ok') await reachedWisply();
+    await show(checked);
   }
 
   async function setToken() {
@@ -240,7 +261,9 @@ export function activateExtension(vs: VscodeModule, context: vscode.ExtensionCon
     // Check with the new token. The change event that follows finds the
     // sidecar already on it and leaves the check running.
     await sidecar.sync();
-    await show(await check(), TEXT.saved(entered.scope));
+    const checked = await check();
+    if (checked.report.kind === 'ok') await reachedWisply({ refresh: false });
+    await show(checked, TEXT.saved(entered.scope));
   }
 
   async function quote() {
@@ -250,7 +273,10 @@ export function activateExtension(vs: VscodeModule, context: vscode.ExtensionCon
       getSettings: () => settings,
       platform,
       presentProblem: (report) => show({ report, stored: null }),
-      onLiveAnswer: (answer) => status.report(answer),
+      onLiveAnswer: (answer) => {
+        if (successfulResult(answer)) void reachedWisply({ refresh: false });
+        status.report(answer);
+      },
       progressLocation: vs.ProgressLocation.Notification,
     });
   }
@@ -277,6 +303,8 @@ export function activateExtension(vs: VscodeModule, context: vscode.ExtensionCon
 
   async function forgetToken() {
     const had = await tokens.get();
+    // The status bar item goes back to asking nothing, until a token or a check sets Wisply up again.
+    await context.globalState.update(STATE_KEYS.reached, false);
     await tokens.forget();
     await window.showInformationMessage(had ? TEXT.forgotten(mode) : TEXT.nothingToForget);
   }

@@ -17,7 +17,8 @@
 //     that any program on the port could send: it must not tell the user to
 //     approve a Keychain dialog that program may have opened;
 //   - every text `setup` prints in the setup terminal that names a command
-//     (FULL_ACCESS_REFUSED, SETUP_MALFORMED, READ_BACK_FAILED, ...), and
+//     (FULL_ACCESS_REFUSED, SETUP_MALFORMED, READ_BACK_FAILED,
+//     RECORDING_SHARED, ...), and
 //     identityProblem, so the vendored texts' own references to the vendored
 //     notWisply and keychainUnavailable resolve here too.
 // The replacements name only the extension's commands and Keychain Access,
@@ -123,6 +124,18 @@ export const removeFailed = (reason) =>
 export const FULL_ACCESS_SHARED =
   'Every AI app on this Mac that starts the connector without its own WISPLY_MCP_TOKEN now gets full access, ' +
   `including recording control and follow-ups. To undo this, ${SETUP_AGAIN} with the read-only connector token.`;
+
+/**
+ * After the terminal stored a recording-control token (setup keeps a wspr_
+ * token): every other AI app that reads the Keychain item without a token of
+ * its own can now start and stop recordings. This editor's own connectors
+ * read the item with --read-only, so they don't.
+ */
+export const RECORDING_SHARED =
+  'Every AI app on this Mac that starts the Wisply connector without its own WISPLY_MCP_TOKEN can now start and ' +
+  'stop recordings while Wisply allows agents to ("Allow agents to start and stop recordings"), and propose ' +
+  "follow-ups for you to confirm in Wisply. This editor's chat still gets only the read-only memo tools from the " +
+  `Keychain. To undo this, ${SETUP_AGAIN} with the read-only connector token.`;
 
 /**
  * The full text for an identity check that didn't pass, as tools/call shows

@@ -3,7 +3,8 @@
 //   $(record) Wisply 12:04       recording (warning background)
 //   $(debug-pause) Wisply 12:04  paused
 //   $(mic) Wisply                not recording
-//   $(key) Wisply                no token (Set Token… or the Keychain item)
+//   $(key) Wisply                no token (Set Token… or the Keychain item), or
+//                                not set up in this editor yet (no checks at all)
 //   $(debug-disconnect) Wisply   Wisply isn't answering
 //   $(warning) Wisply            any other problem (identity check, an old Wisply, …)
 //
@@ -20,6 +21,17 @@
 // `agent_recording_control` in the payload) ignore `tail_words` and send the
 // whole transcript, so they are polled every 60 s. The item stays hidden
 // until the first answer, and while the setting is off.
+//
+// Nothing is polled until Wisply is set up in this editor (deps.isSetUp: a
+// token in secret storage, or a Check Connection or Insert Transcript Quote
+// that reached Wisply). Until then the item is a static `$(key) Wisply` that
+// opens the menu: no helper process, no Keychain read. After MAX_MISSES
+// answers in a row that aren't a recording state (no token, Wisply not
+// answering, any other problem), polling pauses: each time the window gets
+// focus again it asks once more, and any refresh (a command, a token or a
+// setting change) starts over. So a Keychain item that macOS won't hand to
+// /usr/bin/security without a dialog can't bring that dialog back every
+// minute.
 import type * as vscode from 'vscode';
 import { formatDuration, parseLiveTranscript } from '../vendor/shared.mjs';
 import * as messages from './editor-messages.mjs';
@@ -43,7 +55,11 @@ export const POLL_MS = Object.freeze({
   slow: 60_000,
 });
 
-export type StatusPhase = 'recording' | 'paused' | 'idle' | 'unknown' | 'setup' | 'unavailable' | 'problem';
+/** Answers in a row without a recording state before polling pauses until the window is focused again. */
+export const MAX_MISSES = 3;
+
+/** `not-set-up`: nothing was asked, because Wisply isn't set up in this editor yet. */
+export type StatusPhase = 'recording' | 'paused' | 'idle' | 'unknown' | 'setup' | 'unavailable' | 'problem' | 'not-set-up';
 
 export interface StatusSnapshot {
   readonly phase: StatusPhase;
@@ -57,6 +73,8 @@ export interface StatusSnapshot {
 }
 
 export const STATUS_TEXT = Object.freeze({
+  notSetUp: "Wisply isn't set up in this editor yet. Click for Set Token…, Check Connection and the other Wisply " +
+    "commands. Until then the extension doesn't contact Wisply or read the Mac Keychain.",
   idle: 'Wisply: not recording',
   unknown: 'Wisply: recording state not known',
   unreadable: "Wisply answered, but not with a recording state this extension can read. Update Wisply and the " +
@@ -67,6 +85,13 @@ const SNAPSHOT_DEFAULTS = Object.freeze({ durationSeconds: 0, wordCount: 0, spea
 
 const problemSnapshot = (phase: 'setup' | 'unavailable' | 'problem', problem: string): StatusSnapshot =>
   Object.freeze({ ...SNAPSHOT_DEFAULTS, phase, problem });
+
+/** The item before Wisply is set up in this editor. */
+export const NOT_SET_UP: StatusSnapshot = Object.freeze({ ...SNAPSHOT_DEFAULTS, phase: 'not-set-up', problem: STATUS_TEXT.notSetUp });
+
+/** Whether a snapshot counts toward MAX_MISSES: Wisply answered without a recording state. */
+export const isMiss = (snapshot: StatusSnapshot) =>
+  snapshot.phase === 'setup' || snapshot.phase === 'unavailable' || snapshot.phase === 'problem';
 
 /**
  * What a get_live_transcript answer says about Wisply. null for an answer
@@ -140,6 +165,7 @@ export function statusText(snapshot: StatusSnapshot): StatusView {
     case 'unknown':
       return { text: '$(mic) Wisply', tooltip: STATUS_TEXT.unknown, warning: false };
     case 'setup':
+    case 'not-set-up':
       return { text: '$(key) Wisply', tooltip: snapshot.problem, warning: false };
     case 'unavailable':
       return { text: '$(debug-disconnect) Wisply', tooltip: snapshot.problem, warning: false };
@@ -169,6 +195,12 @@ export interface StatusDeps {
   getPort(): number;
   /** The setting is on and this is a Mac. */
   isEnabled(): boolean;
+  /**
+   * Whether Wisply is set up in this editor: a token in secret storage, or a
+   * Check Connection or Insert Transcript Quote that reached Wisply. Until it
+   * is, nothing is polled. Asked before each poll; a rejection counts as no.
+   */
+  isSetUp(): boolean | Promise<boolean>;
   readonly timers?: Timers;
   readonly now?: () => number;
 }
@@ -184,6 +216,8 @@ export interface StatusController extends vscode.Disposable {
   readonly snapshot: StatusSnapshot | null;
   /** Whether a poll is scheduled (for tests). */
   readonly scheduled: boolean;
+  /** Whether polling is paused after MAX_MISSES misses (for tests). */
+  readonly paused: boolean;
 }
 
 export function createStatusController(deps: StatusDeps): StatusController {
@@ -201,6 +235,8 @@ export function createStatusController(deps: StatusDeps): StatusController {
   let port = deps.getPort();
   /** Bumped when the port or the setting changes: answers to polls started before are dropped. */
   let generation = 0;
+  /** Answers in a row that weren't a recording state (isMiss). */
+  let misses = 0;
 
   const active = () => !disposed && enabled;
   const focused = () => deps.window.state?.focused === true;
@@ -228,9 +264,13 @@ export function createStatusController(deps: StatusDeps): StatusController {
     item.show();
   }
 
+  const notSetUp = () => snapshot?.phase === 'not-set-up';
+  const paused = () => misses >= MAX_MISSES;
+
   function schedule() {
     clear();
-    if (!active() || !focused() || inFlight) return;
+    // Not set up, or paused after too many misses: only a refresh, or focus, asks again.
+    if (!active() || !focused() || inFlight || notSetUp() || paused()) return;
     const due = stale || !snapshot ? 0 : Math.max(0, lastAt + pollDelayMs(snapshot) - now());
     const handle = timers.setTimeout(() => {
       timer = null;
@@ -240,10 +280,7 @@ export function createStatusController(deps: StatusDeps): StatusController {
     timer = handle;
   }
 
-  function accept(answer: SidecarAnswer, askedIn = generation) {
-    if (!active() || askedIn !== generation) return;
-    const next = snapshotFromAnswer(answer, deps.getPort());
-    if (!next) return;
+  function show(next: StatusSnapshot) {
     snapshot = next;
     lastAt = now();
     stale = false;
@@ -251,6 +288,25 @@ export function createStatusController(deps: StatusDeps): StatusController {
       render();
     } catch {
       // The status bar item is a convenience: it never breaks a command or the polling.
+    }
+  }
+
+  function accept(answer: SidecarAnswer, askedIn = generation) {
+    if (!active() || askedIn !== generation) return;
+    const next = snapshotFromAnswer(answer, deps.getPort());
+    if (!next) return;
+    misses = isMiss(next) ? misses + 1 : 0;
+    show(next);
+  }
+
+  /** deps.isSetUp(), synchronous when it is (so a poll's call starts at once); a throw or rejection is no. */
+  function setUp(): boolean | Promise<boolean> {
+    try {
+      const ready = deps.isSetUp();
+      if (typeof (ready as Promise<boolean> | undefined)?.then !== 'function') return ready === true;
+      return Promise.resolve(ready).then((value) => value === true, () => false);
+    } catch {
+      return false;
     }
   }
 
@@ -263,8 +319,17 @@ export function createStatusController(deps: StatusDeps): StatusController {
     }
     clear();
     const askedIn = generation;
-    const started = deps.call(LIVE_TOOL, { ...STATUS_ARGUMENTS }, STATUS_TIMEOUT_MS)
-      .then((answer) => accept(answer, askedIn))
+    const ask = (ready: boolean): Promise<void> => {
+      if (!active() || askedIn !== generation) return Promise.resolve();
+      if (!ready) {
+        // Not set up: the static item, and no helper process or Keychain read.
+        show(NOT_SET_UP);
+        return Promise.resolve();
+      }
+      return deps.call(LIVE_TOOL, { ...STATUS_ARGUMENTS }, STATUS_TIMEOUT_MS).then((answer) => accept(answer, askedIn));
+    };
+    const ready = setUp();
+    const started = (typeof ready === 'boolean' ? ask(ready) : ready.then(ask))
       .catch(() => { /* the sidecar never rejects; keep polling regardless */ })
       .finally(() => {
         inFlight = null;
@@ -275,12 +340,26 @@ export function createStatusController(deps: StatusDeps): StatusController {
   }
 
   const focusListener = deps.window.onDidChangeWindowState((state) => {
-    if (state.focused) schedule();
-    else clear();
+    if (!state.focused) {
+      clear();
+      return;
+    }
+    if (notSetUp()) {
+      // Set up meanwhile in another window? Asking costs no helper process.
+      void refresh();
+      return;
+    }
+    if (paused()) {
+      // One more try for each time the window gets focus, at once.
+      misses = MAX_MISSES - 1;
+      stale = true;
+    }
+    schedule();
   });
 
   function refresh(): Promise<void> {
     stale = true;
+    misses = 0;
     if (!active()) {
       render();
       return Promise.resolve();
@@ -318,6 +397,9 @@ export function createStatusController(deps: StatusDeps): StatusController {
     },
     get scheduled() {
       return timer !== null;
+    },
+    get paused() {
+      return paused();
     },
     dispose() {
       if (disposed) return;

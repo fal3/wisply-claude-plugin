@@ -25,8 +25,8 @@ import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import * as esbuild from 'esbuild';
-import { ROOT, SOURCE_FILE, extensionOptions } from '../esbuild.mjs';
-import { releaseProblems } from './release-gate.mjs';
+import { ROOT, SOURCE_FILE, buildServerBundle, extensionOptions } from '../esbuild.mjs';
+import { integrityProblems, releaseProblems } from './release-gate.mjs';
 
 export const DEV_PACKAGE_FILE = 'wisply-dev.vsix';
 export const DEV_SUFFIX = '-dev';
@@ -57,10 +57,22 @@ export async function packageDev({ out = join(ROOT, DEV_PACKAGE_FILE), build = t
   const vsce = require('@vscode/vsce');
   const manifest = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
 
-  const problems = releaseProblems({
-    source: JSON.parse(readFileSync(join(ROOT, SOURCE_FILE), 'utf8')),
-    readme: readFileSync(join(ROOT, 'README.md'), 'utf8'),
-  });
+  // What the release gate would refuse, except a working tree with changes (a development build comes from one).
+  const source = JSON.parse(readFileSync(join(ROOT, SOURCE_FILE), 'utf8'));
+  const problems = [
+    ...releaseProblems({
+      source,
+      readme: readFileSync(join(ROOT, 'README.md'), 'utf8'),
+      manifest,
+      security: readFileSync(join(ROOT, 'SECURITY.md'), 'utf8'),
+    }),
+    ...await integrityProblems({
+      source,
+      read: (path) => readFileSync(join(ROOT, path)),
+      rebuild: () => buildServerBundle({ write: false }),
+      esbuildVersion: require('esbuild/package.json').version,
+    }),
+  ];
   if (problems.length > 0) {
     log(`Development package (${manifest.publisher}.${manifest.name}${DEV_SUFFIX}), not releasable:\n` +
       problems.map((problem) => `  - ${problem}\n`).join(''));

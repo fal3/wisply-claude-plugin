@@ -16,8 +16,8 @@ import { fileURLToPath } from 'node:url';
 import { EDITOR_MESSAGES, VENDORED_MESSAGES } from '../esbuild.mjs';
 import { releaseProblems } from '../scripts/release-gate.mjs';
 import {
-  MCP_DIR, MCP_REMOTE, MCP_REMOTE_RE, MCP_REPOSITORY, PLUGIN_FILES, PLUGIN_REPOSITORY, SOURCE_FILE, VENDOR_SCHEMA, checkRef, isOnRef,
-  isVendoredMcpPath, validRef, verifyOnUpstreamMain,
+  MCP_DIR, MCP_REMOTE, MCP_REMOTE_RE, MCP_REPOSITORY, PLUGIN_FILES, PLUGIN_REPOSITORY, SOURCE_FILE, VENDOR_SCHEMA, changedSince, checkRef,
+  isOnRef, isVendoredMcpPath, validRef, verifyOnUpstreamMain,
 } from '../scripts/sync-vendor.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -97,6 +97,38 @@ test('release: refused while anything the release gate checks isn\'t final', { s
   assert.deepEqual(releaseProblems({ source, readme: readFileSync(join(ROOT, 'README.md'), 'utf8') }), []);
 });
 
+test('changedSince: the vendored paths a branch changed after a commit; null for a name git would misread', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'wisply-fresh-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const run = (...args) => execFileSync('git', ['-C', dir, ...args], {
+    encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.invalid',
+      GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.invalid', GIT_CONFIG_NOSYSTEM: '1', HOME: dir },
+  }).trim();
+  run('init', '-q', '-b', 'work');
+  const commit = (files) => {
+    for (const [name, text] of Object.entries(files)) {
+      execFileSync('mkdir', ['-p', join(dir, name, '..')]);
+      writeFileSync(join(dir, name), text);
+      run('add', name);
+    }
+    run('commit', '-q', '-m', Object.keys(files).join(' '));
+    return run('rev-parse', 'HEAD');
+  };
+  const vendored = commit({ 'lib/messages.mjs': 'a', 'README.md': 'a' });
+  assert.deepEqual(changedSince(dir, vendored, 'work', isVendoredMcpPath), [], 'nothing since');
+  const docsOnly = commit({ 'README.md': 'b', 'tests/x.test.mjs': 'b' });
+  assert.deepEqual(changedSince(dir, vendored, 'work', isVendoredMcpPath), [], 'only files that aren\'t vendored');
+  commit({ 'lib/messages.mjs': 'c', 'lib/new.mjs': 'c' });
+  assert.deepEqual(changedSince(dir, vendored, 'work', isVendoredMcpPath), ['lib/messages.mjs', 'lib/new.mjs']);
+  // "main" means origin/main as last fetched, never the checkout's own main.
+  assert.equal(changedSince(dir, vendored, 'main', isVendoredMcpPath), null, 'no origin/main fetched');
+  run('update-ref', 'refs/remotes/origin/main', docsOnly);
+  run('branch', 'main', 'HEAD');
+  assert.deepEqual(changedSince(dir, vendored, 'main', isVendoredMcpPath), []);
+  assert.equal(changedSince(dir, vendored, 'no-such-branch', isVendoredMcpPath), null);
+  assert.equal(changedSince(dir, '--output=/tmp/x', 'work', isVendoredMcpPath), null);
+});
+
 test('isOnRef: a commit on the branch, the tip itself, and one that isn\'t', (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'wisply-ref-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -141,7 +173,18 @@ test('upstream: the vendored bytes are the files at the recorded commits, and no
   if (mcp.ref === 'main') {
     assert.equal(mcp.remote, MCP_REMOTE);
     assert.ok(isOnRef(process.env.WISPLY_MCP_DIR, mcp.commit, mcp.remote_main), `${mcp.commit} is not on ${mcp.remote_main}`);
+  } else if (mcp.ref) {
+    assert.ok(isOnRef(process.env.WISPLY_MCP_DIR, mcp.commit, mcp.ref), `${mcp.commit} is not on ${mcp.ref}`);
   }
+});
+
+test('upstream: the snapshot is current: the recorded branch hasn\'t changed a vendored file since', { skip: upstreamSkip }, () => {
+  // Ancestry passes for any old commit on the branch; this fails once the
+  // branch (or origin/main) has moved on, so the next step is a re-vendor.
+  assert.ok(mcp.ref, 'SOURCE.json records the connector\'s branch');
+  const stale = changedSince(process.env.WISPLY_MCP_DIR, mcp.commit, mcp.ref, isVendoredMcpPath);
+  assert.notEqual(stale, null, `${mcp.ref} doesn't resolve in ${process.env.WISPLY_MCP_DIR}`);
+  assert.deepEqual(stale, [], `${mcp.ref} has changed ${stale?.join(', ')} since ${mcp.commit.slice(0, 7)}: npm run sync-vendor`);
 });
 
 test('sync-vendor passes git only names: nothing that starts with "-", no "..", no empty value', () => {

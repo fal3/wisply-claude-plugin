@@ -3,8 +3,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import {
-  LIVE_TOOL, MENU, POLL_MS, STATUS_ARGUMENTS, STATUS_ITEM_ID, STATUS_PRIORITY, STATUS_TEXT, STATUS_TIMEOUT_MS,
-  WARNING_BACKGROUND, createStatusController, menuItems, pickMenuAction, pollDelayMs, snapshotFromAnswer, statusText,
+  LIVE_TOOL, MAX_MISSES, MENU, NOT_SET_UP, POLL_MS, STATUS_ARGUMENTS, STATUS_ITEM_ID, STATUS_PRIORITY, STATUS_TEXT, STATUS_TIMEOUT_MS,
+  WARNING_BACKGROUND, createStatusController, isMiss, menuItems, pickMenuAction, pollDelayMs, snapshotFromAnswer, statusText,
 } from '../out/test/status.mjs';
 import { CONNECTION_TEXT } from '../out/test/sidecar.mjs';
 import * as messages from '../src/editor-messages.mjs';
@@ -103,10 +103,10 @@ test('poll intervals: 10 s while recording, 30 s idle, 60 s for problems and for
 const vsLogTexts = (item) => item().shownTexts;
 
 /** A controller on a fake window, clock and sidecar call. `answers` are returned in order; then the last one again. */
-function harness({ focused = true, enabled = true, answers = [live(RECORDING)], port = PORT } = {}) {
+function harness({ focused = true, enabled = true, answers = [live(RECORDING)], port = PORT, setUp = true } = {}) {
   const vs = createFakeVscode({ focused });
   const clock = createFakeClock();
-  const state = { enabled, port, calls: [], answers: [...answers], last: answers.at(-1), gate: null };
+  const state = { enabled, port, setUp, setUpAsked: 0, calls: [], answers: [...answers], last: answers.at(-1), gate: null };
   const controller = createStatusController({
     window: vs.window,
     ThemeColor: FakeThemeColor,
@@ -121,6 +121,10 @@ function harness({ focused = true, enabled = true, answers = [live(RECORDING)], 
     },
     getPort: () => state.port,
     isEnabled: () => state.enabled,
+    isSetUp: () => {
+      state.setUpAsked += 1;
+      return typeof state.setUp === 'function' ? state.setUp() : state.setUp;
+    },
     timers: clock.timers,
     now: clock.now,
   });
@@ -300,6 +304,85 @@ test('report(): Insert Quote\'s live answer updates the item without a call and 
   assert.equal(item().text, '$(record) Wisply 12:04', 'a disposed sidecar says nothing');
 });
 
+test('not set up in this editor: a static key item that opens the menu, and nothing is asked', async (t) => {
+  const { vs, clock, state, controller, item } = harness({ setUp: false });
+  t.after(() => controller.dispose());
+  await controller.refresh();
+  assert.equal(state.calls.length, 0, 'no helper process, no Keychain read');
+  assert.deepEqual({ ...controller.snapshot }, { ...NOT_SET_UP });
+  assert.deepEqual({ text: item().text, tooltip: item().tooltip, command: item().command, visible: item().visible },
+    { text: '$(key) Wisply', tooltip: STATUS_TEXT.notSetUp, command: 'wisply.statusMenu', visible: true });
+  assert.match(STATUS_TEXT.notSetUp, /doesn't contact Wisply or read the Mac Keychain/);
+  assert.deepEqual(clock.pending(), [], 'no timer');
+  await clock.advance(10 * 60_000);
+  assert.equal(state.calls.length, 0);
+  // Focus again: it asks whether Wisply was set up meanwhile (another window), still without a call.
+  const asked = state.setUpAsked;
+  vs.setFocused(false);
+  vs.setFocused(true);
+  await clock.flush();
+  assert.equal(state.setUpAsked, asked + 1);
+  assert.equal(state.calls.length, 0);
+  // Set up (a token, a check that reached Wisply): the next refresh polls.
+  state.setUp = true;
+  await controller.refresh();
+  assert.equal(state.calls.length, 1);
+  assert.equal(item().text, '$(record) Wisply 12:04');
+  assert.deepEqual(clock.pending(), [10_000]);
+});
+
+test('isSetUp may be async; a rejection or a throw counts as not set up', async (t) => {
+  for (const setUp of [() => Promise.reject(new Error('secret storage')), () => { throw new Error('state'); }, () => Promise.resolve(false)]) {
+    const { state, controller } = harness({ setUp });
+    await controller.refresh();
+    assert.equal(state.calls.length, 0);
+    assert.equal(controller.snapshot.phase, 'not-set-up');
+    controller.dispose();
+  }
+  const { state, controller } = harness({ setUp: () => Promise.resolve(true) });
+  t.after(() => controller.dispose());
+  await controller.refresh();
+  assert.equal(state.calls.length, 1);
+});
+
+test(`after ${3} misses in a row polling pauses; each focus gets one more try; a refresh or an answer starts over`, async (t) => {
+  assert.equal(MAX_MISSES, 3);
+  const missing = toolError(messages.SETUP);
+  const { vs, clock, state, controller, item } = harness({ answers: [missing, missing, missing] });
+  t.after(() => controller.dispose());
+  await controller.refresh();
+  await clock.advance(60_000);
+  await clock.advance(60_000);
+  assert.equal(state.calls.length, 3);
+  assert.equal(controller.paused, true);
+  assert.deepEqual(clock.pending(), [], 'no more polls');
+  assert.equal(item().text, '$(key) Wisply', 'the item keeps saying what is wrong');
+  await clock.advance(30 * 60_000);
+  assert.equal(state.calls.length, 3);
+  // The window gets focus again: one try, at once.
+  vs.setFocused(false);
+  vs.setFocused(true);
+  assert.deepEqual(clock.pending(), [0]);
+  await clock.advance(0);
+  assert.equal(state.calls.length, 4);
+  assert.deepEqual(clock.pending(), [], 'missed again: paused again');
+  // A refresh (a command, a token or a setting change) starts over.
+  await controller.refresh();
+  assert.equal(state.calls.length, 5);
+  assert.equal(controller.paused, false);
+  assert.deepEqual(clock.pending(), [60_000]);
+  // A recording state resets the count.
+  state.last = live(IDLE);
+  await clock.advance(60_000);
+  assert.equal(item().text, '$(mic) Wisply');
+  assert.equal(controller.paused, false);
+  for (const text of [messages.SETUP, messages.unavailable(PORT), messages.UPDATE_WISPLY]) {
+    assert.equal(isMiss(snapshotFromAnswer(toolError(text), PORT)), true, text);
+  }
+  assert.equal(isMiss(snap(IDLE)), false);
+  assert.equal(isMiss(snap({ ...IDLE, state: 'rewinding' })), false);
+});
+
 test('dispose: the item goes, timers stop, and a late answer changes nothing', async (t) => {
   const { clock, state, controller, item } = harness();
   await controller.refresh();
@@ -342,18 +425,22 @@ async function until(predicate, what, ms = 8000) {
   }
 }
 
-async function activateFocused(t, { wisplyPort, platform = 'darwin', picks = [], answers = {}, secrets } = {}) {
+async function activateFocused(t, { wisplyPort, platform = 'darwin', picks = [], answers = {}, secrets, state = {}, spawned } = {}) {
   const { activateExtension } = await import('../out/test/extension.mjs');
   const { createFakeContext, createFakeSecrets } = await import('./fixtures/fake-vscode.mjs');
   const { FAKE_TOKENS } = await import('./fixtures/fake-vscode.mjs');
+  const { spawn } = await import('node:child_process');
   const vs = createFakeVscode({ focused: true, picks, answers, config: wisplyPort ? { port: { globalValue: wisplyPort } } : {} });
   const store = secrets ?? createFakeSecrets({ 'wisply.mcpToken': FAKE_TOKENS.connector });
   const clock = createFakeClock();
-  const activation = activateExtension(vs, createFakeContext({ root: ROOT, secrets: store, state: { 'wisply.welcomeShown': true } }), {
+  const context = createFakeContext({ root: ROOT, secrets: store, state: { 'wisply.welcomeShown': true, ...state } });
+  const activation = activateExtension(vs, context, {
     execPath: process.execPath, platform, hostEnv: { PATH: process.env.PATH, HOME: process.env.HOME }, timers: clock.timers, now: clock.now,
+    // Records every process the extension starts (the helper), then starts it for real.
+    ...(spawned ? { spawn: (command, args, options) => { spawned.push(args); return spawn(command, args, options); } } : {}),
   });
   t.after(() => activation.dispose());
-  return { vs, clock, store };
+  return { vs, clock, store, context };
 }
 
 test('end to end: activation in a focused window shows the recording, read with tail_words 1 through the bundle', async (t) => {
@@ -371,22 +458,49 @@ test('end to end: activation in a focused window shows the recording, read with 
   assert.doesNotMatch(JSON.stringify(vs.log), new RegExp(SENTINEL), 'no recorded speech reaches the UI');
 });
 
-// Starts with no stored token, so the connector would read the Keychain on a Mac: run off macOS only, like bundle.test.mjs.
-const wouldTouchKeychain = process.platform === 'darwin' || existsSync('/usr/bin/security');
-test('end to end: a new token polls again at once', { skip: wouldTouchKeychain }, async (t) => {
+test('end to end: never set up, the item asks nothing (no helper process, no Keychain); a new token polls at once', async (t) => {
   const { startFakeWisply } = await import('./fixtures/fake-wisply.mjs');
   const { FAKE_TOKENS, createFakeSecrets } = await import('./fixtures/fake-vscode.mjs');
   const wisply = await startFakeWisply(t, { tools: { get_live_transcript: () => wisplyResult(IDLE) } });
   const secrets = createFakeSecrets();
-  const { vs } = await activateFocused(t, { wisplyPort: wisply.port, secrets });
-  await until(() => vs.statusItems[0]?.visible, 'the first answer');
-  // Off macOS without a token the connector says there's nothing to connect to.
-  assert.equal(vs.statusItems[0].text, '$(warning) Wisply');
-  assert.equal(vs.statusItems[0].tooltip, messages.notMac(process.platform));
-  assert.equal(wisply.seen.calls.length, 0);
+  const spawned = [];
+  const { vs } = await activateFocused(t, { wisplyPort: wisply.port, secrets, spawned });
+  await until(() => vs.statusItems[0]?.visible, 'the static item');
+  assert.equal(vs.statusItems[0].text, '$(key) Wisply');
+  assert.equal(vs.statusItems[0].tooltip, STATUS_TEXT.notSetUp);
+  await new Promise((resolve) => { setTimeout(resolve, 100); });
+  assert.deepEqual(spawned, [], 'no helper process started, so nothing read the Keychain');
+  assert.equal(wisply.seen.challenges.length + wisply.seen.calls.length, 0);
   await secrets.store('wisply.mcpToken', FAKE_TOKENS.connector);
   await until(() => vs.statusItems[0].text === '$(mic) Wisply', 'the poll with the new token');
   assert.equal(wisply.seen.calls.length, 1);
+  assert.equal(spawned.length, 1);
+});
+
+// No token in secret storage, so the connector reads the Keychain on a Mac: run off macOS only, like bundle.test.mjs.
+const wouldTouchKeychain = process.platform === 'darwin' || existsSync('/usr/bin/security');
+test('end to end: once Wisply was reached from this editor (Cursor: the Keychain), the item asks without a stored token',
+  { skip: wouldTouchKeychain }, async (t) => {
+    const { startFakeWisply } = await import('./fixtures/fake-wisply.mjs');
+    const { createFakeSecrets } = await import('./fixtures/fake-vscode.mjs');
+    const wisply = await startFakeWisply(t, { tools: { get_live_transcript: () => wisplyResult(IDLE) } });
+    const { vs } = await activateFocused(t, { wisplyPort: wisply.port, secrets: createFakeSecrets(), state: { 'wisply.reachedWisply': true } });
+    await until(() => vs.statusItems[0]?.visible && vs.statusItems[0].text !== '$(key) Wisply', 'the first answer');
+    // Off macOS without a token the connector says there's nothing to connect to.
+    assert.equal(vs.statusItems[0].text, '$(warning) Wisply');
+    assert.equal(vs.statusItems[0].tooltip, messages.notMac(process.platform));
+  });
+
+test('end to end: Check Connection that reaches Wisply records it; Forget Token clears it', async (t) => {
+  const { startFakeWisply } = await import('./fixtures/fake-wisply.mjs');
+  const wisply = await startFakeWisply(t, { tools: { get_live_transcript: () => wisplyResult(IDLE) } });
+  const { vs, context } = await activateFocused(t, { wisplyPort: wisply.port });
+  await vs.commands.run('wisply.checkConnection');
+  assert.equal(context.globalState.get('wisply.reachedWisply'), true);
+  await vs.commands.run('wisply.forgetToken');
+  assert.equal(context.globalState.get('wisply.reachedWisply'), false);
+  await until(() => vs.statusItems[0]?.text === '$(key) Wisply' && vs.statusItems[0].tooltip === STATUS_TEXT.notSetUp,
+    'the static item again');
 });
 
 test('the menu: Hide Status Item turns the user setting off, hides the item, and Undo brings it back', async (t) => {

@@ -110,6 +110,33 @@ export function isOnRef(dir, commit, ref, { env = process.env } = {}) {
 }
 
 /**
+ * The paths for which `keep(path)` is true that the ref's tip has changed
+ * since `commit`, sorted: empty when the snapshot is current. For "main",
+ * origin/main as the checkout last fetched it (sync-vendor fetches it). null
+ * when either name isn't valid or doesn't resolve. Ancestry alone can't tell
+ * a snapshot that a branch has since moved past, so the upstream tests
+ * (WISPLY_MCP_DIR) check this too.
+ * @param {string} dir a wisply-mcp checkout
+ * @param {string} commit
+ * @param {string} ref
+ * @param {(path: string) => boolean} keep
+ * @param {{env?: NodeJS.ProcessEnv}} [options]
+ * @returns {string[] | null}
+ */
+export function changedSince(dir, commit, ref, keep, { env = process.env } = {}) {
+  if (!validRef(commit) || !validRef(ref)) return null;
+  const tip = ref === 'main' ? 'refs/remotes/origin/main' : ref;
+  try {
+    const out = execFileSync('git', ['-C', dir, 'diff', '--name-only', '--no-renames', `${commit}^{commit}`, `${tip}^{commit}`], {
+      env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 32 * 1024 * 1024,
+    });
+    return out.split('\n').filter((path) => path !== '' && keep(path)).sort();
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Checks that `commit` is on fal3/wisply-mcp's main as GitHub has it: the
  * checkout's origin is that repository, origin's main is fetched now, and the
  * commit is on refs/remotes/origin/main. Throws with the reason otherwise.

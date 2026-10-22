@@ -11,14 +11,25 @@
 // Format (`wisply.quote.format`):
 //   markdown (default)   > {text}
 //                        >
-//                        > — Wisply, "{title}", {date}
-//   plain                "{text}" (Wisply, {title}, {date})
+//                        > — Wisply recording (quoted speech), "{title}", {date}
+//   plain                "{text}" (Wisply recording, quoted speech, {title}, {date})
 //
-// Recorded speech and titles are untrusted text. They pass through the
-// plugin's sanitizeSpeech (vendor/shared.mjs: terminal escapes, control and
-// invisible characters removed, whitespace folded to single spaces), so a
-// quote is always one line of visible text inside its block. Every insert is
-// one editor.edit call, so a single Undo removes it.
+// Recorded speech and titles are untrusted text: anyone who speaks in a
+// meeting, and anyone who sends a calendar invite (memos are named after the
+// linked event), chooses some of it. So:
+//   - sanitizeSpeech (vendor/shared.mjs) removes terminal escapes, control
+//     and invisible characters and folds whitespace to single spaces, so a
+//     quote is one line of visible text inside its block;
+//   - in Markdown, the text, the title and the date are then escaped
+//     (markdownText): no link, image, raw HTML, autolink, emphasis or code
+//     span, and no heading, list or nested quote at the start of the line,
+//     so the quote renders as exactly the words that were said;
+//   - in a plain quote, link and image syntax ("](") and HTML or autolink
+//     openers ("<" before a letter, "/", "!" or "?") get a space (plainText),
+//     so a plain quote pasted into Markdown can't turn into markup either;
+//   - the attribution says the text is quoted speech from a recording, so an
+//     AI agent that later reads the file sees provenance, not instructions.
+// Every insert is one editor.edit call, so a single Undo removes it.
 import type * as vscode from 'vscode';
 import { parseLiveTranscript, sanitizeSpeech } from '../vendor/shared.mjs';
 import { notMac } from './editor-messages.mjs';
@@ -86,14 +97,57 @@ export interface QuoteInput {
   readonly style: QuoteFormat;
 }
 
+/** The provenance a quote's attribution gives, per format. */
+export const ATTRIBUTION = Object.freeze({
+  markdown: 'Wisply recording (quoted speech)',
+  plain: 'Wisply recording, quoted speech',
+});
+
+/**
+ * One line of sanitized text as literal Markdown: CommonMark and GitHub
+ * render it as exactly these characters.
+ *   - `<` and `>` become `&lt;` and `&gt;`: no raw HTML, no autolink, no
+ *     nested quote. An `&` that would start an entity (`&lt;`, `&#60;`)
+ *     becomes `&amp;`; "Q&A" stays as it is.
+ *   - `\`, backticks, `*`, `_`, `[`, `]` and `~` get a backslash: no code
+ *     span, emphasis, strikethrough, link or image (`![...](...)` and
+ *     `[...](...)` both need a bracket).
+ *   - A line that would start a heading, list item, thematic break or table
+ *     row (`#`, `-`, `+`, `=`, `|`, or digits and `.` or `)`) gets its
+ *     marker escaped.
+ * A web address said aloud stays visible as said; Markdown viewers may make
+ * it clickable, but they can't hide where it goes.
+ */
+export function markdownText(text: string): string {
+  return text
+    .replace(/&(?=#?[A-Za-z0-9]+;)/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/[\\`*_[\]~]/g, '\\$&')
+    .replace(/^([#+=|-])/, '\\$1')
+    .replace(/^(\d+)([.)])/, '$1\\$2');
+}
+
+/**
+ * One line of sanitized text for a plain quote: still readable as typed,
+ * but no longer Markdown link, image, HTML or autolink syntax if the quote
+ * lands in a Markdown file. "](" becomes "] (" and "<" before a letter, "/",
+ * "!" or "?" becomes "< ".
+ */
+export function plainText(text: string): string {
+  return text.replace(/\]\(/g, '] (').replace(/<(?=[A-Za-z/!?])/g, '< ');
+}
+
 /** The quote as it is inserted (without surrounding line breaks); null when there is nothing to quote. */
 export function formatQuote({ text, title, date, style }: QuoteInput): string | null {
   const body = clip(sanitizeSpeech(text), MAX_QUOTE_CHARS);
   if (!body) return null;
   const name = clip(sanitizeSpeech(title), MAX_TITLE_CHARS) || QUOTE_TEXT.untitled;
   const when = sanitizeSpeech(date);
-  if (style === 'plain') return `"${body}" (Wisply, ${name}${when ? `, ${when}` : ''})`;
-  return `> ${body}\n>\n> — Wisply, "${name}"${when ? `, ${when}` : ''}`;
+  if (style === 'plain') {
+    return `"${plainText(body)}" (${ATTRIBUTION.plain}, ${plainText(name)}${when ? `, ${plainText(when)}` : ''})`;
+  }
+  return `> ${markdownText(body)}\n>\n> — ${ATTRIBUTION.markdown}, "${markdownText(name)}"${when ? `, ${markdownText(when)}` : ''}`;
 }
 
 /**

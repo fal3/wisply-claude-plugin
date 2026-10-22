@@ -395,6 +395,7 @@ test('every text the setup terminal can print points to the extension\'s command
     readBackFailed: await runSetup(cli, { read: new Error('no item') }),
     malformed: await runSetup(cli, { read: 'not-a-token' }),
     fullAccess: await runSetup(cli, { read: FAKE_TOKENS.full }),
+    recording: await runSetup(cli, { read: FAKE_TOKENS.recording }),
     removeFailedFull: await runSetup(cli, { read: FAKE_TOKENS.full, deletes: ['not-found', 'failed'] }),
     removeFailedMalformed: await runSetup(cli, { read: 'not-a-token', deletes: ['not-found', 'failed'] }),
     removeFailedUnreadable: await runSetup(cli, { read: new Error('no item'), deletes: ['not-found', 'failed'] }),
@@ -412,6 +413,11 @@ test('every text the setup terminal can print points to the extension\'s command
   assert.ok(runs.fullAccess.output.includes(messages.FULL_ACCESS_REFUSED));
   assert.match(messages.FULL_ACCESS_REFUSED, /Wisply: Store Token in the Mac Keychain again/);
   assert.match(messages.FULL_ACCESS_REFUSED, /use Wisply: Set Token instead/);
+  // A recording-control token is kept, with the note that every app without its own token now shares it.
+  assert.ok(runs.recording.output.includes(messages.RECORDING_SHARED));
+  assert.equal(runs.recording.code, 0);
+  assert.match(messages.RECORDING_SHARED, /start and stop recordings/);
+  assert.match(messages.RECORDING_SHARED, /Wisply: Store Token in the Mac Keychain again/);
   assert.ok(runs.malformed.output.includes(messages.SETUP_MALFORMED));
   assert.ok(runs.readBackFailed.output.includes(messages.READ_BACK_FAILED));
   assert.ok(runs.notStored.output.includes(messages.KEYCHAIN_NOT_STORED));
@@ -426,11 +432,11 @@ test('every text the setup terminal can print points to the extension\'s command
   assert.ok(runs['identity:not-wisply'].output.includes(messages.notWisply(51771)));
   assert.ok(runs['identity:keychain'].output.includes(messages.keychainUnavailable(51771)));
   assert.equal(runs['identity:ok'].code, 0);
-  for (const [name, run] of Object.entries(runs)) if (name !== 'identity:ok') assert.equal(run.code, 1, name);
+  for (const [name, run] of Object.entries(runs)) if (name !== 'identity:ok' && name !== 'recording') assert.equal(run.code, 1, name);
 
   // The vendored texts it replaces named the connector's commands.
   for (const name of ['FULL_ACCESS_REFUSED', 'SETUP_MALFORMED', 'READ_BACK_FAILED', 'KEYCHAIN_NOT_STORED', 'PREVIOUS_REMOVED',
-    'REPLACE_FAILED', 'SETUP_NEEDS_TERMINAL', 'FULL_ACCESS_SHARED']) {
+    'REPLACE_FAILED', 'SETUP_NEEDS_TERMINAL', 'FULL_ACCESS_SHARED', 'RECORDING_SHARED']) {
     assert.match(vendoredMessages[name], /wisply-mcp/, name);
     assert.doesNotMatch(messages[name], /wisply-mcp|npx|--full-access/, name);
   }

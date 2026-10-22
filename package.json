@@ -142,7 +142,7 @@
           "type": "boolean",
           "default": true,
           "scope": "application",
-          "markdownDescription": "Show Wisply's recording state in the status bar. While the window is focused, the extension asks Wisply for it every 10 seconds during a recording and every 30 seconds otherwise. Wisply reads this setting only from your user settings."
+          "markdownDescription": "Show Wisply's recording state in the status bar. Once Wisply is set up in this editor (a token set with **Wisply: Set Token**, or a **Check Connection** that reached Wisply), the extension asks Wisply for it while the window is focused: every 10 seconds during a recording and every 30 seconds otherwise, and it stops asking after three answers in a row without a recording state until the window is focused again. Wisply reads this setting only from your user settings."
         },
         "wisply.quote.words": {
           "type": "integer",

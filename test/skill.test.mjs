@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import {
   EDITOR_COMPATIBILITY, SKILL_NAME, SKILL_OVERLAY, SKILL_PACKAGED, SKILL_UPSTREAM, SKILL_VENDORED, editorSkill,
 } from '../scripts/skill.mjs';
-import { MCP_REMOTE, isOnRef } from '../scripts/sync-vendor.mjs';
+import { MCP_REMOTE, changedSince, isOnRef } from '../scripts/sync-vendor.mjs';
 import contract from '../vendor/wisply-mcp/contract/mcp-contract.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -126,4 +126,8 @@ test('upstream: the vendored skill is the file at the recorded commit, on the re
   } else if (source.skill.ref) {
     assert.ok(isOnRef(dir, source.skill.commit, source.skill.ref), `${source.skill.commit} is not on ${source.skill.ref}`);
   }
+  // And current: the recorded branch hasn't changed the skill since.
+  assert.ok(source.skill.ref, 'SOURCE.json records the skill\'s branch');
+  const stale = changedSince(dir, source.skill.commit, source.skill.ref, (path) => path === SKILL_UPSTREAM);
+  assert.deepEqual(stale, [], `${source.skill.ref} has changed the skill since ${source.skill.commit.slice(0, 7)}: npm run sync-vendor`);
 });

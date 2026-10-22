@@ -2,7 +2,7 @@
 
 ## Reporting a problem
 
-Please report security problems privately: use **Report a vulnerability** on this repository's Security tab (GitHub private vulnerability reporting), or email support@fallah.io with "security" in the subject. Don't open a public issue. Include the extension version, the editor and its version (Help > About), and steps to reproduce. Never include a real Wisply token.
+Please report security problems privately: use **Report a vulnerability** on this repository's Security tab (GitHub private vulnerability reporting), or email support@wisply.ai with "security" in the subject. Don't open a public issue. Include the extension version, the editor and its version (Help > About), and steps to reproduce. Never include a real Wisply token.
 
 Only the newest release gets fixes.
 
@@ -19,7 +19,7 @@ Only the newest release gets fixes.
 **Where the token lives.** In the editor's secret storage (`SecretStorage`, key `wisply.mcpToken`). It leaves the extension in exactly two ways, both as `WISPLY_MCP_TOKEN` in the environment of a process on this Mac:
 
 - the MCP server the editor starts: the server definitions the extension lists never contain it, and it is added only in the step that runs when the server starts;
-- the read-only helper process the extension starts for the status bar item, Insert Transcript Quote and Check Connection. It runs with `--read-only` and an environment of its own (the token, the port, `HOME` and `PATH`, nothing else from the editor).
+- the read-only helper process the extension starts for the status bar item, Insert Transcript Quote and Check Connection. It runs with `--read-only` and an environment of its own (the token, the port, `HOME` and `PATH`, nothing else from the editor). It starts when you run one of those commands, or for the status bar item once Wisply is set up in this editor (a token in secret storage, or a Check Connection or quote that reached Wisply). While the item is on and the window is focused it keeps running, since the item asks at least once a minute; it stops two minutes after its last use.
 
 Cursor's MCP API has no such start step, so in Cursor the extension registers the connector without a token and the connector reads the Keychain item instead.
 
@@ -33,15 +33,24 @@ Cursor's MCP API has no such start step, so in Cursor the extension registers th
 
 **The environment.** `WISPLY_MCP_TOKEN`, `WISPLY_MCP_ALLOW_CLAUDE_SETUP`, `WISPLY_MCP_DEBUG` and `NODE_OPTIONS` exported in your shell for another app are removed from the server the editor starts. The Keychain setup terminal starts with a fixed, minimal environment, so nothing such as a debugger's `NODE_OPTIONS` loads code into the process that handles the token.
 
-**Recorded speech.** Transcripts are untrusted text. The status bar item never shows any. Insert Transcript Quote removes terminal escapes, control, invisible and text-direction characters and folds line breaks before it inserts a quote, and match lists can't draw icons from memo text. The bundled skill tells the AI to treat transcripts as quoted data, never as instructions.
+**Recorded speech.** Transcripts and memo titles are untrusted text: anyone who speaks in a recorded meeting chooses some of it, and so does anyone who sends a calendar invite, because a memo can be named after its meeting. The status bar item never shows any. Insert Transcript Quote:
+
+- removes terminal escapes, control, invisible and text-direction characters and folds line breaks, so a quote is one line of visible text;
+- in a Markdown quote, escapes the text, the title and the date: `<`, `>` and entity-like `&` become entities, and `` ` ``, `*`, `_`, `[`, `]`, `~`, `\` and a heading or list marker at the start of the line get a backslash. A link, image, raw HTML, autolink or formatting that someone said or put in a title shows as typed, and a Markdown preview or GitHub renders no link target, no remote image and no HTML from it;
+- in a plain quote, breaks up link and image syntax (`](`) and HTML and autolink openers (`<` before a letter, `/`, `!` or `?`) with a space;
+- attributes every quote to "Wisply recording (quoted speech)" (plain: "Wisply recording, quoted speech"), so an AI agent that later reads the file sees that the text is someone's speech.
+
+Match lists can't draw icons from memo text. The bundled skill tells the AI to treat transcripts it reads through the tools as quoted data, never as instructions.
+
+What's left: a web address someone said stays visible as said, and Markdown viewers may make it clickable. A quote is still someone else's words inside your file. An AI agent in the editor reads workspace files as ordinary content, outside the skill's rules for tool results, and the attribution is a hint it may ignore. Don't ask an agent to act on a file that holds quotes without reading what it plans to do.
 
 **Logs.** The extension writes no logs of your memos. The connector's debug lines stay off in the processes the extension and the editor start, because `WISPLY_MCP_DEBUG` never reaches them; even when on, they hold only fixed fields (method, tool name, outcome, HTTP status, bytes and milliseconds). The editor's own MCP log (**MCP: Show Output**) can record tool results, memo text included, if you raise its log level to Debug or Trace.
 
-**The Keychain item.** **Wisply: Store Token in the Mac Keychain…** keeps the token in your login keychain (service `ai.wisply.mcp`, account `token`, label "Wisply MCP token"), out of config files, Settings Sync and dotfile repositories. It does **not** stop another program running as you on this Mac from reading it, because the item trusts `/usr/bin/security`. Use the read-only connector token, and regenerate it in Wisply if you suspect malware. If the connector says Wisply couldn't read its own tokens from the Keychain, quit and reopen Wisply; any program on the port can send that answer, so allow a Keychain access dialog only when it names Wisply.
+**The Keychain item.** **Wisply: Store Token in the Mac Keychain…** keeps the token in your login keychain (service `ai.wisply.mcp`, account `token`, label "Wisply MCP token"), out of config files, Settings Sync and dotfile repositories. It does **not** stop another program running as you on this Mac from reading it, because the item trusts `/usr/bin/security`. Use the read-only connector token, and regenerate it in Wisply if you suspect malware. The terminal refuses the full-access token. It keeps a recording-control token (`wspr_`) and says what that means: every other AI app on this Mac that reads the item without a token of its own can then start and stop recordings while Wisply allows agents to (this extension's connectors still get only the read-only memo tools from it). If the connector says Wisply couldn't read its own tokens from the Keychain, quit and reopen Wisply; any program on the port can send that answer, so allow a Keychain access dialog only when it names Wisply.
 
 **What your AI chat does with what it reads.** Whatever the chat reads from Wisply goes to the AI service your editor uses, under that service's terms.
 
-**Supply chain.** The extension has no runtime dependencies. The connector, the plugin's helpers and the skill are vendored at exact commits with their sha256 in `vendor/SOURCE.json`, and the tests fail if any vendored file, the bundle or the packaged skill differs from what those sources build. The package holds only what runs and what the stores show (`vsce ls` is tested), and nothing in it looks like a token.
+**Supply chain.** The extension has no runtime dependencies. The connector, the plugin's helpers and the skill are vendored at exact commits with their sha256 in `vendor/SOURCE.json`, and the tests fail if any vendored file, the bundle or the packaged skill differs from what those sources build. The release gate checks the same before every package or publish (see below). The package holds only what runs and what the stores show (`vsce ls` is tested), and nothing in it looks like a token.
 
 ## If you think a token leaked
 
@@ -52,7 +61,7 @@ Cursor's MCP API has no such start step, so in Cursor the extension registers th
 
 ## Release controls (maintainers)
 
-- `vsce package`, `vsce publish` and `ovsx publish` run the release gate (`scripts/release-gate.mjs`) first, and nothing turns it into a warning. It refuses while the vendored connector or skill isn't from `fal3/wisply-mcp` `main` as GitHub has it, with a final contract; while the publisher ID, the setup guide link, the public repositories or the support page and mailbox are placeholders; and while the README reads as a draft or has a `{PLACEHOLDER}`.
+- `vsce package`, `vsce publish` and `ovsx publish` run the release gate (`scripts/release-gate.mjs`) first, and nothing turns it into a warning. It refuses while the vendored connector or skill isn't from `fal3/wisply-mcp` `main` as GitHub has it, with a final contract; while any file `vendor/SOURCE.json` records (the vendored files, the vendored and packaged skill, the bundle) differs from its sha256, the packaged skill isn't the vendored one with only its compatibility line replaced, or a rebuild from `vendor/` and `src/editor-messages.mjs` doesn't give the bundle byte for byte; while the checkout has uncommitted changes; while the publisher ID, the setup guide link, the public repositories or the support page and the mailbox are placeholders, or the package names a mailbox other than support@wisply.ai; and while the README reads as a draft or has a `{PLACEHOLDER}`.
 - `npm run package` builds a development package only (`wisply-dev.vsix`): another extension, `wisply.wisply-dev`, with a prerelease version that `vsce publish` and the Marketplace refuse, so it can't be published as this extension.
 - Publish from a clean checkout of a release tag: `npm ci`, `npm run check`, `WISPLY_RELEASE=1 npm test`, then `npm run package:release` and review `npx vsce ls --no-dependencies` before uploading. [PUBLISHING.md](https://github.com/fal3/wisply-vscode/blob/main/PUBLISHING.md) is the runbook.
 - **If a bad version is published:** remove that version from the VS Code Marketplace (Manage Publishers) and from Open VSX, publish a fixed version, publish a GitHub security advisory here, and say in this changelog and on wisply.ai which tokens to regenerate.
