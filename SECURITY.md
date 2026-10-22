@@ -21,11 +21,15 @@ Only the newest 0.x release gets fixes.
   recordings" switch, and a follow-up waits for your confirmation in Wisply.
 - `wsp_`: full access. `setup_claude`, which can store an Anthropic API key in
   Wisply, stays hidden unless the connector runs with `--allow-claude-setup`.
-  Leave that switch off: Wisply's answer to `setup_claude` currently includes
-  a Cursor snippet with Wisply's full-access token, and the connector passes
-  results on unchanged, so the AI app would send the token to its AI
-  service. The Claude Desktop bundle never turns the switch on and doesn't
-  list `setup_claude`.
+  Leave that switch off: in Wisply builds before DIST-A1, the answer to
+  `setup_claude` includes a Cursor snippet with Wisply's full-access token
+  (the contract vendored here marks the change, `setup_claude_token_free`,
+  but older builds don't know it), and the connector passes results on
+  unchanged, so the AI app would send the token to its AI service. An
+  Anthropic key passed as `api_key` also goes through the AI app and its
+  provider; Wisply's Settings are the place for it. The Claude Desktop bundle
+  never turns the switch on and doesn't list `setup_claude`, and the
+  contract's `distribution` gate leaves it out of every default install.
 
 The connector refuses any tool outside the token's scope, and Wisply refuses
 it again (JSON-RPC `-32003`).
@@ -272,7 +276,8 @@ Each of these must hold before the step it names. None is met yet: the
 package has never been published. Parts of items 1, 3 and 4 are also
 machine-checked: `WISPLY_RELEASE=1 npm test` passes only on the tree to
 publish and lists every step still missing, each once. It fails while the
-contract is provisional (`tests/vendor.test.mjs`); until
+contract is provisional or wasn't vendored from a commit on wisply-ai's
+`main` (`"on_main"` in `contract/SOURCE.json`; `tests/vendor.test.mjs`); until
 `docs/release-checks.json` records the port, registry and npm-name checks,
 while `PACKAGE_NAME_FINAL` is false or `package.json` is still `"private"`,
 and while the contract leaves `setup_claude` non-destructive
@@ -307,14 +312,15 @@ in the release workflow, the run is for the tag `v<version>`
    `PACKAGE_NAME_FINAL` is `true` (item 1), and the release change removes
    `"private": true` from `package.json`, sets `"published": true` in
    `clients/mcp-clients.json` and gives the CHANGELOG's version heading its
-   date. `"private"` stays exactly while the contract is provisional or the
-   name isn't final, and `"published"` follows it (`tests/pack.test.mjs`,
-   `tests/clients.test.mjs`), so the re-vendor and the npm organization land
-   in either order. The vendored contract marks `setup_claude`
-   `destructiveHint: true` (it replaces the Anthropic key stored in Wisply;
-   fixed in wisply-ai's `MCPToolCatalog.swift`, never in the vendored JSON),
-   and `docs/release-checks.json` records `port_exclusive` for the Wisply
-   commit the contract is vendored from: either that commit binds the port
+   date. `"private"` stays exactly while the contract is provisional or not
+   from wisply-ai's `main`, or the name isn't final, and `"published"` follows
+   it (`tests/pack.test.mjs`, `tests/clients.test.mjs`), so the re-vendor and
+   the npm organization land in either order. The vendored contract marks
+   `setup_claude` `destructiveHint: true` (it replaces the Anthropic key
+   stored in Wisply; DIST-A1 fixed it in wisply-ai's `MCPToolCatalog.swift`,
+   never edit the vendored JSON), and `docs/release-checks.json` records
+   `port_exclusive` for the Wisply commit the contract is vendored from:
+   either that commit binds the port
    exclusively (`allowLocalEndpointReuse = false`), or a test on a Mac has
    shown that no second socket can listen on Wisply's port while Wisply runs.
    Also: `setup`, `status` and `forget` have passed the manual Keychain QA on
@@ -433,21 +439,28 @@ in the release workflow, the run is for the tag `v<version>`
 
 ## Re-vendoring the contract (maintainers)
 
-`contract/mcp-contract.json` is provisional: transcribed from Wisply's tool
-catalog at wisply-ai 885cc75, because wisply-ai's own
-`Docs/mcp-contract.json` isn't on its `main` yet. The file the connector
-needs comes from two wisply-ai PRs: raycast PR 1 (the `wspr_` scope, the
-error codes, `live_transcript`, and `tail_words` in the tool catalog) and
-DIST-A1 (`tool_descriptors`). Either one alone gives a file the connector
-can't load, and `npm run sync-vendor` refuses it.
+`contract/mcp-contract.json` is wisply-ai's `Docs/mcp-contract.json`, byte
+for byte, at the commit `contract/SOURCE.json` records. The file needs two
+wisply-ai PRs: raycast PR 1 (the `wspr_` scope, the error codes,
+`live_transcript`, and `tail_words` in the tool catalog) and DIST-A1
+(`tool_descriptors` and the `distribution` gate). Either one alone gives a
+file the connector can't load, and `npm run sync-vendor` refuses it.
 
-1. Wait until a wisply-ai `main` commit has both (DIST-A1 merged after
-   raycast PR 1), and its Mac CI, which pins the file to the Swift source
-   (`MCPContractDescriptorTests`), is green.
+It is vendored now from DIST-A1's commit 5e4d308 (wisply-ai
+`claude/distribution-1`, which has raycast PR 1 merged in), before either PR
+is on wisply-ai's `main`, so `contract/SOURCE.json` says `"on_main": false`.
+That keeps `"private"` in `package.json` and makes `WISPLY_RELEASE=1 npm test`
+fail: what ships must be the file wisply-ai's own Mac CI has pinned to the
+Swift source on `main` (`MCPContractDescriptorTests`,
+`MCPRaycastContractTests`). The re-vendor that clears it:
+
+1. Wait until a wisply-ai `main` commit has both PRs (DIST-A1 merged after
+   raycast PR 1) and its Mac CI is green. Fetch it, so the checkout's
+   `origin/main` has it.
 2. From a clean checkout of this repository:
 
    ```bash
-   npm run sync-vendor -- --app <wisply-ai checkout> --app-commit <that commit> \
+   npm run sync-vendor -- --app <wisply-ai checkout> --app-commit <the main commit> \
      --plugin <wisply-claude-plugin checkout> --plugin-commit <its main commit>
    node scripts/build-mcpb.mjs --sync
    WISPLY_AI_DIR=<wisply-ai checkout at that commit> WISPLY_PLUGIN_DIR=<plugin checkout> npm test
@@ -455,13 +468,20 @@ can't load, and `npm run sync-vendor` refuses it.
 
    sync-vendor reads the files with `git show <commit>:<path>`, writes them
    byte for byte with their sha256 in `contract/SOURCE.json`
-   (`provisional: false`), and regenerates `contract/mcp-contract.mjs`.
-3. Do what the tests then ask for: `tests/skills.test.mjs` wants
-   `commands/wisply/live.toml` to call `get_live_transcript` with
-   `tail_words` set to 400 without the hedge, and `tail_words` gone from its
-   `PENDING_ARGUMENTS`; the CHANGELOG's known limitations lose the
-   provisional-contract and `/wisply:live` items (the release gate refuses a
-   release section that still says the contract is provisional).
+   (`provisional: false`, and `"on_main": true` when the checkout's
+   `origin/main` has the commit), and regenerates `contract/mcp-contract.mjs`.
+   A merge that kept 5e4d308 can name that commit; a squash or rebase merge
+   needs the main commit. With `WISPLY_AI_DIR`, `tests/upstream.test.mjs`
+   checks the vendored file against that commit and the checkout, and
+   `"on_main"` against `origin/main`.
+3. Do what the tests then ask for. If the file changed in review, the
+   descriptors' tests, `tests/skills.test.mjs` (the prompts' tools and
+   arguments) and `mcpb/manifest.json` (`--sync` above) follow it; a new tool
+   in `distribution.exclude_tools` needs the connector to hide it
+   (`tests/contract.test.mjs`). The CHANGELOG's known limitations lose the
+   item about `"on_main": false` (the release gate refuses a release section
+   that still has it). `docs/release-checks.json`'s `port_exclusive` is
+   recorded for the vendored commit, so a new commit asks for it again.
 4. Open the PR with the wisply-ai commit and the file's sha256 in its
    description. `"private"` stays until the npm name is final too (release
    control 3).

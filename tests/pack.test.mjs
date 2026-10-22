@@ -49,20 +49,22 @@ test('the tarball holds only bin, lib, contract, clients, README, LICENSE and pa
 
 /**
  * What is wrong with a state's "private" flag; [] when it is right. npm publish refuses a private package without
- * running any script, so a plain `npm publish` can't ship a provisional contract or an npm name nobody owns yet. The
- * two are separate facts with separate changes: the re-vendor from wisply-ai (DIST-M5) clears the first, Alex's npm
- * organization (Grok packet G-NPM, recorded as npm_scope in docs/release-checks.json) the second. Dropping the flag
- * is the explicit release step once both hold.
- * @param {{provisional: boolean, packageNameFinal: boolean, pkg: Record<string, unknown>}} state
+ * running any script, so a plain `npm publish` can't ship a contract that isn't final or an npm name nobody owns
+ * yet. The two are separate facts with separate changes: a re-vendor from a wisply-ai main commit clears the first
+ * (contract/SOURCE.json neither provisional nor "on_main": false; DIST-M5 vendored DIST-A1's branch commit, so a
+ * re-vendor after its merge remains), Alex's npm organization (Grok packet G-NPM, recorded as npm_scope in
+ * docs/release-checks.json) the second. Dropping the flag is the explicit release step once both hold.
+ * @param {{provisional: boolean, onMain?: boolean, packageNameFinal: boolean, pkg: Record<string, unknown>}} state
  * @returns {string[]}
  */
-function privateProblems({ provisional, packageNameFinal, pkg: data }) {
-  const publishable = provisional === false && packageNameFinal === true;
+function privateProblems({ provisional, onMain = false, packageNameFinal, pkg: data }) {
+  const publishable = provisional === false && onMain === true && packageNameFinal === true;
   if (data.private === true) {
     return publishable ? ['remove "private" from package.json: the contract is final and the name is Wisply\'s'] : [];
   }
   if (!publishable) {
-    return ['package.json "private" must be true while contract/SOURCE.json is provisional or PACKAGE_NAME_FINAL is false'];
+    return ['package.json "private" must be true while contract/SOURCE.json is provisional or not from wisply-ai\'s ' +
+      'main ("on_main"), or PACKAGE_NAME_FINAL is false'];
   }
   return Object.hasOwn(data, 'private') ? ['remove "private" rather than setting it to false'] : [];
 }
@@ -87,8 +89,9 @@ function nameProblems({ packageName, packageNameFinal, npmScope }) {
   return problems;
 }
 
-const TREE = { provisional: SOURCE.provisional, packageNameFinal: PACKAGE_NAME_FINAL, pkg, packageName: PACKAGE_NAME,
-  npmScope: CHECKS.npm_scope };
+const APP_SOURCE = SOURCE.sources.find((source) => source.repository === 'github:fal3/wisply-ai');
+const TREE = { provisional: SOURCE.provisional, onMain: APP_SOURCE?.on_main === true, packageNameFinal: PACKAGE_NAME_FINAL, pkg,
+  packageName: PACKAGE_NAME, npmScope: CHECKS.npm_scope };
 
 test('npm refuses to publish until the contract is final and the name is Wisply\'s ("private": true)', () => {
   assert.equal(typeof SOURCE.provisional, 'boolean');
@@ -104,12 +107,17 @@ test('the publish and name gates allow every step towards the release and refuse
   // The tree checks above only see today's state, which a weaker gate (say, "private" exactly while provisional)
   // would pass too. This table pins the gates for every state the release passes through, and for the mistakes.
   const npm = (verified) => ({ name: '@wisply', verified });
-  const state = (change) => ({ provisional: true, packageNameFinal: false, pkg: { private: true }, packageName: '@wisply/mcp',
-    npmScope: npm(false), ...change });
+  // onMain: whether a re-vendored contract came from wisply-ai's main ("on_main"); true unless a case says otherwise.
+  const state = (change) => ({ provisional: true, onMain: true, packageNameFinal: false, pkg: { private: true },
+    packageName: '@wisply/mcp', npmScope: npm(false), ...change });
   const PRIVATE = 'private';
   const NAME = 'name';
   const cases = [
-    ['today: provisional contract, name not Wisply\'s yet', state({}), []],
+    ['before DIST-M5: provisional contract, name not Wisply\'s yet', state({}), []],
+    ['today (DIST-M5): vendored from DIST-A1\'s unmerged commit, name not Wisply\'s yet',
+      state({ provisional: false, onMain: false }), []],
+    ['vendored from an unmerged commit, name Wisply\'s: "private" stays until the re-vendor from main',
+      state({ provisional: false, onMain: false, packageNameFinal: true, npmScope: npm(true) }), []],
     // Valid on the way: "private" stays until both facts hold. A SOURCE.json that says final without a real commit
     // and hash is tests/vendor.test.mjs's to refuse, not this file's.
     ['the contract re-vendored first (DIST-M5), name not Wisply\'s yet', state({ provisional: false }), []],
@@ -119,6 +127,8 @@ test('the publish and name gates allow every step towards the release and refuse
     // Refused: npm could publish too early, messages could name a package nobody owns, or a flag disagrees with the record.
     ['"private" dropped after the re-vendor while the name isn\'t Wisply\'s', state({ provisional: false, pkg: {} }), [PRIVATE]],
     ['"private" dropped while the contract is provisional', state({ packageNameFinal: true, npmScope: npm(true), pkg: {} }), [PRIVATE]],
+    ['"private" dropped while the contract isn\'t from wisply-ai\'s main',
+      state({ provisional: false, onMain: false, packageNameFinal: true, npmScope: npm(true), pkg: {} }), [PRIVATE]],
     ['"private": false instead of true', state({ pkg: { private: false } }), [PRIVATE]],
     ['"private": false instead of removed at the release',
       state({ provisional: false, packageNameFinal: true, npmScope: npm(true), pkg: { private: false } }), [PRIVATE]],

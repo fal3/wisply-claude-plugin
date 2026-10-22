@@ -46,7 +46,8 @@ jobs:
       # Trusted publishing needs npm 11.5.1 or later, staged publishing 11.15.0.
       - run: npm install -g npm@11.21.0 --ignore-scripts
       - run: npm run check
-      # Refuses a provisional contract, a package that is still private, a tag
-      # that isn't v<version> and a CHANGELOG without this version's date.
+      # Refuses a contract that is provisional or not from wisply-ai's main,
+      # unrecorded release checks, a package that is still private, a tag that
+      # isn't v<version> and a CHANGELOG without this version's date.
       - run: WISPLY_RELEASE=1 npm test
       - run: npm stage publish --provenance --access public --ignore-scripts

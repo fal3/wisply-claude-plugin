@@ -67,6 +67,7 @@ test('releaseProblems: a releasable tree passes, and each missing step is named'
     [{ changelog: changelog('## Unreleased') }, /the first section must be/],
     [{ changelog: '# Changelog\n\nNothing yet.\n' }, /no version section/],
     [{ changelog: changelog('## 1.2.3 - 2026-11-02', '- The contract is provisional.') }, /still says the contract is provisional/],
+    [{ changelog: changelog('## 1.2.3 - 2026-11-02', '- SOURCE.json says `"on_main": false`.') }, /isn't from wisply-ai's main/],
     [{ env: { GITHUB_ACTIONS: 'true', GITHUB_REF_TYPE: 'tag', GITHUB_REF_NAME: 'v1.2.4' } }, /must run for tag v1\.2\.3, not tag v1\.2\.4/],
     [{ env: { GITHUB_ACTIONS: 'true', GITHUB_REF_TYPE: 'branch', GITHUB_REF_NAME: 'main' } }, /must run for tag v1\.2\.3, not branch main/],
   ];

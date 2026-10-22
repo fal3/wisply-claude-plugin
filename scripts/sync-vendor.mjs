@@ -22,6 +22,13 @@
 // wisply-ai has such a file) and marks it provisional. tests/vendor.test.mjs
 // refuses a provisional source when WISPLY_RELEASE=1, so nothing can be
 // published from it.
+//
+// Without --provisional, SOURCE.json also says whether wisply-ai's main has
+// the commit ("on_main": the --app checkout's refs/remotes/origin/main
+// contains it; fetch first). A commit from an unmerged branch (DIST-A1
+// before it merges, say) is vendored with "on_main": false, which
+// tests/vendor.test.mjs refuses when WISPLY_RELEASE=1: run sync-vendor
+// again from the main commit once the branch is merged.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
@@ -50,6 +57,18 @@ const git = (dir, args, stderr = 'inherit') =>
 const fullCommit = (dir, commit) => git(dir, ['rev-parse', '--verify', `${commit}^{commit}`]).toString('utf8').trim();
 const existsAt = (dir, commit, path) => {
   try { git(dir, ['cat-file', '-e', `${commit}:${path}`], 'ignore'); return true; } catch { return false; }
+};
+/** The ref whose history decides "on_main": the remote's main, never a local branch someone may have committed to. */
+export const MAIN_REF = 'refs/remotes/origin/main';
+/** Whether `commit` is on the checkout's origin/main; false when there is no origin/main. */
+const onMain = (dir, commit) => {
+  try {
+    git(dir, ['rev-parse', '--verify', '-q', `${MAIN_REF}^{commit}`], 'ignore');
+    git(dir, ['merge-base', '--is-ancestor', commit, MAIN_REF], 'ignore');
+    return true;
+  } catch {
+    return false;
+  }
 };
 
 /** A refusal: printed as is, and nothing has been written. */
@@ -127,6 +146,7 @@ function main(argv) {
     }
   }
 
+  const appOnMain = values.provisional ? null : onMain(values.app, appCommit);
   const source = {
     schema: VENDOR_SCHEMA,
     provisional: values.provisional,
@@ -135,6 +155,7 @@ function main(argv) {
         repository: APP_REPOSITORY,
         commit: values.provisional ? `${appCommit.slice(0, 7)} (transcribed)` : appCommit,
         provisional: values.provisional,
+        ...(values.provisional ? {} : { on_main: appOnMain }),
         files: appFiles,
       },
       { repository: PLUGIN_REPOSITORY, commit: pluginCommit, provisional: false, files: pluginFiles },
@@ -151,6 +172,10 @@ function main(argv) {
       'partly vendored: restore it with git checkout -- contract lib/identity.mjs');
   }
   process.stdout.write(`wrote ${SOURCE_FILE}${values.provisional ? ' (provisional)' : ''}\n`);
+  if (appOnMain === false) {
+    process.stderr.write(`note: ${appCommit.slice(0, 7)} isn't on the app checkout's origin/main, so SOURCE.json says ` +
+      '"on_main": false and WISPLY_RELEASE=1 refuses it: run sync-vendor again from the main commit once it is merged\n');
+  }
 }
 
 /** Whether this file is the program node runs (not an import), with symlinks resolved on both sides. */

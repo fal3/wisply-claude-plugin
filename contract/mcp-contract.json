@@ -64,17 +64,47 @@
     "internal"
   ],
   "legacy_error_prefixes": [
-    ["Recording control is disabled for agents", "recording_control_disabled"],
-    ["A recording is already in progress.", "already_recording"],
-    ["No recording is in progress.", "not_recording"],
-    ["Recording could not be started:", "recording_failed"],
-    ["No recording has generated insights yet.", "no_memo_with_insights"],
-    ["No memo found with id", "memo_not_found"],
-    ["Action Bot is turned off", "action_bot_unavailable"],
-    ["Action Bot writes for kind", "action_kind_not_allowed"]
+    [
+      "Recording control is disabled for agents",
+      "recording_control_disabled"
+    ],
+    [
+      "A recording is already in progress.",
+      "already_recording"
+    ],
+    [
+      "No recording is in progress.",
+      "not_recording"
+    ],
+    [
+      "Recording could not be started:",
+      "recording_failed"
+    ],
+    [
+      "No recording has generated insights yet.",
+      "no_memo_with_insights"
+    ],
+    [
+      "No memo found with id",
+      "memo_not_found"
+    ],
+    [
+      "Action Bot is turned off",
+      "action_bot_unavailable"
+    ],
+    [
+      "Action Bot writes for kind",
+      "action_kind_not_allowed"
+    ]
   ],
   "live_transcript": {
     "max_tail_words": 5000
+  },
+  "distribution": {
+    "exclude_tools": [
+      "setup_claude"
+    ],
+    "setup_claude_token_free": true
   },
   "tool_descriptors": [
     {
@@ -125,7 +155,9 @@
             "maximum": 50
           }
         },
-        "required": ["query"]
+        "required": [
+          "query"
+        ]
       },
       "annotations": {
         "title": "Search Transcripts",
@@ -142,7 +174,14 @@
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
-        "properties": {}
+        "properties": {
+          "tail_words": {
+            "type": "integer",
+            "description": "Return only the last N words of the transcript (1–5000). word_count still counts every word. Omit for the whole transcript.",
+            "minimum": 1,
+            "maximum": 5000
+          }
+        }
       },
       "annotations": {
         "title": "Get Live Transcript",
@@ -222,7 +261,11 @@
           },
           "kind": {
             "type": "string",
-            "enum": ["calendar", "zoom_meeting", "task"],
+            "enum": [
+              "calendar",
+              "zoom_meeting",
+              "task"
+            ],
             "description": "What to propose. Default calendar. zoom_meeting needs Zoom connected in Wisply; task is a Reminder."
           },
           "start": {
@@ -274,14 +317,14 @@
     {
       "name": "setup_claude",
       "title": "Set Up Claude",
-      "description": "Inspect or complete Wisply's Claude setup. Call with no arguments to see whether an Anthropic API key is stored and the cloud-AI consent_status. Pass api_key (sk-ant-…) to store the key in the user's Keychain; Wisply then shows the user its Cloud AI consent sheet. Pass request_consent=true to show that sheet without storing a key. Consent can only be granted by the user inside Wisply — never by this tool. Returns a ready-to-paste Cursor mcp.json snippet.",
+      "description": "Inspect or complete Wisply's Claude setup. Call with no arguments to see whether an Anthropic API key is stored and the cloud-AI consent_status. Prefer Wisply Settings for the key: ask the user to paste it in Wisply > Settings > Integrations > Claude & Agents, and don't ask for it in chat. A key passed here as api_key is visible to this AI app and its AI provider. Passing api_key (sk-ant-…) stores the key in the user's Keychain, replacing any stored key; Wisply then shows the user its Cloud AI consent sheet. Pass request_consent=true to show that sheet without storing a key. Consent can only be granted by the user inside Wisply — never by this tool. Returns a Cursor mcp.json snippet with a placeholder where the token goes; the user copies the token from Wisply settings. This tool never returns a token.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
           "api_key": {
             "type": "string",
-            "description": "Anthropic API key (sk-ant-…). Omit to only inspect the current setup."
+            "description": "Anthropic API key (sk-ant-…). Replaces any stored key. Visible to this AI app and its AI provider, so prefer the user pasting it in Wisply Settings. Omit to only inspect the current setup."
           },
           "request_consent": {
             "type": "boolean",
@@ -292,7 +335,7 @@
       "annotations": {
         "title": "Set Up Claude",
         "readOnlyHint": false,
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": false,
         "openWorldHint": false
       }

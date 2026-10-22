@@ -4,17 +4,22 @@
 //
 //   WISPLY_AI_DIR=/home/user/wisply-ai WISPLY_PLUGIN_DIR=/home/user/wisply-claude-plugin npm test
 //
-// While contract/SOURCE.json is provisional (no Docs/mcp-contract.json with
-// tool_descriptors upstream yet), the contract is checked against the Swift
-// source it was transcribed from, at the commit SOURCE.json records, instead
-// of byte for byte. A separate test says when the checkout's Swift source has
-// moved on from that commit.
+// The vendored contract is wisply-ai's Docs/mcp-contract.json at the commit
+// contract/SOURCE.json records, byte for byte. That commit may be on an
+// unmerged branch (DIST-M5 vendored it from DIST-A1 before DIST-A1 merged):
+// SOURCE.json's "on_main" says so, a test here checks the claim against the
+// checkout's origin/main, and WISPLY_RELEASE=1 refuses "on_main": false
+// (tests/vendor.test.mjs).
 //
-// The fixture follows wisply-ai's main. When WISPLY_AI_DIR is an unmerged
-// branch (a lane's worktree), drift that only the branch's own commits bring
-// is listed and the test is skipped: it reaches the fixture through the
-// re-vendor once it is on main (DIST-M5). Drift that main already has fails,
+// The checkout's contract must be the vendored one. When WISPLY_AI_DIR is an
+// unmerged branch (a lane's worktree), a difference that only the branch's own
+// commits bring is listed and the test is skipped: it reaches this repository
+// through a re-vendor once it is on main. A difference main already has fails,
 // on any checkout.
+//
+// While SOURCE.json is provisional (a fixture transcribed by hand), the
+// contract is checked against the Swift source it was transcribed from
+// instead; those tests skip once it isn't.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -24,6 +29,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import contract, { contractProblems } from '../lib/contract.mjs';
 import { MAX_RESPONSE_BYTES, PROTOCOL_VERSIONS } from '../lib/constants.mjs';
+import { MAIN_REF } from '../scripts/sync-vendor.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const SOURCE = JSON.parse(readFileSync(join(ROOT, 'contract/SOURCE.json'), 'utf8'));
@@ -113,13 +119,48 @@ function failOnDriftFromMain(t, check, advice, { read = readCheckout, branch = A
   assert.fail(`${differences.join('; ')}: ${advice}`);
 }
 
-test('app: the vendored contract equals Docs/mcp-contract.json', {
-  skip: !APP_DIR ? 'WISPLY_AI_DIR not set' : appSource.provisional ? 'provisional contract (checked against the Swift source below)' : false,
-}, () => {
-  assert.ok(local('contract/mcp-contract.json').equals(readFileSync(join(APP_DIR, APP_CONTRACT))),
-    'contract/mcp-contract.json differs from wisply-ai: run npm run sync-vendor');
+const vendoredSkip = () => (!APP_DIR ? 'WISPLY_AI_DIR not set'
+  : appSource.provisional ? 'provisional contract (checked against the Swift source below)' : false);
+const VENDORED_AT = appSource.provisional ? null : appSource.commit.slice(0, 7);
+
+test('app: the vendored contract is Docs/mcp-contract.json at the commit contract/SOURCE.json records', { skip: vendoredSkip() }, () => {
   const atCommit = gitShow(APP_DIR, appSource.commit, APP_CONTRACT);
-  if (atCommit) assert.ok(local('contract/mcp-contract.json').equals(atCommit), `differs from ${appSource.commit}`);
+  assert.ok(atCommit, `${APP_CONTRACT} at ${VENDORED_AT}: not in the WISPLY_AI_DIR checkout (fetch that commit, or the ` +
+    'branch it is on)');
+  assert.ok(local('contract/mcp-contract.json').equals(atCommit),
+    `contract/mcp-contract.json differs from ${APP_CONTRACT} at ${VENDORED_AT}: run npm run sync-vendor`);
+});
+
+/**
+ * How the contract file read through `read` differs from the vendored one: [] when it is the same, or when there
+ * is none (wisply-ai's main before raycast PR 1 and DIST-A1).
+ * @param {(path: string) => string | null} read
+ */
+function vendoredDrift(read) {
+  const text = read(APP_CONTRACT);
+  if (text === null || text === local('contract/mcp-contract.json').toString('utf8')) return [];
+  return [`${APP_CONTRACT} isn't the vendored contract (wisply-ai ${VENDORED_AT ?? appSource.commit})`];
+}
+
+test('app: the checkout\'s Docs/mcp-contract.json is the vendored contract', { skip: vendoredSkip() }, (t) => {
+  failOnDriftFromMain(t, vendoredDrift, 're-vendor from its commit on main (npm run sync-vendor)');
+});
+
+test('app: "on_main" in contract/SOURCE.json says whether wisply-ai\'s origin/main has the vendored commit', { skip: vendoredSkip() }, (t) => {
+  if (!gitLine(APP_DIR, ['rev-parse', '--verify', '-q', `${MAIN_REF}^{commit}`])) {
+    t.skip('no origin/main in the WISPLY_AI_DIR checkout');
+    return;
+  }
+  const onMain = git(APP_DIR, ['merge-base', '--is-ancestor', appSource.commit, MAIN_REF]) !== null;
+  if (appSource.on_main === true) {
+    assert.ok(onMain, `contract/SOURCE.json says "on_main": true, but origin/main doesn't have ${VENDORED_AT}: fetch ` +
+      'wisply-ai, or re-vendor from its main');
+  } else if (onMain) {
+    t.todo(`origin/main has ${VENDORED_AT} now: run npm run sync-vendor again so contract/SOURCE.json says "on_main": true`);
+  } else {
+    t.todo(`${VENDORED_AT} isn't on origin/main yet ("on_main": false, vendored from an unmerged branch): once it is ` +
+      'merged, run npm run sync-vendor again from the main commit. WISPLY_RELEASE=1 refuses the contract until then.');
+  }
 });
 
 const isJSONObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -567,6 +608,19 @@ test('drift fails on main, and on a branch that left main with it; drift only a 
   assert.deepEqual(contractDrift(file(null)), []);
   assert.deepEqual(contractDrift(file('{')), [`${APP_CONTRACT} isn't JSON`]);
   assert.deepEqual(contractDrift(file('null')), [`${APP_CONTRACT} isn't a JSON object`]);
+
+  // The vendored contract: the same bytes, or no file yet, is no drift; anything else is listed on a lane
+  // whose base has no contract (main before DIST-A1 merges), and fails where main has another one.
+  const vendored = local('contract/mcp-contract.json').toString('utf8');
+  assert.deepEqual(vendoredDrift(file(vendored)), []);
+  assert.deepEqual(vendoredDrift(file(null)), []);
+  assert.equal(vendoredDrift(file(`${vendored} `)).length, 1);
+  calls.length = 0;
+  failOnDriftFromMain(t, vendoredDrift, 're-vendor', { read: file('{}'), branch: lane, readBase: () => file(null) });
+  assert.equal(calls.at(-1)[0], 'skip');
+  assert.throws(() => failOnDriftFromMain(t, vendoredDrift, 're-vendor', { read: file('{}'), branch: lane, readBase: () => file('[]') }),
+    /isn't the vendored contract/);
+  assert.throws(() => failOnDriftFromMain(t, vendoredDrift, 're-vendor', { read: file('{}'), branch: null }), /isn't the vendored contract/);
 });
 
 test('the Swift reader parses the catalog\'s shapes and rejects anything else', () => {

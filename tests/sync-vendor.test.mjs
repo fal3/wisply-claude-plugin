@@ -93,7 +93,7 @@ test('a contract the connector can load is vendored byte for byte, not provision
     provisional: false,
     sources: [
       {
-        repository: 'github:fal3/wisply-ai', commit: app.commit, provisional: false,
+        repository: 'github:fal3/wisply-ai', commit: app.commit, provisional: false, on_main: false,
         files: { 'contract/mcp-contract.json': { upstream: 'Docs/mcp-contract.json', sha256: sha256(bytes) } },
       },
       {
@@ -105,6 +105,37 @@ test('a contract the connector can load is vendored byte for byte, not provision
   // gen-data ran, and the connector loads what was vendored.
   const loaded = await import(`${pathToFileURL(join(copy, 'lib/contract.mjs')).href}?${Date.now()}`);
   assert.equal(loaded.descriptorFor('get_live_transcript').inputSchema.properties.tail_words.maximum, 5000);
+});
+
+test('"on_main" says whether the app checkout\'s origin/main has the commit, and only that ref counts', (t) => {
+  const { parent, copy, plugin } = workspace(t);
+  const app = repoWith(parent, 'wisply-ai', { 'Docs/mcp-contract.json': jsonBytes(finalContract()) });
+  const appSource = () => JSON.parse(readFileSync(join(copy, 'contract/SOURCE.json'), 'utf8')).sources[0];
+  // No origin/main (and a local main that has the commit doesn't count): not on main, and sync-vendor says so.
+  let result = syncVendor(copy, app, plugin);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(appSource().on_main, false);
+  assert.match(result.stderr, /isn't on the app checkout's origin\/main, so SOURCE\.json says "on_main": false/);
+  // A branch commit that origin/main doesn't have yet (DIST-A1 before it merges).
+  git(app.dir, 'update-ref', 'refs/remotes/origin/main', app.commit);
+  git(app.dir, 'checkout', '-q', '-b', 'claude/lane');
+  writeFileSync(join(app.dir, 'NOTES.md'), 'a later commit on the lane\n');
+  git(app.dir, 'add', '-A');
+  git(app.dir, 'commit', '-q', '-m', 'lane');
+  const lane = { dir: app.dir, commit: git(app.dir, 'rev-parse', 'HEAD') };
+  result = syncVendor(copy, lane, plugin);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(appSource().on_main, false);
+  // Once origin/main has it (the merge), the same command records true and says nothing more.
+  git(app.dir, 'update-ref', 'refs/remotes/origin/main', lane.commit);
+  result = syncVendor(copy, lane, plugin);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual({ commit: appSource().commit, on_main: appSource().on_main }, { commit: lane.commit, on_main: true });
+  assert.doesNotMatch(result.stderr, /on_main/);
+  // --provisional records no "on_main": the transcribed fixture comes from no commit's file.
+  result = syncVendor(copy, lane, plugin, '--provisional');
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(Object.hasOwn(appSource(), 'on_main'), false);
 });
 
 test('a contract without tool_descriptors (raycast PR 1 alone) is refused, and nothing is written', (t) => {

@@ -23,6 +23,12 @@ registry entries and skill built from this repository.
   tools the token's scope reaches, in contract order; the four read-only tools
   when no token is set; `setup_claude` only with `--allow-claude-setup`;
   `--read-only` to offer only the read-only tools.
+- The contract is the Wisply app's own `Docs/mcp-contract.json`, vendored
+  byte for byte from wisply-ai: the three token scopes, error codes and
+  `live_transcript` (raycast PR 1), and the tool descriptors with
+  `setup_claude` marked destructive and the distribution gate that leaves it
+  out of default installs (DIST-A1). `get_live_transcript` takes
+  `tail_words`, and `/wisply:live` asks for the last 400 words.
 - Plain tool errors for every failure (token not set or malformed, Wisply not
   answering, identity check failed, Wisply too old, Wisply unable to read its
   tokens from the Keychain, tool outside the scope, another platform), none of
@@ -164,7 +170,8 @@ registry entries and skill built from this repository.
   version goes live only after a maintainer approves it on npm with
   two-factor authentication.
 - The release gate `WISPLY_RELEASE=1 npm test`, which lists every step still
-  missing: a provisional contract (`tests/vendor.test.mjs`); the checks only
+  missing: a contract that is provisional or not from wisply-ai's `main`
+  (`tests/vendor.test.mjs`); the checks only
   a maintainer can record in `docs/release-checks.json` (the Mac port test,
   the MCP Registry namespace, Wisply's npm name), `PACKAGE_NAME_FINAL` with
   no `"private"` in `package.json`, and a destructive `setup_claude` in the
@@ -177,28 +184,29 @@ registry entries and skill built from this repository.
   contract can't make the connector's messages name an npm package nobody
   owns yet.
 - `npm run sync-vendor` reads and checks every upstream file before it
-  writes anything, and refuses a missing file or a contract the connector
-  can't load (for example one with `tool_descriptors` but no `wspr_` scope,
-  or the other way round).
+  writes anything, refuses a missing file or a contract the connector can't
+  load (for example one with `tool_descriptors` but no `wspr_` scope, or the
+  other way round), and records in `contract/SOURCE.json` whether wisply-ai's
+  `origin/main` has the commit (`"on_main"`).
 
 ### Known limitations
 
-- The contract is provisional (transcribed from Wisply's tool catalog at
-  wisply-ai 885cc75): wisply-ai's `Docs/mcp-contract.json` isn't on its
-  `main` yet, and it needs both raycast PR 1 (the `wspr_` scope, error
-  codes, `tail_words`) and DIST-A1 (`tool_descriptors`). Until it is
-  re-vendored and the npm name is Wisply's (`npm_scope` recorded in
-  `docs/release-checks.json`), `package.json` stays `"private"` and npm
-  refuses to publish the package.
+- The contract comes from DIST-A1's commit 5e4d308 in wisply-ai, which is on
+  a branch, not yet on wisply-ai's `main`, so `contract/SOURCE.json` says
+  `"on_main": false`. Until `npm run sync-vendor` runs again from the main
+  commit that merges it (SECURITY.md, "Re-vendoring the contract") and the
+  npm name is Wisply's (`npm_scope` recorded in `docs/release-checks.json`),
+  `package.json` stays `"private"`, npm refuses to publish the package and
+  `WISPLY_RELEASE=1 npm test` fails.
 - The bundle's `fileSha256` in `server.json` is a placeholder until the
   release asset exists; `WISPLY_REGISTRY_RELEASE=1 npm test` refuses it, and
   refuses any hash without `WISPLY_MCPB_FILE`.
 - `setup_claude` (only with `--allow-claude-setup`): in Wisply builds without
   DIST-A1's change, its answer includes a Cursor snippet with the full-access
-  token, and the connector passes it on unchanged. Leave the switch off until
-  every Wisply you use has that change; SECURITY.md says so.
-- `/wisply:live` reads the whole live transcript until the contract is
-  re-vendored with `tail_words` (see the design differences).
+  token, and the connector passes it on unchanged (the contract's
+  `setup_claude_token_free` marker says only what current builds do). Leave
+  the switch off until every Wisply you use has that change; SECURITY.md says
+  so.
 
 Differences from the distribution design, to fold into the spec, are listed
 in [docs/design-differences.md](docs/design-differences.md).

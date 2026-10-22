@@ -14,8 +14,11 @@ import { ROOT, readText } from './helpers/repo.mjs';
 
 /** The remote server's tools (Cloud Connect spec, "Tools"); the skill also serves that server. */
 const CLOUD_TOOLS = ['search_memos', 'list_memos', 'get_memo', 'get_transcript', 'get_action_items', 'get_account_status', 'search', 'fetch'];
-/** Arguments the prompts use that the provisional contract doesn't list yet (raycast PR 1 adds tail_words). */
-const PENDING_ARGUMENTS = { get_live_transcript: ['tail_words'] };
+/**
+ * Arguments the prompts use that the vendored contract doesn't list yet. Empty since the re-vendor from DIST-A1
+ * (DIST-M5) brought raycast PR 1's tail_words; a prompt that needs an argument before wisply-ai has it goes here.
+ */
+const PENDING_ARGUMENTS = {};
 /** live.toml's interim wording, for a contract whose get_live_transcript takes no arguments. */
 const LIVE_HEDGE = /if the tool accepts tail_words, otherwise with\s+no arguments/;
 const argumentNames = (tool) => Object.keys(contract.tool_descriptors.find((d) => d.name === tool).inputSchema.properties ?? {});

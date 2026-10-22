@@ -158,7 +158,9 @@ test('releaseCheckProblems: a releasable tree passes, and each missing check is 
     [changed('registry_namespace', { verified: false }), /registry_namespace isn't verified: mcp-publisher login dns/],
     [changed('registry_namespace', { how: 'github: logged in as fal3' }), /registry_namespace isn't verified/],
     [{ ...good, pkg: { mcpName: 'io.github.fal3/wisply-mcp' } }, /must agree/],
-    [{ ...good, contract }, /setup_claude must have destructiveHint: true/],
+    [{ ...good, contract: { tool_descriptors: descriptors.map((descriptor) => (descriptor.name === CLAUDE_SETUP_TOOL
+      ? { ...descriptor, annotations: { ...descriptor.annotations, destructiveHint: false } } : descriptor)) } },
+    /setup_claude must have destructiveHint: true/],
     // A re-vendored contract alone never makes the name final: npm ownership is its own record.
     [changed('npm_scope', { verified: false }), /npm_scope isn't recorded: Alex owns @wisply on npm/],
     [changed('npm_scope', { how: null }), /npm_scope isn't recorded/],
@@ -184,7 +186,8 @@ test('releaseCheckProblems: a releasable tree passes, and each missing check is 
   for (const key of unrecorded) assert.ok(problems.some((problem) => problem.includes(`${key} isn't`)), key);
   assert.equal(problems.some((problem) => problem.includes('PACKAGE_NAME_FINAL must be true')),
     PACKAGE_NAME_FINAL !== true || Object.hasOwn(today.pkg, 'private'));
-  // As of DIST-M2's review: nothing is recorded, the name isn't final, package.json is private, and the contract
-  // still marks setup_claude non-destructive.
-  if (unrecorded.length === 3) assert.equal(problems.length, 5);
+  // The re-vendored contract (DIST-M5, from DIST-A1) marks setup_claude destructive, so that check passes; as of
+  // DIST-M5, nothing is recorded, the name isn't final and package.json is private.
+  assert.ok(!problems.some((problem) => problem.includes(`${CLAUDE_SETUP_TOOL} must have destructiveHint`)), problems.join(' | '));
+  if (unrecorded.length === 3) assert.equal(problems.length, 4);
 });

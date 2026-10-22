@@ -1,5 +1,6 @@
-// Vendored files match contract/SOURCE.json, and a provisional contract
-// can't be released.
+// Vendored files match contract/SOURCE.json, and a provisional contract, or
+// one vendored from a wisply-ai commit that isn't on its main yet, can't be
+// released.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -25,6 +26,12 @@ test('SOURCE.json records every vendored file with its sha256', () => {
     } else {
       assert.match(source.commit, /^[0-9a-f]{40}$/);
     }
+    // wisply-ai's entry says whether its main had the commit when it was vendored (scripts/sync-vendor.mjs).
+    if (source.repository === 'github:fal3/wisply-ai' && !source.provisional) {
+      assert.equal(typeof source.on_main, 'boolean', 'run npm run sync-vendor: it records "on_main"');
+    } else {
+      assert.equal(Object.hasOwn(source, 'on_main'), false, source.repository);
+    }
     for (const [path, entry] of Object.entries(source.files)) {
       listed.push(path);
       assert.ok(existsSync(join(ROOT, path)), path);
@@ -35,15 +42,26 @@ test('SOURCE.json records every vendored file with its sha256', () => {
   assert.deepEqual(listed.sort(), ['contract/mcp-contract.json', 'lib/identity.mjs']);
 });
 
+const APP = SOURCE.sources.find((source) => source.repository === 'github:fal3/wisply-ai');
+/** Released only from wisply-ai's main: the contract Wisply's own Mac CI has pinned to its Swift source. */
+const releasable = () => SOURCE.provisional === false && APP?.on_main === true;
+
 test('a provisional contract is never released (WISPLY_RELEASE=1)', () => {
   if (process.env.WISPLY_RELEASE !== '1') return;
   assert.equal(SOURCE.provisional, false,
     'contract/SOURCE.json says provisional: re-vendor with npm run sync-vendor (SECURITY.md, "Re-vendoring the contract")');
 });
 
-test('the release check really fails while the source is provisional', { skip: process.env.WISPLY_RELEASE === '1' }, () => {
+test('a contract from a wisply-ai commit that main doesn\'t have is never released (WISPLY_RELEASE=1)', () => {
+  if (process.env.WISPLY_RELEASE !== '1' || SOURCE.provisional) return;
+  assert.equal(APP.on_main, true, `contract/SOURCE.json: wisply-ai ${APP.commit.slice(0, 7)} wasn't on its main when ` +
+    'it was vendored ("on_main": false): once it is merged, run npm run sync-vendor again from the main commit ' +
+    '(SECURITY.md, "Re-vendoring the contract")');
+});
+
+test('the release check really fails while the source is provisional or not on main', { skip: process.env.WISPLY_RELEASE === '1' }, () => {
   const env = { ...process.env, WISPLY_RELEASE: '1' };
   delete env.NODE_TEST_CONTEXT;
   const result = spawnSync(process.execPath, ['--test', fileURLToPath(import.meta.url)], { cwd: ROOT, env, encoding: 'utf8' });
-  assert.equal(result.status === 0, !SOURCE.provisional, result.stdout.slice(-2000));
+  assert.equal(result.status === 0, releasable(), result.stdout.slice(-2000));
 });

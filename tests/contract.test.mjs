@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import contract, { CONTRACT_SCHEMA, contractProblems, defaultPort, descriptorFor, scopes, tools } from '../lib/contract.mjs';
-import { DEFAULT_PORT } from '../lib/constants.mjs';
+import { CLAUDE_SETUP_TOOL, DEFAULT_PORT } from '../lib/constants.mjs';
 import { IDENTITY_SCHEME } from '../lib/identity.mjs';
 import { scopeOfToken, toolsFor } from '../lib/scopes.mjs';
 
@@ -60,11 +60,28 @@ test('every tool has a descriptor that is a closed JSON Schema object', () => {
     assert.equal(annotations.title, title);
     assert.equal(annotations.readOnlyHint, !SIDE_EFFECTS.has(name), name);
     assert.equal(annotations.idempotentHint, annotations.readOnlyHint, name);
-    assert.equal(annotations.destructiveHint, false);
+    // Only setup_claude is destructive: its api_key replaces the Anthropic key stored in Wisply (DIST-A1).
+    assert.equal(annotations.destructiveHint, name === CLAUDE_SETUP_TOOL, name);
     assert.equal(annotations.openWorldHint, false);
   }
   for (const tool of scopes.connector.tools) assert.equal(descriptorFor(tool).annotations.readOnlyHint, true, tool);
   assert.deepEqual(descriptorFor('search_transcripts').inputSchema.required, ['query']);
+});
+
+test('the contract\'s distribution gate hides what the connector hides', () => {
+  // wisply-ai's one gate for everything that distributes the tools (the connector, the VS Code extension, the
+  // install page, the listings): tools left out of a default install, and whether setup_claude stopped returning a
+  // token. The connector hides setup_claude unless --allow-claude-setup, so a newly excluded tool fails here until
+  // the connector hides it too. Older Wisply builds don't know the marker, so the switch stays off either way.
+  assert.deepEqual(Object.keys(contract.distribution), ['exclude_tools', 'setup_claude_token_free']);
+  assert.deepEqual([...contract.distribution.exclude_tools], [CLAUDE_SETUP_TOOL]);
+  assert.equal(contract.distribution.setup_claude_token_free, true);
+  for (const scope of Object.keys(scopes)) {
+    for (const excluded of contract.distribution.exclude_tools) {
+      assert.ok(!toolsFor(contract, scope).includes(excluded), `${scope} offers ${excluded} without --allow-claude-setup`);
+      assert.ok(!toolsFor(contract, scope, { readOnly: true }).includes(excluded), `${scope} --read-only offers ${excluded}`);
+    }
+  }
 });
 
 test('error codes and legacy prefixes', () => {

@@ -102,6 +102,12 @@ export default {
   "live_transcript": {
     "max_tail_words": 5000
   },
+  "distribution": {
+    "exclude_tools": [
+      "setup_claude"
+    ],
+    "setup_claude_token_free": true
+  },
   "tool_descriptors": [
     {
       "name": "list_memos",
@@ -170,7 +176,14 @@ export default {
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
-        "properties": {}
+        "properties": {
+          "tail_words": {
+            "type": "integer",
+            "description": "Return only the last N words of the transcript (1\u20135000). word_count still counts every word. Omit for the whole transcript.",
+            "minimum": 1,
+            "maximum": 5000
+          }
+        }
       },
       "annotations": {
         "title": "Get Live Transcript",
@@ -306,14 +319,14 @@ export default {
     {
       "name": "setup_claude",
       "title": "Set Up Claude",
-      "description": "Inspect or complete Wisply's Claude setup. Call with no arguments to see whether an Anthropic API key is stored and the cloud-AI consent_status. Pass api_key (sk-ant-\u2026) to store the key in the user's Keychain; Wisply then shows the user its Cloud AI consent sheet. Pass request_consent=true to show that sheet without storing a key. Consent can only be granted by the user inside Wisply \u2014 never by this tool. Returns a ready-to-paste Cursor mcp.json snippet.",
+      "description": "Inspect or complete Wisply's Claude setup. Call with no arguments to see whether an Anthropic API key is stored and the cloud-AI consent_status. Prefer Wisply Settings for the key: ask the user to paste it in Wisply > Settings > Integrations > Claude & Agents, and don't ask for it in chat. A key passed here as api_key is visible to this AI app and its AI provider. Passing api_key (sk-ant-\u2026) stores the key in the user's Keychain, replacing any stored key; Wisply then shows the user its Cloud AI consent sheet. Pass request_consent=true to show that sheet without storing a key. Consent can only be granted by the user inside Wisply \u2014 never by this tool. Returns a Cursor mcp.json snippet with a placeholder where the token goes; the user copies the token from Wisply settings. This tool never returns a token.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
           "api_key": {
             "type": "string",
-            "description": "Anthropic API key (sk-ant-\u2026). Omit to only inspect the current setup."
+            "description": "Anthropic API key (sk-ant-\u2026). Replaces any stored key. Visible to this AI app and its AI provider, so prefer the user pasting it in Wisply Settings. Omit to only inspect the current setup."
           },
           "request_consent": {
             "type": "boolean",
@@ -324,7 +337,7 @@ export default {
       "annotations": {
         "title": "Set Up Claude",
         "readOnlyHint": false,
-        "destructiveHint": false,
+        "destructiveHint": true,
         "idempotentHint": false,
         "openWorldHint": false
       }

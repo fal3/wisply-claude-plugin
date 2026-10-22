@@ -60,8 +60,12 @@ export function releaseProblems({ version, pkg, clients, changelog, env = {} }) 
   } else {
     if (section.version !== version) problems.push(`CHANGELOG.md's first section is ${section.version}, not ${version}`);
     if (!isDate(section.date)) problems.push(`CHANGELOG.md: give "## ${section.version}" its release date (YYYY-MM-DD), not "${section.date}"`);
-    // The known-limitations item that the re-vendor removes ("The contract is provisional (...)").
+    // The known-limitations items the re-vendors remove: "The contract is provisional (...)" (until DIST-M5), and
+    // the one about a contract vendored from a branch (`"on_main": false`, until the re-vendor from main).
     if (/\bcontract is provisional\b/i.test(section.body)) problems.push(`CHANGELOG.md: the ${section.version} section still says the contract is provisional`);
+    if (/"on_main": false/.test(section.body)) {
+      problems.push(`CHANGELOG.md: the ${section.version} section still says the contract isn't from wisply-ai's main ("on_main": false)`);
+    }
   }
 
   // In GitHub Actions (the release workflow), the run must be for the tag v<version>.

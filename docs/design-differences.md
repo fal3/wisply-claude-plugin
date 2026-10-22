@@ -83,11 +83,13 @@ spec text. Not shipped in the npm package.
 - **`contract/SOURCE.json` shape.** The design lists `{repository, commit,
   provisional, files: {name: sha256}}`. The file is `{schema:
   "wisply-mcp-vendor-v1", provisional, sources: [{repository, commit,
-  provisional, files: {<local path>: {upstream, sha256, transcribed_from?}}}]}`:
+  provisional, on_main?, files: {<local path>: {upstream, sha256, transcribed_from?}}}]}`:
   one entry per source repository (wisply-ai and wisply-claude-plugin), and
   the upstream path beside the local one because they differ
-  (`Docs/mcp-contract.json` lands at `contract/mcp-contract.json`). The
-  extension's `vendor/SOURCE.json` should use the same shape.
+  (`Docs/mcp-contract.json` lands at `contract/mcp-contract.json`). DIST-M5
+  added `on_main` to wisply-ai's entry once it is vendored from a real
+  commit (see its section). The extension's `vendor/SOURCE.json` should use
+  the same shape.
 - **`"private": true` in `package.json`.** Not in the design's package.json
   row. It is true exactly while the contract is provisional or the package
   name isn't final (`tests/pack.test.mjs`), so `npm publish` refuses the
@@ -300,7 +302,8 @@ spec text. Not shipped in the npm package.
   contract is vendored, `/wisply:live` reads the whole live transcript.
   `tests/skills.test.mjs` fails once the contract has `tail_words` and the
   hedge is still there, so the DIST-M5 re-vendor makes the call
-  unconditional.
+  unconditional. (Done: the re-vendored contract has `tail_words`, and
+  `live.toml` asks for 400 words, as the design says.)
 - **The remote is its own plugin.** The design's directory table and
   DIST-M6 row add a second `mcp.json` entry, `wisply-cloud`
   (streamable-http), to the root plugin. The root `mcp.json` stays
@@ -496,36 +499,50 @@ spec text. Not shipped in the npm package.
   keychain".
 ## Release workflow and the re-vendor (DIST-M5)
 
-- **The contract isn't re-vendored yet.** The design has DIST-M5 re-vendor
-  from DIST-A1's merge commit. Neither DIST-A1 (`claude/distribution-1`,
-  d44a9e5) nor raycast PR 1 (`claude/raycast-1`, 477de80) is on wisply-ai's
-  `main`, and each creates `Docs/mcp-contract.json` with half of what the
-  connector needs: DIST-A1 has `tool_descriptors` but no `wspr_` scope,
-  error codes or `live_transcript` (it was written before raycast PR 1
-  existed), raycast PR 1 has those but no descriptors. The connector refuses
-  to load either (`lib/contract.mjs`), so `contract/SOURCE.json` stays
-  provisional and the release gate stays closed. `npm run sync-vendor` now
-  refuses both before it writes anything, and `tests/sync-vendor.test.mjs`
-  shows that the expected union of the two (raycast PR 1's keys, DIST-A1's
-  descriptors, `tail_words` in `get_live_transcript`) is vendored byte for
-  byte with `provisional: false`. The re-vendor itself is a follow-up PR from
-  the wisply-ai `main` commit that has both ("Re-vendoring the contract" in
-  SECURITY.md).
-- **Drift fails on `main`, and is listed on an unmerged branch.** The
-  fixture follows wisply-ai's `main` (DIST-M4's 4727f5a, carried here for
-  DIST-A1). When `WISPLY_AI_DIR` is a branch `origin/main` doesn't have (a
-  lane's worktree, such as raycast PR 1's or DIST-A1's), the contract and
-  catalog checks compare the commit where it left `main` too: drift found
-  only on the branch is listed and the test is skipped, since it reaches the
-  fixture through the re-vendor once it is merged; drift `main` already has
-  fails. The descriptors are compared with the Swift catalog at the
-  transcription commit (885cc75), not the checkout, and a separate test
-  reports when the checkout's sources have moved on (raycast PR 1's
-  `tail_words`, DIST-A1's per-tool `destructiveHint`). A wisply-ai contract
-  with `tool_descriptors` but without raycast PR 1's keys (DIST-A1 alone),
-  which `sync-vendor` refuses, is compared key by key (scope by scope,
-  descriptor by descriptor); one the connector can load asks for the
-  re-vendor.
+- **Re-vendored before DIST-A1's merge, from its commit.** The design has
+  DIST-M5 re-vendor "from DIST-A1's merge commit" once DIST-A1 is merged.
+  DIST-A1 isn't on wisply-ai's `main` yet, but its branch
+  (`claude/distribution-1` at 5e4d308) now has raycast PR 1 merged in, so its
+  `Docs/mcp-contract.json` is the union the connector needs (the `wspr_`
+  scope, error codes, `live_transcript`, `tail_words`, `tool_descriptors`,
+  and two keys DIST-A1 added later: per-tool `destructiveHint`, true for
+  `setup_claude`, and `distribution` with `exclude_tools: ["setup_claude"]`
+  and `setup_claude_token_free: true`). This branch vendors that file with
+  `npm run sync-vendor`, byte for byte, with `"provisional": false` as the
+  design says. So that "not provisional" can't be read as "from `main`",
+  `contract/SOURCE.json` records a fact the design doesn't have,
+  `"on_main"`: whether the wisply-ai checkout's `origin/main` had the commit
+  when it was vendored (false here). `WISPLY_RELEASE=1 npm test` refuses
+  `"on_main": false` (`tests/vendor.test.mjs`), `"private"` stays while it is
+  false (`tests/pack.test.mjs`), and the release gate refuses a CHANGELOG
+  release section that still mentions it. Once DIST-A1 merges, running
+  `npm run sync-vendor` again from the main commit is the whole follow-up
+  (SECURITY.md, "Re-vendoring the contract"); if review changes the file, the
+  upstream test against wisply-ai's `main` reports the difference.
+- **What the re-vendor changed.** `commands/wisply/live.toml` asks for
+  `tail_words` 400 without the hedge, and `PENDING_ARGUMENTS` in
+  `tests/skills.test.mjs` is empty. `tests/contract.test.mjs` expects
+  `destructiveHint` only on `setup_claude` and checks that the contract's
+  `distribution.exclude_tools` is what the connector hides without
+  `--allow-claude-setup` (the connector doesn't read the key; a newly
+  excluded tool fails the test until it does). The bundle's tool list
+  (`mcpb/manifest.json`) didn't change: `setup_claude` was already left
+  out, and the other descriptions are the same. The bridge still passes
+  `setup_claude` results on unchanged; DIST-A1's docs ask clients to drop
+  `cursor_mcp_json` for older Wisply builds, which is left for a connector
+  PR (the switch stays off by default).
+- **Drift fails on `main`, and is listed on an unmerged branch.** With a
+  vendored (not provisional) contract, `tests/upstream.test.mjs` checks that
+  the file is wisply-ai's at the recorded commit, that the checkout's file
+  is the same, and that `"on_main"` matches the checkout's `origin/main` (a
+  TODO while the commit isn't there yet, or once it is and SOURCE.json still
+  says false). When `WISPLY_AI_DIR` is a branch `origin/main` doesn't have (a
+  lane's worktree, such as raycast PR 1's), a difference found only on the
+  branch is listed and the test is skipped (DIST-M4's 4727f5a logic); one
+  `main` already has fails. The provisional-only checks (the descriptors
+  against the Swift catalog at the transcription commit, 885cc75, and a
+  wisply-ai contract with `tool_descriptors` but without raycast PR 1's keys
+  compared key by key) stay for a provisional fixture and skip otherwise.
 - **wisply-ai's copy is pinned, not mirrored.** wisply-ai pins
   `Docs/mcp-clients.json` to a commit of `clients/mcp-clients.json`
   (`MCPClientSnippetsTests.vendoredClients`), so the upstream test accepts
