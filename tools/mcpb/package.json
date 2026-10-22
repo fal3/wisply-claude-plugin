@@ -1,0 +1,10 @@
+{
+  "name": "wisply-mcp-tools-mcpb",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Dev-only: the pinned MCPB packer for scripts/build-mcpb.mjs and the CI job mcpb. Install with npm ci --ignore-scripts --prefix tools/mcpb.",
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/mcpb": "2.1.2"
+  }
+}

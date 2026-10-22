@@ -21,6 +21,11 @@ Only the newest 0.x release gets fixes.
   recordings" switch, and a follow-up waits for your confirmation in Wisply.
 - `wsp_`: full access. `setup_claude`, which can store an Anthropic API key in
   Wisply, stays hidden unless the connector runs with `--allow-claude-setup`.
+  Leave that switch off: Wisply's answer to `setup_claude` currently includes
+  a Cursor snippet with Wisply's full-access token, and the connector passes
+  results on unchanged, so the AI app would send the token to its AI
+  service. The Claude Desktop bundle never turns the switch on and doesn't
+  list `setup_claude`.
 
 The connector refuses any tool outside the token's scope, and Wisply refuses
 it again (JSON-RPC `-32003`).
@@ -110,6 +115,31 @@ would run the same way. `npx` doesn't check npm provenance when it installs a
 package, so provenance is an audit trail, not a guard. Publishing is guarded
 by npm's own controls, listed under "Release controls" below.
 
+The Agent Plugin, the Gemini CLI extension and the Claude Desktop bundle in
+this repository run the copy of the connector that comes with them (`node
+bin/wisply-mcp.mjs`), never `npx`. Whether that copy is pinned depends on how
+it was installed:
+
+- **The bundle** is a file, so it changes only when you install another one.
+  A bundle downloaded from the GitHub release is not checked against
+  `server.json`: the sha256 there (`fileSha256`) is for installers that
+  install from the MCP Registry. What protects the download is that the
+  release is immutable once published and only the maintainer can create
+  `v*` tags. Each release also gives the bundle's sha256 in its notes and in a
+  `SHA256SUMS` asset, so you can check a download with
+  `shasum -a 256 -c SHA256SUMS`. Both come from the same release, so they show
+  that the file is the one published, not who published it.
+- **Git installs** (the Agent Plugin in Codex, VS Code and GitHub Copilot CLI,
+  and the Gemini CLI extension) copy this repository at a git ref. With a
+  release tag (`--ref v0.1.0` in Codex and Gemini CLI) they stay on that
+  release, since `v*` tags can't be moved. Without one they copy the default
+  branch, `main` (Gemini CLI: the newest release once there is one), and every
+  update (`codex plugin marketplace upgrade`, `copilot plugin update`,
+  `gemini extensions update` or Gemini's auto-update) copies it again, so a
+  push to `main` reaches them. Only the npm snippets and tag-pinned installs
+  are version-pinned; for the rest, the guard is the `main` ruleset under
+  "Release controls".
+
 Until the contract with Wisply is final, `package.json` is marked `"private"`,
 so `npm publish` refuses the package. Until the npm name is Wisply's
 (`PACKAGE_NAME_FINAL` in `lib/constants.mjs`, tied to `"private"` by
@@ -141,7 +171,12 @@ package has never been published.
    every member, and the unscoped fallback name `wisply-mcp` is held by the
    same owner, so nobody else can register either name and be what `npx -y`
    runs.
-2. **Before the first publish:** the contract is re-vendored from wisply-ai
+2. **Before the repository is public** (git installs need it public): a
+   ruleset on `main` (changes only through pull requests with the `ci` checks
+   passing; no force-push and no deletion; signed commits required, or at
+   least preferred), a ruleset on `v*` tags (only the owner creates them; no
+   update and no deletion), and immutable releases turned on.
+3. **Before the first publish:** the contract is re-vendored from wisply-ai
    (`contract/SOURCE.json` no longer provisional, `WISPLY_RELEASE=1 npm test`
    passes), `"private": true` is removed from `package.json` and
    `PACKAGE_NAME_FINAL` becomes `true` in the same change
@@ -164,16 +199,35 @@ package has never been published.
      `forget`: both go, and `status` reports no token.
    - `setup --full-access` and `status` with that item print the full-access
      note; `WISPLY_MCP_PORT=eighty forget` still removes the item.
-3. **The first publish** is by hand, by the organization owner, with
+4. **The first publish** is by hand, by the organization owner, with
    two-factor authentication.
-4. **From the second release,** only npm trusted publishing (OIDC from a
+5. **From the second release,** only npm trusted publishing (OIDC from a
    GitHub Actions release workflow in this repository, behind a protected
    environment) publishes, and the package's publishing access is set to
    "Require two-factor authentication and disallow tokens". This repository
    has no release workflow yet; until it does, no release claims provenance.
-5. **Every release** bumps `version` in `package.json` and `VERSION` in
-   `lib/constants.mjs` together. The snippets follow `PACKAGE_SPEC`; update
-   the wisply.ai guide and Wisply's snippets to the new version.
+6. **Every release** bumps `version` in `package.json` and `VERSION` in
+   `lib/constants.mjs` together, with the versions in `plugin.json`,
+   `gemini-extension.json`, `mcpb/manifest.json` and `server.json` (its
+   bundle URL included) and the README's links and `--ref` tags
+   (`tests/manifests.test.mjs` and `tests/registry.test.mjs` fail until they
+   agree). The snippets follow
+   `PACKAGE_SPEC`; update the wisply.ai guide and Wisply's snippets to the
+   new version.
+7. **The Claude Desktop bundle** is built once, in a fresh clone of the
+   release tag, with the pinned packer (`npm ci --ignore-scripts --prefix
+   tools/mcpb`, from its committed lockfile; never `npx`). `npm run
+   build:mcpb` refuses a checkout that has changes or untracked files or isn't
+   at the tag, and stages the tag's own files. Both
+   `wisply-mcp-<version>.mcpb` and `SHA256SUMS` go to a draft GitHub release
+   (never the bundle alone: Gemini CLI takes a release's only asset for the
+   extension), the `SHA256SUMS` line goes into the release notes, and the
+   sha256 goes into `server.json` before the registry entry is published.
+   The gate runs on the asset downloaded back from the draft release:
+   `WISPLY_REGISTRY_RELEASE=1 WISPLY_MCPB_FILE=<downloaded .mcpb> npm test`
+   must pass. It checks the hash, then unpacks the bundle and compares every
+   file with the tag, byte for byte. A rebuilt bundle has a different sha256,
+   so never rebuild a released one.
 
 ## If a bad release is published (maintainers)
 
