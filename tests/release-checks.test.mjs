@@ -13,6 +13,13 @@
 //   official MCP Registry accepts only after its namespace is verified (DNS
 //   or HTTP for ai.wisply/*, GitHub for io.github.<owner>/*), and a
 //   published version can't change it.
+// - npm_scope: the npm organization (or, for an unscoped name, the name)
+//   PACKAGE_NAME lives under is Wisply's, with two-factor authentication
+//   required, and the unscoped fallback wisply-mcp is held by the same owner
+//   (Grok packet G-NPM; SECURITY.md "Release controls" item 1). It is what
+//   lets PACKAGE_NAME_FINAL become true (tests/pack.test.mjs ties the two),
+//   and a release needs PACKAGE_NAME_FINAL with "private" gone from
+//   package.json.
 //
 // The contract's own release requirement sits here too: setup_claude, which
 // replaces the Anthropic key stored in Wisply's Keychain, must be marked
@@ -24,14 +31,17 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import contract from '../lib/contract.mjs';
-import { CLAUDE_SETUP_TOOL, MCP_NAME } from '../lib/constants.mjs';
+import { CLAUDE_SETUP_TOOL, MCP_NAME, PACKAGE_NAME, PACKAGE_NAME_FINAL } from '../lib/constants.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const readJson = (path) => JSON.parse(readFileSync(join(ROOT, path), 'utf8'));
 const CHECKS_FILE = 'docs/release-checks.json';
 const tree = () => ({
   checks: readJson(CHECKS_FILE), source: readJson('contract/SOURCE.json'), pkg: readJson('package.json'), contract, mcpName: MCP_NAME,
+  packageName: PACKAGE_NAME, packageNameFinal: PACKAGE_NAME_FINAL,
 });
+/** What has to be Wisply's on npm for a package name: its organization (`@wisply`), or the unscoped name itself. */
+const npmOwner = (name) => (String(name).startsWith('@') ? String(name).split('/')[0] : String(name));
 
 const isText = (value) => typeof value === 'string' && value.trim().length >= 10;
 /** How a namespace may be verified: GitHub for io.github.*, DNS or HTTP on the domain otherwise. */
@@ -39,10 +49,11 @@ const methodsFor = (name) => (name.startsWith('io.github.') ? ['github'] : ['dns
 
 /**
  * What still stands between this tree and a release, as messages; [] when nothing does.
- * @param {{checks: any, source: any, pkg: any, contract: any, mcpName: string}} input
+ * @param {{checks: any, source: any, pkg: any, contract: any, mcpName: string, packageName: string,
+ *   packageNameFinal: boolean}} input
  * @returns {string[]}
  */
-function releaseCheckProblems({ checks, source, pkg, contract: data, mcpName }) {
+function releaseCheckProblems({ checks, source, pkg, contract: data, mcpName, packageName, packageNameFinal }) {
   const problems = [];
   const appCommit = source?.sources?.find((entry) => entry.repository === 'github:fal3/wisply-ai')?.commit;
   const port = checks?.port_exclusive ?? {};
@@ -63,6 +74,19 @@ function releaseCheckProblems({ checks, source, pkg, contract: data, mcpName }) 
       ? 'mcp-publisher login github as the owner' : 'mcp-publisher login dns (or http) for the domain'}, then set ` +
       `verified and how ("${methodsFor(String(namespace.name)).join('|')}: <date and evidence>")`);
   }
+  const npm = checks?.npm_scope ?? {};
+  const owner = npmOwner(packageName);
+  if (npm.name !== owner) {
+    problems.push(`${CHECKS_FILE}: npm_scope.name must be ${owner}, where PACKAGE_NAME (${packageName}) lives on npm`);
+  }
+  if (npm.verified !== true || !isText(npm.how)) {
+    problems.push(`${CHECKS_FILE}: npm_scope isn't recorded: Alex owns ${owner} on npm (two-factor authentication required ` +
+      'for every member, and the unscoped wisply-mcp held by the same owner; Grok packet G-NPM), then set verified and how');
+  }
+  if (packageNameFinal !== true || Object.hasOwn(pkg ?? {}, 'private')) {
+    problems.push('lib/constants.mjs PACKAGE_NAME_FINAL must be true and package.json must have no "private": ' +
+      'the release change sets both once npm_scope is recorded and the contract is final (tests/pack.test.mjs)');
+  }
   const claude = data?.tool_descriptors?.find((descriptor) => descriptor.name === CLAUDE_SETUP_TOOL);
   if (claude?.annotations?.destructiveHint !== true) {
     problems.push(`contract: ${CLAUDE_SETUP_TOOL} must have destructiveHint: true (it replaces the stored Anthropic key): ` +
@@ -73,9 +97,9 @@ function releaseCheckProblems({ checks, source, pkg, contract: data, mcpName }) 
 
 test('docs/release-checks.json has its shape, and names the MCP_NAME package.json has', () => {
   const { checks, pkg } = tree();
-  assert.deepEqual(Object.keys(checks), ['schema', 'port_exclusive', 'registry_namespace']);
+  assert.deepEqual(Object.keys(checks), ['schema', 'port_exclusive', 'registry_namespace', 'npm_scope']);
   assert.equal(checks.schema, 'wisply-mcp-release-checks-v1');
-  for (const key of ['port_exclusive', 'registry_namespace']) {
+  for (const key of ['port_exclusive', 'registry_namespace', 'npm_scope']) {
     assert.equal(typeof checks[key].verified, 'boolean', key);
     assert.ok(checks[key].how === null || typeof checks[key].how === 'string', key);
   }
@@ -83,6 +107,9 @@ test('docs/release-checks.json has its shape, and names the MCP_NAME package.jso
   assert.equal(checks.registry_namespace.name, MCP_NAME);
   assert.equal(pkg.mcpName, MCP_NAME);
   assert.match(MCP_NAME, /^(ai\.wisply\/[a-z0-9-]+|io\.github\.fal3\/[a-z0-9-]+)$/);
+  assert.deepEqual(Object.keys(checks.npm_scope), ['name', 'verified', 'how']);
+  assert.equal(checks.npm_scope.name, npmOwner(PACKAGE_NAME));
+  assert.match(checks.npm_scope.name, /^(@wisply|wisply-mcp)$/);
 });
 
 test('this tree passes the release checks (WISPLY_RELEASE=1)', { skip: process.env.WISPLY_RELEASE === '1' ? false : 'WISPLY_RELEASE is not 1' }, () => {
@@ -108,11 +135,14 @@ test('releaseCheckProblems: a releasable tree passes, and each missing check is 
       schema: 'wisply-mcp-release-checks-v1',
       port_exclusive: { verified: true, wisply_commit: commit, how: 'MCPServer.swift binds with allowLocalEndpointReuse = false' },
       registry_namespace: { name: 'ai.wisply/local', verified: true, how: 'dns: TXT on wisply.ai, mcp-publisher login dns on 2026-11-02' },
+      npm_scope: { name: '@wisply', verified: true, how: 'npm org wisply created 2026-11-01 with 2FA required; wisply-mcp held by Alex' },
     },
     source: { sources: [{ repository: 'github:fal3/wisply-ai', commit }] },
     pkg: { mcpName: 'ai.wisply/local' },
     contract: { tool_descriptors: descriptors },
     mcpName: 'ai.wisply/local',
+    packageName: '@wisply/mcp',
+    packageNameFinal: true,
   };
   assert.deepEqual(releaseCheckProblems(good), []);
   const github = { name: 'io.github.fal3/wisply-mcp', verified: true, how: 'github: mcp-publisher login github as fal3' };
@@ -129,12 +159,32 @@ test('releaseCheckProblems: a releasable tree passes, and each missing check is 
     [changed('registry_namespace', { how: 'github: logged in as fal3' }), /registry_namespace isn't verified/],
     [{ ...good, pkg: { mcpName: 'io.github.fal3/wisply-mcp' } }, /must agree/],
     [{ ...good, contract }, /setup_claude must have destructiveHint: true/],
+    // A re-vendored contract alone never makes the name final: npm ownership is its own record.
+    [changed('npm_scope', { verified: false }), /npm_scope isn't recorded: Alex owns @wisply on npm/],
+    [changed('npm_scope', { how: null }), /npm_scope isn't recorded/],
+    [changed('npm_scope', { name: 'wisply-mcp' }), /npm_scope.name must be @wisply/],
+    [{ ...good, packageName: 'wisply-mcp' }, /npm_scope.name must be wisply-mcp/],
+    [{ ...good, packageNameFinal: false }, /PACKAGE_NAME_FINAL must be true and package.json must have no "private"/],
+    [{ ...good, pkg: { ...good.pkg, private: true } }, /must have no "private"/],
+    [{ ...good, pkg: { ...good.pkg, private: false } }, /must have no "private"/],
   ];
   for (const [input, expected] of cases) {
     const problems = releaseCheckProblems(input);
     assert.equal(problems.length, 1, problems.join(' | '));
     assert.match(problems[0], expected);
   }
-  // Today's tree: all three are missing, and the contract still marks setup_claude non-destructive.
-  assert.equal(releaseCheckProblems(tree()).length, 3);
+  // The unscoped fallback is recorded under its own name.
+  assert.deepEqual(releaseCheckProblems({ ...good, checks: { ...good.checks, npm_scope: { ...good.checks.npm_scope, name: 'wisply-mcp' } },
+    packageName: 'wisply-mcp' }), []);
+  // Today's tree: each check not recorded yet is named, and so are the name flag and "private" until the release
+  // change. Recording a check (npm_scope after G-NPM, say) needs no edit here.
+  const today = tree();
+  const problems = releaseCheckProblems(today);
+  const unrecorded = ['port_exclusive', 'registry_namespace', 'npm_scope'].filter((key) => today.checks[key].verified !== true);
+  for (const key of unrecorded) assert.ok(problems.some((problem) => problem.includes(`${key} isn't`)), key);
+  assert.equal(problems.some((problem) => problem.includes('PACKAGE_NAME_FINAL must be true')),
+    PACKAGE_NAME_FINAL !== true || Object.hasOwn(today.pkg, 'private'));
+  // As of DIST-M2's review: nothing is recorded, the name isn't final, package.json is private, and the contract
+  // still marks setup_claude non-destructive.
+  if (unrecorded.length === 3) assert.equal(problems.length, 5);
 });

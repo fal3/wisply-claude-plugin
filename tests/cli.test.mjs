@@ -125,9 +125,20 @@ test('setup stores the connector token, checks it, and prints the spec\'s succes
 test('setup keeps a recording token, and a full-access token only with --full-access', async () => {
   const recording = harness({ paste: RECORDING });
   assert.equal(await run(['setup'], recording), 0);
-  assert.ok(recording.lines.includes('Stored. Wisply answered on 127.0.0.1:51771 and proved it holds this token (recording-control: 3 tools).'));
-
+  // A recording-control item reaches every app that brings no token of its own, as a full-access item does.
+  assert.deepEqual(recording.lines.slice(-3), [
+    'Stored. Wisply answered on 127.0.0.1:51771 and proved it holds this token (recording-control: 3 tools).',
+    messages.RECORDING_SHARED,
+    messages.RESTART_NOTE,
+  ], 'a recording-control item says every app without its own token can now start and stop recordings');
   assert.ok(!recording.lines.includes(messages.FULL_ACCESS_SHARED));
+  assert.equal(messages.RECORDING_SHARED, 'Every AI app on this Mac that starts the connector without its own WISPLY_MCP_TOKEN ' +
+    'can now start and stop recordings while Wisply allows agents to ("Allow agents to start and stop recordings"), and ' +
+    `propose follow-ups for you to confirm in Wisply. To undo this, run \`${messages.SETUP_COMMAND}\` again with the read-only connector token.`);
+  const connector = harness({ paste: CONNECTOR });
+  assert.equal(await run(['setup'], connector), 0);
+  assert.ok(!connector.lines.includes(messages.RECORDING_SHARED) && !connector.lines.includes(messages.FULL_ACCESS_SHARED),
+    'the read-only connector token needs no note');
 
   const full = harness({ paste: FULL });
   assert.equal(await run(['setup', '--full-access'], full), 0);
@@ -229,7 +240,7 @@ test('a stored token that Wisply doesn\'t confirm stays stored, with the reason 
     const h = harness({ identity: outcome, paste: outcome === 'missing-scope' ? RECORDING : CONNECTOR });
     assert.equal(await run(['setup'], h), 1, outcome);
     assert.deepEqual(h.lines, [...INTRO, messages.STORED_UNCHECKED, messages.identityProblem(outcome, 51771, { terminal: true }),
-      messages.RESTART_NOTE]);
+      ...(outcome === 'missing-scope' ? [messages.RECORDING_SHARED] : []), messages.RESTART_NOTE]);
     assert.notEqual(h.keychain.item, null);
   }
   assert.equal(messages.identityProblem('unavailable', 51771), messages.unavailable(51771));
@@ -369,14 +380,19 @@ test('status from the keychain: scope, source, port, identity and tools; never t
   assert.deepEqual(h.checks, [{ port: 51771, token: CONNECTOR, scope: 'connector' }]);
   assert.deepEqual([h.keychain.writes, h.keychain.deletes], [0, 0], 'status only reads');
   assert.doesNotMatch(h.text, TOKEN_SHAPE);
-  assert.ok(!h.lines.includes(messages.STATUS.fullAccessShared));
+  assert.ok(!h.lines.includes(messages.STATUS.fullAccessShared) && !h.lines.includes(messages.STATUS.recordingShared));
   for (const token of [FULL, RECORDING]) {
     const other = harness({ item: token });
     assert.equal(await run(['status'], other), 0);
     assert.doesNotMatch(other.text, TOKEN_SHAPE);
-    // A full-access keychain item reaches every app that brings no token of its own; status says so.
+    // A full-access or recording-control keychain item reaches every app that brings no token of its own; status says so.
     assert.equal(other.lines.includes(messages.STATUS.fullAccessShared), token === FULL);
+    assert.equal(other.lines.includes(messages.STATUS.recordingShared), token === RECORDING);
   }
+  const recording = harness({ item: RECORDING });
+  await run(['status'], recording);
+  assert.deepEqual(recording.lines.slice(3, 5), ['Tools:  3 (start_recording, stop_recording, propose_follow_up)',
+    messages.STATUS.recordingShared]);
   const full = harness({ item: FULL });
   await run(['status'], full);
   assert.deepEqual(full.lines.slice(3, 5), [`Tools:  8 (${contract.tools.filter((tool) => tool !== 'setup_claude').join(', ')})`,
@@ -391,6 +407,9 @@ test('status from WISPLY_MCP_TOKEN, and a placeholder that was ignored', async (
   assert.equal(env.lines[3], `Tools:  8 (${contract.tools.filter((tool) => tool !== 'setup_claude').join(', ')})`);
   assert.equal(env.keychain.reads, 0, 'a usable env token wins without a Keychain read');
   assert.ok(!env.lines.includes(messages.STATUS.fullAccessShared), 'an env token reaches only the app that sets it');
+  const recordingEnv = harness({ env: { WISPLY_MCP_TOKEN: RECORDING } });
+  assert.equal(await run(['status'], recordingEnv), 0);
+  assert.ok(!recordingEnv.lines.includes(messages.STATUS.recordingShared), 'an env recording token reaches only the app that sets it');
 
   const placeholder = harness({ env: { WISPLY_MCP_TOKEN: '${user_config.wisply_mcp_token}' }, item: RECORDING });
   assert.equal(await run(['status'], placeholder), 0);
@@ -475,8 +494,9 @@ test('status reports each failed identity check with its message (exit 1)', asyn
     const h = harness({ item: RECORDING, identity: outcome });
     assert.equal(await run(['status'], h), 1, outcome);
     assert.equal(h.lines[2], line);
-    assert.equal(h.lines[4], messages.identityProblem(outcome, 51771, { terminal: true }));
-    assert.equal(h.lines[5], messages.RESTART_NOTE);
+    assert.equal(h.lines[4], messages.STATUS.recordingShared);
+    assert.equal(h.lines[5], messages.identityProblem(outcome, 51771, { terminal: true }));
+    assert.equal(h.lines[6], messages.RESTART_NOTE);
     assert.doesNotMatch(h.text, TOKEN_SHAPE);
   }
   // A resolver that throws is no token, not a crash.
@@ -678,14 +698,16 @@ test('every CLI text is ASCII, holds no token, and names only commands this buil
     messages.SETUP_CANCELLED, messages.SETUP_CANCELLED_AFTER_REMOVAL, messages.REPLACE_FAILED, messages.PREVIOUS_REMOVED,
     messages.KEYCHAIN_NOT_STORED, messages.SETUP_MALFORMED, messages.READ_BACK_FAILED,
     messages.NO_ITEM_NOW, messages.removeFailed('full-access'), messages.removeFailed('malformed'),
-    messages.stored(51771, 'connector', 4), messages.STORED_UNCHECKED, messages.FULL_ACCESS_SHARED, messages.RESTART_NOTE,
+    messages.stored(51771, 'connector', 4), messages.STORED_UNCHECKED, messages.FULL_ACCESS_SHARED, messages.RECORDING_SHARED,
+    messages.RESTART_NOTE,
     messages.ENV_WINS, messages.FORGOTTEN, messages.forgotten(1), messages.forgotten(3), messages.NOTHING_TO_FORGET,
     messages.FORGET_FAILED, messages.ENV_UNCHANGED,
     messages.FULL_ACCESS_REFUSED, messages.HELP, messages.STATUS.header, messages.STATUS.placeholder,
     messages.STATUS.token('full', 'env'), messages.STATUS.token('connector', 'keychain'), messages.STATUS.noToken('missing'),
     messages.STATUS.noToken('malformed'), messages.STATUS.wisply(null, 51771), messages.STATUS.wisply('ok', 51771),
     messages.STATUS.tools(CONNECTOR_TOOLS), messages.STATUS.tools(CONNECTOR_TOOLS, { withoutToken: true }),
-    messages.STATUS.tools([]), messages.STATUS.fullAccessShared, messages.TOKEN_AS_ARGUMENT,
+    messages.STATUS.tools([]), messages.STATUS.fullAccessShared, messages.STATUS.recordingShared, messages.TOKEN_AS_ARGUMENT,
+    ...PLANNED_COMMANDS.map((command) => messages.notInThisBuild(command)),
     messages.TERMINAL_TEXTS.SETUP, messages.TERMINAL_TEXTS.MALFORMED, messages.TERMINAL_TEXTS.notWisply(51771),
     messages.identityProblem('not-wisply', 51771, { terminal: true }),
   ];

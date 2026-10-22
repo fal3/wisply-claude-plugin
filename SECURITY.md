@@ -86,10 +86,19 @@ keychain, or let the app's secret storage pass it as `WISPLY_MCP_TOKEN`.
 - `setup` reads the item back once and removes it again when it isn't a Wisply
   token or is the full-access token without `--full-access`. `status` never
   prints the token. `forget` removes the item.
-- A full-access token in the keychain reaches every AI app on this Mac that
-  starts the connector without its own `WISPLY_MCP_TOKEN` (Cursor, Windsurf,
-  Zed, Codex, one-click links), each with recording control and follow-ups and
-  no opt-in of its own. `setup --full-access` and `status` say so.
+- A full-access or recording-control token in the keychain reaches every AI
+  app on this Mac that starts the connector without its own
+  `WISPLY_MCP_TOKEN` (Cursor, Windsurf, Zed, Codex, one-click links), with no
+  opt-in of its own. With a full-access token, each of them gets full access,
+  recording control and follow-ups included. With a recording-control token
+  (`wspr_`), each of them can start and stop recordings whenever Wisply's
+  "Allow agents to start and stop recordings" switch is on, and propose
+  follow-ups. That switch is global: turning it on for one app (Raycast, say)
+  lets a prompt-injected agent in any of the others start or stop a meeting
+  recording. `setup` and `status` print a note for both scopes; only the
+  full-access token also needs `setup --full-access`. If one app should
+  control recordings, give it the recording token through its own secret
+  storage and keep the read-only connector token in the keychain.
 
 The Keychain item keeps the token out of config files, sync and backups. It
 does **not** stop another program running as you on this Mac from reading it,
@@ -132,13 +141,19 @@ your AI app runs under the `wisply` entry:
 is an audit trail, not a guard. Publishing is guarded by npm's own controls,
 listed under "Release controls" below.
 
-Until the contract with Wisply is final, `package.json` is marked `"private"`,
-so `npm publish` refuses the package. Until the npm name is Wisply's
-(`PACKAGE_NAME_FINAL` in `lib/constants.mjs`, tied to `"private"` by
-`tests/pack.test.mjs`), the connector's messages never name the package: tool
-errors, which the model also reads, point only at `WISPLY_MCP_TOKEN`, and
-terminal messages name the bin (`wisply-mcp setup`). Nobody, person or agent,
-is told to `npx` a name someone else could register first.
+Until the contract with Wisply is final and the npm name is Wisply's,
+`package.json` is marked `"private"`, so `npm publish` refuses the package.
+Until the npm name is Wisply's (`PACKAGE_NAME_FINAL` in `lib/constants.mjs`,
+which `tests/pack.test.mjs` ties to `npm_scope` in `docs/release-checks.json`,
+never to the contract, so re-vendoring the contract can't flip it), the
+connector's messages never name the package: tool errors, which the model also
+reads, point only at `WISPLY_MCP_TOKEN`, and terminal messages name the bin
+(`wisply-mcp setup`). Nobody, person or agent, is told to `npx` a name someone
+else could register first. This README and this file do show the `npx`
+commands the first release will print; the README's status note says not to
+run them before the release (`tests/pack.test.mjs` keeps it there while the
+name isn't final), and release control 1 below covers this repository going
+public.
 
 ## If you think a token leaked
 
@@ -156,23 +171,31 @@ is told to `npx` a name someone else could register first.
 ## Release controls (maintainers)
 
 Each of these must hold before the step it names. None is met yet: the
-package has never been published. Parts of items 2 and 3 are also
+package has never been published. Parts of items 1 to 3 are also
 machine-checked: `WISPLY_RELEASE=1 npm test` fails while the contract is
-provisional or leaves `setup_claude` non-destructive, and until
-`docs/release-checks.json` records the port and registry checks
+provisional or leaves `setup_claude` non-destructive, until
+`docs/release-checks.json` records the port, registry and npm-name checks, and
+while `PACKAGE_NAME_FINAL` is false or `package.json` is still `"private"`
 (`tests/vendor.test.mjs`, `tests/release-checks.test.mjs`).
 
 1. **Before anything public names the package** (the wisply.ai guide,
-   Wisply's snippets, catalog listings, the connector's own messages): the npm
-   organization `wisply` exists, with two-factor authentication required for
-   every member, and the unscoped fallback name `wisply-mcp` is held by the
-   same owner, so nobody else can register either name and be what `npx -y`
-   runs.
+   Wisply's snippets, catalog listings, the connector's own messages, and this
+   repository itself: `fal3/wisply-mcp` becoming public, or its README being
+   submitted to any catalog, because the README and this file print the `npx`
+   commands, `setup` among them): the npm organization `wisply` exists, with
+   two-factor authentication required for every member, and the unscoped
+   fallback name `wisply-mcp` is held by the same owner, so nobody else can
+   register either name and be what `npx -y` runs, or receive the tokens
+   people type into a fake `setup`. The Grok sign-up packet for the npm
+   organization (with `wisply-mcp` held too) is done before the repository
+   goes public. Alex then records `npm_scope` in `docs/release-checks.json`
+   (`verified` and `how`) and sets `PACKAGE_NAME_FINAL` to `true` in the same
+   change (`tests/pack.test.mjs` ties the two).
 2. **Before the first publish:** the contract is re-vendored from wisply-ai
    (`contract/SOURCE.json` no longer provisional, `WISPLY_RELEASE=1 npm test`
-   passes), `"private": true` is removed from `package.json` and
-   `PACKAGE_NAME_FINAL` becomes `true` in the same change
-   (`tests/pack.test.mjs` ties all three), `setup`, `status` and `forget` have
+   passes), `"private": true` is removed from `package.json` once both the
+   contract is final and `PACKAGE_NAME_FINAL` is `true` (item 1;
+   `tests/pack.test.mjs` ties the three), `setup`, `status` and `forget` have
    passed the manual Keychain QA on a Mac (below), and the vendored contract
    marks `setup_claude` `destructiveHint: true` (it replaces the Anthropic key
    stored in Wisply; fixed in wisply-ai's `MCPToolCatalog.swift`, never in the
@@ -196,7 +219,17 @@ provisional or leaves `setup_claude` non-destructive, and until
    - Put a second copy in another keychain on the search list, then run
      `forget`: both go, and `status` reports no token.
    - `setup --full-access` and `status` with that item print the full-access
-     note; `WISPLY_MCP_PORT=eighty forget` still removes the item.
+     note, and `setup` with the recording token and `status` with that item
+     print the recording note; `WISPLY_MCP_PORT=eighty forget` still removes
+     the item.
+   - With Wisply quit, `status` with the connector token in the keychain says
+     "not answering" (`UNAVAILABLE`). Then start an impostor that answers on
+     the port, `printf 'HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}' | nc -l 51771`
+     (or `echo garbage | nc -l 51771`), and run `status` again: "failed the
+     identity check" (`NOT_WISPLY`), and the request `nc` prints carries no
+     `Authorization` header. A bare `nc -l 51771` accepts the connection and
+     never answers, which counts as "not answering" (`UNAVAILABLE`), so it
+     doesn't test the impostor case.
 3. **Before the first publish, the MCP Registry name.** `package.json`
    `"mcpName"` (`MCP_NAME` in `lib/constants.mjs`, now `ai.wisply/local`) goes
    into the published package and can't change for that version, and the
