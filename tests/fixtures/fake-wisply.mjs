@@ -58,7 +58,7 @@ const scopeOf = (tokens, bearer) => Object.keys(tokens).find((scope) => tokens[s
 
 /**
  * Starts the fake on 127.0.0.1 with a system-assigned port.
- * @param {{tokens?: Partial<typeof FAKE_TOKENS>, mode?: 'valid'|'impostor'|'old'|'no-recording-proof'}} [options]
+ * @param {{tokens?: Partial<typeof FAKE_TOKENS>, mode?: 'valid'|'impostor'|'old'|'no-recording-proof'|'keychain-locked'}} [options]
  */
 export async function startFakeWisply({ tokens = FAKE_TOKENS, mode = 'valid' } = {}) {
   const state = { mode, challenges: [], calls: [], payloads: { ...PAYLOADS } };
@@ -70,6 +70,12 @@ export async function startFakeWisply({ tokens = FAKE_TOKENS, mode = 'valid' } =
       state.challenges.push({ method: req.method, nonce, authorization: req.headers.authorization, host: req.headers.host });
       if (state.mode === 'old') {
         res.writeHead(401, { 'WWW-Authenticate': 'Bearer realm="wisply-mcp"', 'Content-Type': 'text/plain' }).end('Unauthorized');
+        return;
+      }
+      if (state.mode === 'keychain-locked') {
+        // What Wisply answers when it could read none of its tokens (MCPServer+Identity.swift).
+        res.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8' })
+          .end('MCP tokens are unavailable. Check Keychain access in Wisply.');
         return;
       }
       const proofs = {};

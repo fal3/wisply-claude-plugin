@@ -6,7 +6,9 @@
 //
 // While contract/SOURCE.json is provisional (no Docs/mcp-contract.json with
 // tool_descriptors upstream yet), the contract is checked against the Swift
-// source it was transcribed from instead of byte for byte.
+// source it was transcribed from, at the commit SOURCE.json records, instead
+// of byte for byte. A separate test says when the checkout's Swift source has
+// moved on from that commit.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -79,6 +81,16 @@ test('app: once wisply-ai has a contract, the provisional fixture still matches 
 // that subset fails the test, so a new helper in the catalog shows up here.
 
 const CATALOG = 'Wisply/Services/MCP/MCPToolCatalog.swift';
+/** The wisply-ai commit the provisional fixture was transcribed from ("885cc75 (transcribed)"), or null. */
+const TRANSCRIBED_AT = /^([0-9a-f]{7,40}) \(transcribed\)$/.exec(appSource.commit)?.[1] ?? null;
+const transcriptionSkip = () => (!APP_DIR ? 'WISPLY_AI_DIR not set' : !appSource.provisional ? 'not provisional' : false);
+/** A Swift source as of the transcription commit; fails when the checkout doesn't have that commit. */
+const transcribedSource = (path) => {
+  assert.ok(TRANSCRIBED_AT, `contract/SOURCE.json: "${appSource.commit}" doesn't name the transcription commit`);
+  const bytes = gitShow(APP_DIR, TRANSCRIBED_AT, path);
+  assert.ok(bytes, `${path} at ${TRANSCRIBED_AT}: not in the WISPLY_AI_DIR checkout (fetch wisply-ai's history)`);
+  return bytes.toString('utf8');
+};
 const between = (text, start, end) => {
   const from = text.indexOf(start);
   const to = text.indexOf(end, from + start.length);
@@ -232,10 +244,12 @@ function parseSwitch(text) {
   return values;
 }
 
-test('app: the provisional descriptors are the Swift catalog\'s, word for word', {
-  skip: !APP_DIR ? 'WISPLY_AI_DIR not set' : !appSource.provisional ? 'not provisional' : false,
+test('app: the provisional descriptors are the Swift catalog\'s at the transcription commit, word for word', {
+  skip: transcriptionSkip(),
 }, () => {
-  const swift = readFileSync(join(APP_DIR, CATALOG), 'utf8');
+  // At the recorded commit, not the checkout: a later catalog (raycast PR 1's tail_words) is drift, which the next
+  // test reports in so many words, not a reason for this reader to fail.
+  const swift = transcribedSource(CATALOG);
   const cases = [...between(swift, 'enum MCPToolName', 'var hasSideEffects').matchAll(/case (\w+) = "([a-z_]+)"/g)]
     .map((match) => ({ member: match[1], name: match[2] }));
   assert.deepEqual(cases.map((entry) => entry.name), [...contract.tools], 'tool names and order');
@@ -281,13 +295,26 @@ test('app: the provisional descriptors are the Swift catalog\'s, word for word',
     }, `${descriptor.name} annotations`);
   }
 
-  const scopes = readFileSync(join(APP_DIR, 'Wisply/Services/MCP/MCPTokenScope.swift'), 'utf8');
-  assert.ok(scopes.includes('case .full: return "wsp_"') && scopes.includes('case .connector: return "wspc_"'), 'token prefixes');
-  const server = readFileSync(join(APP_DIR, 'Wisply/Services/MCP/MCPServer.swift'), 'utf8');
+  assertSourceFacts(transcribedSource, `at ${TRANSCRIBED_AT}`);
+});
+
+/** The token prefixes, default port and identity scheme the fixture takes from other Swift files. */
+function assertSourceFacts(read, where) {
+  const scopes = read('Wisply/Services/MCP/MCPTokenScope.swift');
+  assert.ok(scopes.includes('case .full: return "wsp_"') && scopes.includes('case .connector: return "wspc_"'), `token prefixes ${where}`);
+  const server = read('Wisply/Services/MCP/MCPServer.swift');
   const port = /static let defaultPort: UInt16 = ([0-9_]+)/.exec(server)?.[1];
-  assert.equal(Number(port?.replaceAll('_', '')), contract.default_port, 'default port');
-  const proof = readFileSync(join(APP_DIR, 'Wisply/Services/MCP/MCPIdentityProof.swift'), 'utf8');
-  assert.ok(proof.includes(`static let scheme = "${contract.identity_scheme}"`), 'identity scheme');
+  assert.equal(Number(port?.replaceAll('_', '')), contract.default_port, `default port ${where}`);
+  const proof = read('Wisply/Services/MCP/MCPIdentityProof.swift');
+  assert.ok(proof.includes(`static let scheme = "${contract.identity_scheme}"`), `identity scheme ${where}`);
+}
+
+test('app: the checkout\'s Swift sources still say what the transcription commit said', { skip: transcriptionSkip() }, () => {
+  // The whole catalog (every descriptor comes from it), and the few facts taken from the other files.
+  assert.ok(readFileSync(join(APP_DIR, CATALOG), 'utf8') === transcribedSource(CATALOG), `${CATALOG} changed since ` +
+    `${TRANSCRIBED_AT}: update the provisional fixture (and the commit in contract/SOURCE.json) or re-vendor from ` +
+    'wisply-ai (DIST-M5)');
+  assertSourceFacts((path) => readFileSync(join(APP_DIR, path), 'utf8'), `in the checkout (changed since ${TRANSCRIBED_AT})`);
 });
 
 test('the Swift reader parses the catalog\'s shapes and rejects anything else', () => {

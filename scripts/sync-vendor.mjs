@@ -10,15 +10,27 @@
 // Files are read with `git show <commit>:<path>`, so what lands here is the
 // file as of that commit, not whatever the checkout has on disk.
 //
+// Everything is read and checked first, and only then written, so a refusal
+// leaves the tree as it was. Without --provisional, wisply-ai's
+// Docs/mcp-contract.json replaces the fixture and SOURCE.json says
+// provisional: false; the file must be one the connector can load
+// (lib/contract-shape.mjs: tool_descriptors for every tool, and the three
+// token scopes, wspr_ included). Re-vendor from a wisply-ai commit that has
+// both raycast PR 1's keys and DIST-A1's descriptors.
+//
 // --provisional keeps the hand-transcribed contract/mcp-contract.json (until
-// wisply-ai has Docs/mcp-contract.json with tool_descriptors, DIST-A1) and
-// marks it provisional. tests/vendor.test.mjs refuses a provisional source
-// when WISPLY_RELEASE=1, so nothing can be published from it.
+// wisply-ai has such a file) and marks it provisional. tests/vendor.test.mjs
+// refuses a provisional source when WISPLY_RELEASE=1, so nothing can be
+// published from it.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
+// The side-effect-free check, not lib/contract.mjs, which throws at import
+// when the vendored copy is broken (the very tree a re-vendor repairs).
+import { contractProblems } from '../lib/contract-shape.mjs';
 import { ROOT, generate } from './gen-data.mjs';
 
 export const SOURCE_FILE = 'contract/SOURCE.json';
@@ -40,6 +52,30 @@ const existsAt = (dir, commit, path) => {
   try { git(dir, ['cat-file', '-e', `${commit}:${path}`], 'ignore'); return true; } catch { return false; }
 };
 
+/** A refusal: printed as is, and nothing has been written. */
+class Refusal extends Error {}
+
+/** The file at `commit`, or a refusal when the commit doesn't have it. */
+function readAt(dir, commit, path) {
+  if (!existsAt(dir, commit, path)) throw new Refusal(`${path} doesn't exist at ${commit.slice(0, 7)}. Nothing was changed.`);
+  return git(dir, ['show', `${commit}:${path}`]);
+}
+
+/**
+ * Why wisply-ai's contract bytes can't replace the fixture, or [] when they can.
+ * @param {Buffer} bytes
+ * @returns {string[]}
+ */
+export function upstreamContractProblems(bytes) {
+  let parsed;
+  try {
+    parsed = JSON.parse(bytes.toString('utf8'));
+  } catch {
+    return ['not JSON'];
+  }
+  return contractProblems(parsed);
+}
+
 function main(argv) {
   const { values } = parseArgs({
     args: argv,
@@ -53,14 +89,18 @@ function main(argv) {
     strict: true,
   });
   for (const name of ['app', 'app-commit', 'plugin', 'plugin-commit']) {
-    if (!values[name]) throw new Error(`--${name} is required`);
+    if (!values[name]) throw new Refusal(`--${name} is required. Nothing was changed.`);
   }
+
+  // 1. Read and check everything.
+  /** @type {[string, Buffer][]} local path, bytes */
+  const writes = [];
 
   const pluginCommit = fullCommit(values.plugin, values['plugin-commit']);
   const pluginFiles = {};
   for (const [local, upstream] of Object.entries(PLUGIN_FILES)) {
-    const bytes = git(values.plugin, ['show', `${pluginCommit}:${upstream}`]);
-    writeFileSync(join(ROOT, local), bytes);
+    const bytes = readAt(values.plugin, pluginCommit, upstream);
+    writes.push([local, bytes]);
     pluginFiles[local] = { upstream, sha256: sha256(bytes) };
   }
 
@@ -69,13 +109,20 @@ function main(argv) {
   for (const [local, upstream] of Object.entries(APP_FILES)) {
     if (values.provisional) {
       if (existsAt(values.app, appCommit, upstream)) {
-        process.stderr.write(`note: ${upstream} exists at ${appCommit.slice(0, 7)}; re-vendor without --provisional once it has tool_descriptors\n`);
+        process.stderr.write(`note: ${upstream} exists at ${appCommit.slice(0, 7)}; re-vendor without --provisional ` +
+          "once it has tool_descriptors and raycast PR 1's keys\n");
       }
       const bytes = readFileSync(join(ROOT, local));
       appFiles[local] = { upstream, transcribed_from: TRANSCRIBED_FROM, sha256: sha256(bytes) };
     } else {
-      const bytes = git(values.app, ['show', `${appCommit}:${upstream}`]);
-      writeFileSync(join(ROOT, local), bytes);
+      const bytes = readAt(values.app, appCommit, upstream);
+      const problems = upstreamContractProblems(bytes);
+      if (problems.length > 0) {
+        throw new Refusal(`${upstream} at ${appCommit.slice(0, 7)} isn't a contract this connector can load ` +
+          `(${problems.join(', ')}). It needs raycast PR 1's keys and DIST-A1's tool_descriptors: re-vendor from ` +
+          'the wisply-ai commit on main that has both. Nothing was changed.');
+      }
+      writes.push([local, bytes]);
       appFiles[local] = { upstream, sha256: sha256(bytes) };
     }
   }
@@ -93,9 +140,35 @@ function main(argv) {
       { repository: PLUGIN_REPOSITORY, commit: pluginCommit, provisional: false, files: pluginFiles },
     ],
   };
-  writeFileSync(join(ROOT, SOURCE_FILE), `${JSON.stringify(source, null, 2)}\n`);
-  for (const target of generate()) process.stdout.write(`wrote ${target}\n`);
+
+  // 2. Only now write: the vendored files, SOURCE.json, the generated modules.
+  try {
+    for (const [local, bytes] of writes) writeFileSync(join(ROOT, local), bytes);
+    writeFileSync(join(ROOT, SOURCE_FILE), `${JSON.stringify(source, null, 2)}\n`);
+    for (const target of generate()) process.stdout.write(`wrote ${target}\n`);
+  } catch (error) {
+    throw new Refusal(`writing failed (${error instanceof Error ? error.message : String(error)}), so the tree may be ` +
+      'partly vendored: restore it with git checkout -- contract lib/identity.mjs');
+  }
   process.stdout.write(`wrote ${SOURCE_FILE}${values.provisional ? ' (provisional)' : ''}\n`);
 }
 
-main(process.argv.slice(2));
+/** Whether this file is the program node runs (not an import), with symlinks resolved on both sides. */
+const isMain = () => {
+  try {
+    return Boolean(process.argv[1]) && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+};
+
+if (isMain()) {
+  try {
+    main(process.argv.slice(2));
+  } catch (error) {
+    const text = error instanceof Refusal ? error.message
+      : `${error instanceof Error ? error.message : String(error)} (stopped before writing anything)`;
+    process.stderr.write(`sync-vendor: ${text}\n`);
+    process.exitCode = 1;
+  }
+}

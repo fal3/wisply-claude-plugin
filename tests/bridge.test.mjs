@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import contract from '../lib/contract.mjs';
-import { PACKAGE_NAME, PLANNED_COMMANDS, PROTOCOL_VERSIONS, VERSION } from '../lib/constants.mjs';
+import { PACKAGE_NAME, PACKAGE_SPEC, PLANNED_COMMANDS, PROTOCOL_VERSIONS, VERSION } from '../lib/constants.mjs';
 import { createBridge } from '../lib/bridge.mjs';
 import { createDebug } from '../lib/debug.mjs';
 import * as messages from '../lib/messages.mjs';
@@ -302,6 +302,7 @@ test('identity outcomes map to their messages and keep the token back', async ()
     ['unavailable', messages.unavailable(52000)],
     ['old-wisply', messages.UPDATE_WISPLY],
     ['missing-scope', messages.UPDATE_WISPLY_SCOPE],
+    ['keychain', messages.keychainUnavailable(52000)],
     ['something-else', messages.notWisply(52000)],
   ];
   for (const [outcome, expected] of cases) {
@@ -411,12 +412,13 @@ test('debug lines carry no arguments, results or tokens', async () => {
 });
 
 test('messages are the spec\'s exact texts (distribution design, "Errors")', () => {
-  // With the setup command (DIST-M2 on), the token texts are the spec's, word for word.
-  const withSetup = messages.tokenTexts('npx -y @wisply/mcp setup');
-  assert.equal(messages.SETUP_COMMAND, 'npx -y @wisply/mcp setup');
-  assert.equal(withSetup.SETUP, 'Wisply MCP token is not set. In Wisply on this Mac, open Settings > Integrations > MCP Server and copy the read-only connector token. Then run `npx -y @wisply/mcp setup` in Terminal, or set WISPLY_MCP_TOKEN in this app\'s MCP settings.');
-  assert.equal(withSetup.MALFORMED, 'WISPLY_MCP_TOKEN is set but isn\'t a Wisply token (it should start with wspc_, wspr_ or wsp_ and have 64 hex characters). Fix it in this app\'s MCP settings, or remove it to use the token saved by `npx -y @wisply/mcp setup`.');
-  assert.equal(withSetup.notWisply(51771), 'Wisply identity check failed: the program on 127.0.0.1:51771 couldn\'t prove it is the Wisply that issued this token, so the token wasn\'t sent. If you regenerated the token in Wisply, run `npx -y @wisply/mcp setup` again. Otherwise quit whatever is using that port.');
+  // With the setup command (DIST-M2 on), the token texts are the spec's, except that the command runs this
+  // exact version with npx's --prefix / (docs/design-differences.md).
+  assert.equal(messages.SETUP_COMMAND, 'npx -y --prefix / @wisply/mcp@0.1.0 setup');
+  const withSetup = messages.tokenTexts(messages.SETUP_COMMAND);
+  assert.equal(withSetup.SETUP, 'Wisply MCP token is not set. In Wisply on this Mac, open Settings > Integrations > MCP Server and copy the read-only connector token. Then run `npx -y --prefix / @wisply/mcp@0.1.0 setup` in Terminal, or set WISPLY_MCP_TOKEN in this app\'s MCP settings.');
+  assert.equal(withSetup.MALFORMED, 'WISPLY_MCP_TOKEN is set but isn\'t a Wisply token (it should start with wspc_, wspr_ or wsp_ and have 64 hex characters). Fix it in this app\'s MCP settings, or remove it to use the token saved by `npx -y --prefix / @wisply/mcp@0.1.0 setup`.');
+  assert.equal(withSetup.notWisply(51771), 'Wisply identity check failed: the program on 127.0.0.1:51771 couldn\'t prove it is the Wisply that issued this token, so the token wasn\'t sent. If you regenerated the token in Wisply, run `npx -y --prefix / @wisply/mcp@0.1.0 setup` again. Otherwise quit whatever is using that port.');
   // This build has no setup command yet, so they point only at WISPLY_MCP_TOKEN.
   const interim = messages.tokenTexts(null);
   assert.equal(interim.SETUP, 'Wisply MCP token is not set. In Wisply on this Mac, open Settings > Integrations > MCP Server and copy the read-only connector token. Then set WISPLY_MCP_TOKEN in this app\'s MCP settings, through its secret storage if it has one.');
@@ -426,10 +428,12 @@ test('messages are the spec\'s exact texts (distribution design, "Errors")', () 
   assert.equal(messages.SETUP, current.SETUP);
   assert.equal(messages.MALFORMED, current.MALFORMED);
   assert.equal(messages.notWisply(51771), current.notWisply(51771));
-  assert.equal(messages.FULL_ACCESS_REFUSED, 'That is Wisply\'s full-access token, so it wasn\'t saved. Run `npx -y @wisply/mcp setup` again with the read-only connector token. If you need recording control and follow-ups, run `npx -y @wisply/mcp setup --full-access`.');
+  assert.equal(messages.FULL_ACCESS_REFUSED, 'That is Wisply\'s full-access token, so it wasn\'t saved. Run `npx -y --prefix / @wisply/mcp@0.1.0 setup` again with the read-only connector token. If you need recording control and follow-ups, run `npx -y --prefix / @wisply/mcp@0.1.0 setup --full-access`.');
   assert.equal(messages.unavailable(51771), 'Wisply isn\'t answering on 127.0.0.1:51771. Open Wisply on this Mac and turn on Settings > Integrations > MCP Server.');
   assert.equal(messages.UPDATE_WISPLY, 'This version of Wisply has no identity check, so the token wasn\'t sent. Update Wisply from the Mac App Store.');
-  assert.equal(messages.UPDATE_WISPLY_SCOPE, 'This version of Wisply doesn\'t know recording-control tokens (wspr_). Update Wisply, or use the connector token.');
+  // The spec's text named only an old Wisply; a current one leaves out the proof of a token it can't read.
+  assert.equal(messages.UPDATE_WISPLY_SCOPE, 'This version of Wisply doesn\'t know recording-control tokens (wspr_), or couldn\'t read yours from the Keychain, so the token wasn\'t sent. Update Wisply, or quit and reopen it and copy the recording token again; or use the connector token.');
+  assert.equal(messages.keychainUnavailable(51771), 'Wisply on 127.0.0.1:51771 couldn\'t read its MCP tokens from the Keychain, so the token wasn\'t sent. Quit and reopen Wisply, and allow Keychain access if macOS asks.');
   assert.equal(messages.CLAUDE_SETUP_HIDDEN, 'setup_claude is turned off in this connector. Set up Claude in Wisply > Settings > Integrations > Claude & Agents, or start the connector with --allow-claude-setup.');
   assert.equal(messages.notMac('linux'), 'Wisply\'s MCP server runs in Wisply for Mac on the same computer. This connector is running on Linux, so there\'s nothing to connect to.');
   assert.equal(messages.requestFailed(500), 'Local Wisply request failed (HTTP 500). Check Wisply\'s MCP settings.');
@@ -442,13 +446,14 @@ test('no message sends users to a command this build doesn\'t have', () => {
   // FULL_ACCESS_REFUSED is printed only by `setup` itself, so it is exempt.
   const shown = [
     messages.SETUP, messages.MALFORMED, messages.notWisply(51771), messages.unavailable(51771), messages.UPDATE_WISPLY,
-    messages.UPDATE_WISPLY_SCOPE, messages.CLAUDE_SETUP_HIDDEN, messages.notMac('linux'), messages.requestFailed(500),
+    messages.UPDATE_WISPLY_SCOPE, messages.keychainUnavailable(51771), messages.CLAUDE_SETUP_HIDDEN, messages.notMac('linux'), messages.requestFailed(500),
     messages.rpcFailed(-32602, 'list_memos'), messages.INSTRUCTIONS, messages.HELP,
     ...['full', 'connector', 'recording'].flatMap((scope) => [messages.scope('list_memos', scope), messages.scope('list_memos', scope, { readOnly: true })]),
   ];
   for (const command of PLANNED_COMMANDS) {
     for (const text of shown) {
-      assert.ok(!text.includes(`${PACKAGE_NAME} ${command}`) && !text.includes(`wisply-mcp ${command}`), `"${command}" isn't in this build: ${text}`);
+      assert.ok(!text.includes(`${PACKAGE_NAME} ${command}`) && !text.includes(`${PACKAGE_SPEC} ${command}`) &&
+        !text.includes(`wisply-mcp ${command}`), `"${command}" isn't in this build: ${text}`);
     }
   }
   assert.ok(PLANNED_COMMANDS.includes('setup') !== messages.SETUP.includes(messages.SETUP_COMMAND));
