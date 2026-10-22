@@ -44,9 +44,33 @@ All notable changes to `@wisply/mcp` are listed here. Versions follow
   arguments, results or tokens.
 - `--help` and `--version`.
 
+### Added outside the npm package
+
+These live in the repository, not in the package:
+
+- The Agent Plugin (`plugin.json`, `mcp.json`, Agent Plugins 1.0.0) for
+  Codex, Cursor, VS Code and GitHub Copilot CLI, with a Codex marketplace
+  (`.agents/plugins/marketplace.json`). It runs the repository's copy of the
+  connector with `node`, never `npx`.
+- The Gemini CLI extension (`gemini-extension.json`): the token as an
+  optional sensitive setting, and the commands `/wisply:recap`,
+  `/wisply:live` and `/wisply:find`.
+- The portable skill `skills/wisply-memos/SKILL.md` (Agent Skills), and an
+  optional Cursor rule and command in `extras/cursor/`.
+- The Claude Desktop bundle source (`mcpb/manifest.json`, MCPB 0.3, with an
+  optional masked token field that defaults to empty, so an empty field
+  uses the token saved by `setup`) and `npm run build:mcpb`.
+- MCP Registry entries `server.json` (`ai.wisply/local`: the npm package and
+  the bundle) and `registry/cloud.server.json` (`ai.wisply/cloud`, for Cloud
+  Connect), `glama.json` and `llms-install.md`.
+- The README's install matrix: one-click links for Cursor, VS Code, VS Code
+  Insiders, Goose, LM Studio and Kiro, and the setup for 20 apps.
+
 ### Not yet
 
 - The contract is provisional (transcribed from Wisply's tool catalog), so
   `package.json` is `"private"` and npm refuses to publish it until the
   contract is re-vendored from wisply-ai.
 - `print-config` and `install`.
+- The bundle's `fileSha256` in `server.json` is a placeholder until the
+  release asset exists; `WISPLY_REGISTRY_RELEASE=1 npm test` refuses it.

@@ -1,0 +1,58 @@
+{
+  "schema": "wisply-mcp-test-schemas-v1",
+  "note": "Upstream JSON Schemas, copied unchanged, that tests/manifests.test.mjs and tests/registry.test.mjs validate the root manifests against with tests/helpers/json-schema.mjs. Test fixtures only: not in the npm package. Re-copy them (and update the hashes) only when a manifest moves to a newer schema.",
+  "sources": [
+    {
+      "name": "Agent Plugins 1.0.0",
+      "repository": "https://github.com/agentplugins/agent-plugins-spec",
+      "commit": "ff8ab5e392cc87bd88d87c060815a87490e51003",
+      "license": "Apache-2.0",
+      "files": {
+        "tests/schemas/agent-plugins-1.0.0/plugin.schema.json": {
+          "upstream": "schemas/1.0.0/plugin.schema.json",
+          "sha256": "0a4aad95ce337878ad38802ebf0daa3fde76abe3f65400c86bcbb1ec0b3ab883"
+        },
+        "tests/schemas/agent-plugins-1.0.0/mcp.schema.json": {
+          "upstream": "schemas/1.0.0/mcp.schema.json",
+          "sha256": "6539175bfcdf43085855183e86da40ea94b166547a72b47ae9a0a390516d3acb"
+        },
+        "tests/schemas/agent-plugins-1.0.0/LICENSE-Apache-2.0.txt": {
+          "upstream": "LICENSES/Apache-2.0.txt",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        }
+      }
+    },
+    {
+      "name": "MCP Registry server.json 2025-12-11 (https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json, as embedded by the registry's validator)",
+      "repository": "https://github.com/modelcontextprotocol/registry",
+      "commit": "11b7b0e274d518b6f449c5ee3518a6151d9848b9",
+      "license": "MIT OR Apache-2.0 (see LICENSE)",
+      "files": {
+        "tests/schemas/mcp-registry-2025-12-11/server.schema.json": {
+          "upstream": "internal/validators/schemas/2025-12-11.json",
+          "sha256": "2e1e2dc758185bfc91023df4e5ace0e1c1bdb7b7b3d6614bb9ac6b9e9a9c2f68"
+        },
+        "tests/schemas/mcp-registry-2025-12-11/LICENSE": {
+          "upstream": "LICENSE",
+          "sha256": "0382b0057770ca05e9c350a50aa3b1c1fea84da0bc81d723bf00b9aa841be58a"
+        }
+      }
+    },
+    {
+      "name": "MCPB manifest 0.3",
+      "repository": "npm:@anthropic-ai/mcpb@2.1.2",
+      "commit": "2.1.2",
+      "license": "MIT",
+      "files": {
+        "tests/schemas/mcpb-0.3/manifest.schema.json": {
+          "upstream": "dist/mcpb-manifest-v0.3.schema.json",
+          "sha256": "3a0ac9d845711a1b9b17dfa5a52f8b60628239d6a86a9db417206a9efc78592d"
+        },
+        "tests/schemas/mcpb-0.3/LICENSE": {
+          "upstream": "LICENSE",
+          "sha256": "c8d40185f85962734fe6a50040cadafe0b3cdf91b4002364f4c96266b3a965d4"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "name": "wisply",
+  "interface": {
+    "displayName": "Wisply"
+  },
+  "plugins": [
+    {
+      "name": "wisply",
+      "source": "./",
+      "category": "productivity",
+      "description": "Your Wisply meeting notes in Codex, from the Wisply app on this Mac."
+    }
+  ]
+}

@@ -54,7 +54,8 @@ test('no dependencies and no lifecycle scripts', () => {
     assert.equal(Object.hasOwn(pkg, field), false, field);
   }
   for (const script of LIFECYCLE) assert.equal(Object.hasOwn(pkg.scripts ?? {}, script), false, script);
-  assert.deepEqual(Object.keys(pkg.scripts).sort(), ['check', 'gen-data', 'sync-vendor', 'test']);
+  assert.deepEqual(Object.keys(pkg.scripts).sort(), ['build:mcpb', 'check', 'gen-data', 'sync-vendor', 'test']);
+  assert.equal(pkg.scripts['build:mcpb'], 'node scripts/build-mcpb.mjs');
   assert.equal(pkg.scripts.check, 'npm test && npm pack --dry-run');
 });
 
@@ -91,8 +92,14 @@ test('the bin is an executable node script', () => {
   assert.ok((statSync(bin).mode & 0o111) !== 0, 'chmod +x bin/wisply-mcp.mjs');
 });
 
-test('CI is read-only, SHA-pinned and installs nothing', () => {
-  const ci = readFileSync(join(ROOT, '.github/workflows/ci.yml'), 'utf8');
+// The one install CI may run: the pinned MCPB tool for the bundle checks, outside the package and without its
+// scripts (job mcpb; tests/manifests.test.mjs checks the job's shape).
+const MCPB_INSTALL = 'npm install --no-save --ignore-scripts --prefix .ci/mcpb @anthropic-ai/mcpb@2.1.2';
+
+test('CI is read-only, SHA-pinned and installs nothing but the pinned MCPB tool', () => {
+  const workflow = readFileSync(join(ROOT, '.github/workflows/ci.yml'), 'utf8');
+  assert.equal(workflow.split(MCPB_INSTALL).length - 1, 1, 'exactly one pinned MCPB install');
+  const ci = workflow.replace(MCPB_INSTALL, '');
   assert.match(ci, /^permissions:\n {2}contents: read\n/m);
   const uses = [...ci.matchAll(/uses:\s*(\S+)/g)].map((match) => match[1]);
   assert.ok(uses.length >= 2);

@@ -40,8 +40,9 @@ For example, in `~/.cursor/mcp.json`:
 or in Claude Code: `claude mcp add --scope user wisply -- npx -y @wisply/mcp@0.1.0`.
 
 Install Wisply once per app. Two entries named `wisply` show the tools twice.
-One-click links and snippets for every client follow with the first release
-and on [wisply.ai/docs/mcp/install](https://www.wisply.ai/docs/mcp/install).
+One-click links, plugins and the setup for each app are under
+[Install in your AI app](#install-in-your-ai-app), and on
+[wisply.ai/docs/mcp/install](https://www.wisply.ai/docs/mcp/install).
 
 **Don't paste a token into a config file.** Config files end up in Settings
 Sync, dotfile repositories and backups. Run `npx -y @wisply/mcp setup` once to
@@ -108,6 +109,94 @@ Wisply if you suspect malware.
 AI apps read the tool list when they start the connector. After the token
 changes, restart the connector (or the app) in each AI app that was already
 running.
+
+## Install in your AI app
+
+Run `npx -y @wisply/mcp setup` once (above), then add Wisply to each app in
+one of the ways below. None of them holds a token: they all use the token
+saved by `setup`, or the one your app keeps in its own secret storage.
+
+### One click
+
+[<img src="https://cursor.com/deeplink/mcp-install-dark.svg" alt="Add Wisply to Cursor" height="32">](https://cursor.com/en/install-mcp?name=wisply&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkB3aXNwbHkvbWNwQDAuMS4wIl19)
+[<img src="https://img.shields.io/badge/VS_Code-VS_Code?style=flat-square&label=Install%20Wisply&color=0098FF" alt="Install Wisply in VS Code">](https://insiders.vscode.dev/redirect?url=vscode%3Amcp%2Finstall%3F%257B%2522name%2522%253A%2522wisply%2522%252C%2522command%2522%253A%2522npx%2522%252C%2522args%2522%253A%255B%2522-y%2522%252C%2522%2540wisply%252Fmcp%25400.1.0%2522%255D%257D)
+[<img src="https://img.shields.io/badge/VS_Code_Insiders-VS_Code_Insiders?style=flat-square&label=Install%20Wisply&color=24bfa5" alt="Install Wisply in VS Code Insiders">](https://insiders.vscode.dev/redirect?url=vscode-insiders%3Amcp%2Finstall%3F%257B%2522name%2522%253A%2522wisply%2522%252C%2522command%2522%253A%2522npx%2522%252C%2522args%2522%253A%255B%2522-y%2522%252C%2522%2540wisply%252Fmcp%25400.1.0%2522%255D%257D)
+[<img src="https://block.github.io/goose/img/extension-install-dark.svg" alt="Install Wisply in Goose" height="32">](https://block.github.io/goose/extension?cmd=npx&arg=-y&arg=%40wisply%2Fmcp%400.1.0&id=wisply&name=Wisply&description=Your%20Wisply%20meeting%20notes%20from%20the%20Wisply%20app%20on%20this%20Mac&timeout=300)
+[<img src="https://files.lmstudio.ai/deeplink/mcp-install-light.svg" alt="Add Wisply to LM Studio" height="32">](https://lmstudio.ai/install-mcp?name=wisply&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkB3aXNwbHkvbWNwQDAuMS4wIl19)
+[<img src="https://kiro.dev/images/add-to-kiro.svg" alt="Add Wisply to Kiro" height="32">](https://kiro.dev/launch/mcp/add?name=wisply&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40wisply%2Fmcp%400.1.0%22%5D%7D)
+
+These buttons add the standard entry, which runs `@wisply/mcp@0.1.0` from npm
+each time your app starts the connector (see "Versions" above).
+
+### Plugins, extensions and the Claude Desktop bundle
+
+These run the copy of the connector that comes with them, never `npx`:
+
+- **Agent Plugin** (Codex, Cursor, VS Code, GitHub Copilot CLI): this
+  repository is one plugin (`plugin.json`, `mcp.json` and the
+  `wisply-memos` skill). Codex: `codex plugin marketplace add fal3/wisply-mcp`,
+  then install **wisply** in `/plugins`. VS Code: **Chat: Install Plugin From
+  Source** with `https://github.com/fal3/wisply-mcp`, or
+  `/plugin install fal3/wisply-mcp` in a Copilot chat. GitHub Copilot CLI:
+  `copilot plugin install fal3/wisply-mcp`. Cursor: from the Cursor
+  Marketplace once it's listed. The plugin starts `node`, so Node.js 20 or
+  later must be on the app's `PATH` (see "GUI apps and `npx`" above).
+- **Gemini CLI extension**: `gemini extensions install https://github.com/fal3/wisply-mcp`.
+  Gemini asks for an optional Wisply token and keeps it in the system
+  keychain; leave it empty to use the token saved by `setup` (Gemini then
+  says the setting is missing, which is expected). It adds the
+  skill and three commands: `/wisply:recap`, `/wisply:live` and
+  `/wisply:find <phrase>`.
+- **Claude Desktop bundle**: double-click `wisply-mcp-0.1.0.mcpb` from this
+  repository's GitHub release. Claude shows an install dialog with an
+  optional, masked "Wisply token" field, which it keeps in your system
+  keychain; leave it empty to use the token saved by `setup`. The bundle runs
+  on Claude Desktop's own Node.
+- **Claude Code plugin**: `/plugin install wisply-local --marketplace fal3/wisply-claude-plugin`
+  adds the read-only tools, a status line and a quote button
+  ([wisply-claude-plugin](https://github.com/fal3/wisply-claude-plugin)).
+
+### Every app
+
+The package is `@wisply/mcp@0.1.0`; the standard entry is
+`{"command": "npx", "args": ["-y", "@wisply/mcp@0.1.0"]}`.
+
+| App | One click or one command | Or add it by hand |
+|---|---|---|
+| Claude Code | `claude mcp add --scope user wisply -- npx -y @wisply/mcp@0.1.0`, or the Claude Code plugin (above) | — |
+| Claude Desktop | The bundle (above) | `~/Library/Application Support/Claude/claude_desktop_config.json`: `{"mcpServers":{"wisply":{"command":"npx","args":["-y","@wisply/mcp@0.1.0"]}}}` |
+| Cursor | **Add to Cursor** (above), or the Agent Plugin | `~/.cursor/mcp.json`: `{"mcpServers":{"wisply":{"command":"npx","args":["-y","@wisply/mcp@0.1.0"]}}}` |
+| VS Code | **Install in VS Code** (above), the Agent Plugin, or `code --add-mcp '{"name":"wisply","type":"stdio","command":"npx","args":["-y","@wisply/mcp@0.1.0"]}'` | **MCP: Open User Configuration**: `{"servers":{"wisply":{"type":"stdio","command":"npx","args":["-y","@wisply/mcp@0.1.0"]}}}` |
+| Windsurf / Devin Desktop | — | `~/.codeium/windsurf/mcp_config.json`: `{"mcpServers":{"wisply":{"command":"npx","args":["-y","@wisply/mcp@0.1.0"]}}}`, then Refresh in the MCP panel |
+| Zed | — | `settings.json`: `{"context_servers":{"wisply":{"command":"npx","args":["-y","@wisply/mcp@0.1.0"],"env":{}}}}`. In a remote-development window keep the default `"remote": false`, so the connector runs on your Mac |
+| JetBrains AI Assistant / Junie | — | Settings > Tools > AI Assistant > Model Context Protocol (MCP) > Add > STDIO: `{"mcpServers":{"wisply":{"command":"npx","args":["-y","@wisply/mcp@0.1.0"]}}}`. Junie: the same in `.junie/mcp/mcp.json` |
+| Codex | `codex mcp add wisply -- npx -y @wisply/mcp@0.1.0`, or the Agent Plugin | `~/.codex/config.toml`: `[mcp_servers.wisply]`, `command = "npx"`, `args = ["-y", "@wisply/mcp@0.1.0"]` |
+| Gemini CLI | The extension (above), or `gemini mcp add --scope user wisply npx -- -y @wisply/mcp@0.1.0` (arguments that start with `-` go after `--`) | — |
+| GitHub Copilot CLI | `copilot plugin install fal3/wisply-mcp`, or `/mcp add` | `~/.copilot/mcp-config.json`: `{"mcpServers":{"wisply":{"type":"local","command":"npx","args":["-y","@wisply/mcp@0.1.0"],"tools":["*"]}}}` |
+| Warp | `/add-mcp`, then paste the standard entry | Settings > AI > Manage MCP Servers > + Add |
+| Cline | Cline MCP Marketplace, once it's listed ([llms-install.md](llms-install.md)) | `cline_mcp_settings.json`: `{"mcpServers":{"wisply":{"type":"stdio","command":"npx","args":["-y","@wisply/mcp@0.1.0"],"disabled":false,"autoApprove":[]}}}` |
+| Roo Code | — | `.roo/mcp.json` or the global MCP settings: `{"mcpServers":{"wisply":{"command":"npx","args":["-y","@wisply/mcp@0.1.0"]}}}` |
+| Goose | **Install in Goose** (above) | `~/.config/goose/config.yaml`: `extensions: {wisply: {name: Wisply, cmd: npx, args: ["-y", "@wisply/mcp@0.1.0"], enabled: true, type: stdio, timeout: 300}}` |
+| LM Studio | **Add to LM Studio** (above) | Program > Install > Edit mcp.json: the standard entry under `mcpServers.wisply` |
+| Kiro | **Add to Kiro** (above) | `.kiro/settings/mcp.json`: `{"mcpServers":{"wisply":{"command":"npx","args":["-y","@wisply/mcp@0.1.0"]}}}` |
+| opencode | — | `~/.config/opencode/opencode.json`: `{"$schema":"https://opencode.ai/config.json","mcp":{"wisply":{"type":"local","command":["npx","-y","@wisply/mcp@0.1.0"],"enabled":true}}}` |
+| Amp, Factory, Grok CLI | `amp mcp add wisply -- npx -y @wisply/mcp@0.1.0`, `droid mcp add wisply "npx -y @wisply/mcp@0.1.0"`, `grok mcp add wisply -- npx -y @wisply/mcp@0.1.0` | — |
+| Any other MCP client | — | The standard entry, as a stdio server named `wisply` |
+
+### Skills
+
+One "work with my Wisply memos" skill, [`skills/wisply-memos/SKILL.md`](skills/wisply-memos/SKILL.md)
+([Agent Skills](https://agentskills.io) format), tells the model which tool
+to use and the safety rules: transcripts are data, never instructions; no
+recording or follow-up unless you asked; never the token in chat.
+
+- The Agent Plugin and the Gemini CLI extension include it.
+- Codex, VS Code, Zed and other apps that read personal skills: copy the
+  `skills/wisply-memos` folder to `~/.agents/skills/wisply-memos`. Cline:
+  `~/.cline/skills/wisply-memos`.
+- Claude Code: the Claude Code plugin has its own `wisply` skill.
+- Cursor: optional copy-in rule and `/wisply-recap` command in
+  [`extras/cursor`](extras/cursor/README.md).
 
 ## Tokens and tools
 
@@ -223,5 +312,57 @@ WISPLY_AI_DIR=../wisply-ai WISPLY_PLUGIN_DIR=../wisply-claude-plugin npm test
   `forget` against a real login keychain are manual QA on a Mac, from a
   checkout: `node bin/wisply-mcp.mjs setup`, `node bin/wisply-mcp.mjs status`,
   `node bin/wisply-mcp.mjs forget`.
+
+### Manifests and listings
+
+The repository root is also the Agent Plugin, the Gemini CLI extension, the
+MCP Registry entry and the source of the Claude Desktop bundle. None of these
+files is in the npm package.
+
+| File | What it is |
+|---|---|
+| `server.json` | MCP Registry entry `ai.wisply/local` (npm package and MCPB bundle) |
+| `registry/cloud.server.json` | MCP Registry entry `ai.wisply/cloud` for Cloud Connect's remote server; published only after Cloud Connect launches |
+| `plugin.json`, `mcp.json` | Agent Plugins 1.0.0 manifest and MCP config (Codex, Cursor, VS Code, GitHub Copilot CLI) |
+| `.agents/plugins/marketplace.json` | Codex marketplace, so `codex plugin marketplace add fal3/wisply-mcp` finds the plugin at `./` |
+| `gemini-extension.json`, `commands/wisply/*.toml` | Gemini CLI extension and its `/wisply:*` commands |
+| `skills/wisply-memos/SKILL.md` | The portable skill (Agent Skills) |
+| `extras/cursor/` | Optional Cursor rule and command to copy in |
+| `mcpb/manifest.json`, `mcpb/icon.png` | Claude Desktop bundle (MCPB 0.3) |
+| `glama.json` | Glama ownership (`maintainers`) |
+| `llms-install.md` | Install steps for Cline's marketplace |
+
+`tests/manifests.test.mjs`, `tests/registry.test.mjs` and
+`tests/skills.test.mjs` keep their names, versions and tool lists in step with
+`package.json` and the contract, and validate them against the upstream
+schemas in `tests/schemas/`.
+
+### The Claude Desktop bundle
+
+```bash
+npm run build:mcpb                                   # dist/wisply-mcp-<version>.mcpb and its sha256
+node scripts/build-mcpb.mjs --sync                   # after the contract or the version changes
+npx -y @anthropic-ai/mcpb@2.1.2 validate mcpb/manifest.json
+```
+
+`build:mcpb` stages `bin/`, `lib/`, `contract/`, `clients/`, `LICENSE`, the
+manifest and the icon in `dist/mcpb/`, writes the manifest's `tools` from the
+contract, and packs it with `@anthropic-ai/mcpb` 2.1.2 (through `npx`, or the
+copy `WISPLY_MCPB_LIB` points to). `tests/mcpb-config.test.mjs` runs the real
+library when `WISPLY_MCPB_LIB` is set, as the CI job `mcpb` does:
+
+```bash
+npm install --no-save --ignore-scripts --prefix .ci/mcpb @anthropic-ai/mcpb@2.1.2
+WISPLY_MCPB_LIB=$PWD/.ci/mcpb/node_modules/@anthropic-ai/mcpb/dist/index.js npm test
+```
+
+Zip entries carry the build time, so every build has a new sha256. For a
+release, build the bundle once from the release tag, upload it to the draft
+GitHub release, put its sha256 in `server.json` (`fileSha256`), and check it
+before publishing the registry entry:
+
+```bash
+WISPLY_REGISTRY_RELEASE=1 WISPLY_MCPB_FILE=dist/wisply-mcp-0.1.0.mcpb npm test
+```
 
 Security reports: see [SECURITY.md](SECURITY.md). License: [MIT](LICENSE).

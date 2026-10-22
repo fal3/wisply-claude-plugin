@@ -92,6 +92,13 @@ would run the same way. `npx` doesn't check npm provenance when it installs a
 package, so provenance is an audit trail, not a guard. Publishing is guarded
 by npm's own controls, listed under "Release controls" below.
 
+The Agent Plugin, the Gemini CLI extension and the Claude Desktop bundle in
+this repository run the copy of the connector that comes with them (`node
+bin/wisply-mcp.mjs`), never `npx`, so they change only when you update the
+plugin, extension or bundle. The bundle's sha256 is recorded in the MCP
+Registry entry (`server.json`, `fileSha256`), and the registry tells clients
+to check it before they run the bundle.
+
 Until the contract with Wisply is final, `package.json` is marked `"private"`,
 so `npm publish` refuses the package.
 
@@ -131,8 +138,19 @@ package has never been published.
    "Require two-factor authentication and disallow tokens". This repository
    has no release workflow yet; until it does, no release claims provenance.
 5. **Every release** bumps `version` in `package.json` and `VERSION` in
-   `lib/constants.mjs` together. The snippets follow `PACKAGE_SPEC`; update
-   the wisply.ai guide and Wisply's snippets to the new version.
+   `lib/constants.mjs` together, with the versions in `plugin.json`,
+   `gemini-extension.json`, `mcpb/manifest.json` and `server.json` (its
+   bundle URL included) and the README's links (`tests/manifests.test.mjs`
+   and `tests/registry.test.mjs` fail until they agree). The snippets follow
+   `PACKAGE_SPEC`; update the wisply.ai guide and Wisply's snippets to the
+   new version.
+6. **The Claude Desktop bundle** is built once from the release tag
+   (`npm run build:mcpb`), uploaded to a draft GitHub release with immutable
+   releases turned on, and its sha256 goes into `server.json` before the
+   registry entry is published:
+   `WISPLY_REGISTRY_RELEASE=1 WISPLY_MCPB_FILE=dist/wisply-mcp-<version>.mcpb npm test`
+   must pass. A rebuilt bundle has a different sha256, so never rebuild a
+   released one.
 
 ## If a bad release is published (maintainers)
 

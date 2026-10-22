@@ -1,0 +1,22 @@
+{
+  "name": "wisply",
+  "version": "0.1.0",
+  "description": "Use your Wisply meeting notes, action items and live transcript from the Wisply app on this Mac.",
+  "mcpServers": {
+    "wisply": {
+      "command": "node",
+      "args": [
+        "${extensionPath}/bin/wisply-mcp.mjs"
+      ],
+      "cwd": "${extensionPath}"
+    }
+  },
+  "settings": [
+    {
+      "name": "Wisply token",
+      "description": "Optional. The read-only connector token from Wisply > Settings > Integrations > MCP Server. Leave empty if you ran npx -y @wisply/mcp setup.",
+      "envVar": "WISPLY_MCP_TOKEN",
+      "sensitive": true
+    }
+  ]
+}

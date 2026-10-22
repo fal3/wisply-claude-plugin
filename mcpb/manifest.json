@@ -1,0 +1,102 @@
+{
+  "manifest_version": "0.3",
+  "name": "wisply",
+  "display_name": "Wisply",
+  "version": "0.1.0",
+  "description": "Your Wisply meeting notes, action items and live transcript, from the Wisply app on this Mac.",
+  "long_description": "Talks only to the Wisply app on this Mac (127.0.0.1). Before each request it asks Wisply to prove it issued your token. What your AI app reads is sent to the AI service it uses, under that service's terms.",
+  "author": {
+    "name": "Wisply",
+    "email": "support@wisply.ai",
+    "url": "https://www.wisply.ai"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fal3/wisply-mcp"
+  },
+  "homepage": "https://www.wisply.ai/docs/mcp/install",
+  "documentation": "https://www.wisply.ai/docs/mcp",
+  "support": "https://www.wisply.ai/support",
+  "icon": "icon.png",
+  "server": {
+    "type": "node",
+    "entry_point": "bin/wisply-mcp.mjs",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/bin/wisply-mcp.mjs"
+      ],
+      "env": {
+        "WISPLY_MCP_TOKEN": "${user_config.wisply_mcp_token}"
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "list_memos",
+      "description": "List the user's Wisply recordings (memos), newest first. Read-only. Returns id, title, timestamps, duration, and a short summary when insights exist."
+    },
+    {
+      "name": "search_transcripts",
+      "description": "Search recording titles, summaries, and transcripts for a phrase. Read-only. Returns matching memos with a short excerpt around the first hit."
+    },
+    {
+      "name": "get_live_transcript",
+      "description": "Return the transcript of the recording currently in progress, plus its state and duration. Read-only. Empty when nothing is recording."
+    },
+    {
+      "name": "get_action_items",
+      "description": "Return the AI-generated action items and open questions for a memo (default: the newest memo that has insights), plus the Action Bot proposal chips currently awaiting the user in Wisply's Sidekick (action_bot_proposals). Read-only."
+    },
+    {
+      "name": "start_recording",
+      "description": "Start a new Wisply recording using the user's configured audio sources. Side effect: captures audio. Only works when the user has enabled agent recording control in Wisply settings."
+    },
+    {
+      "name": "stop_recording",
+      "description": "Stop the recording in progress and save it as a memo. Side effect: ends capture and writes a memo. Requires agent recording control to be enabled."
+    },
+    {
+      "name": "propose_follow_up",
+      "description": "Draft a follow-up (calendar block, Zoom meeting, or reminder) from a memo's action items and open questions and surface it as an Action Bot chip in Wisply's Sidekick with a confirmation card. Proposal only: nothing is written unless the user confirms in Wisply. Requires Action Bot to be enabled in Wisply settings. Poll get_action_proposal_status for the outcome."
+    },
+    {
+      "name": "get_action_proposal_status",
+      "description": "Report the status of Action Bot proposals (proposed_pending_user_confirmation, committed, undone, dismissed, failed, …) — one by proposal_id or all in this session. Read-only."
+    },
+    {
+      "name": "setup_claude",
+      "description": "Inspect or complete Wisply's Claude setup. Call with no arguments to see whether an Anthropic API key is stored and the cloud-AI consent_status. Pass api_key (sk-ant-…) to store the key in the user's Keychain; Wisply then shows the user its Cloud AI consent sheet. Pass request_consent=true to show that sheet without storing a key. Consent can only be granted by the user inside Wisply — never by this tool. Returns a ready-to-paste Cursor mcp.json snippet."
+    }
+  ],
+  "tools_generated": true,
+  "keywords": [
+    "wisply",
+    "meetings",
+    "transcripts",
+    "voice memos",
+    "local"
+  ],
+  "license": "MIT",
+  "privacy_policies": [
+    "https://www.wisply.ai/privacy"
+  ],
+  "compatibility": {
+    "platforms": [
+      "darwin"
+    ],
+    "runtimes": {
+      "node": ">=20.0.0"
+    }
+  },
+  "user_config": {
+    "wisply_mcp_token": {
+      "type": "string",
+      "title": "Wisply token",
+      "description": "Optional. The read-only connector token from Wisply > Settings > Integrations > MCP Server. Stored in your system keychain. Leave empty if you ran npx -y @wisply/mcp setup.",
+      "sensitive": true,
+      "required": false,
+      "default": ""
+    }
+  }
+}
