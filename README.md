@@ -69,13 +69,15 @@ npm run sync-vendor -- --mcp ../wisply-mcp --mcp-commit <sha> --mcp-ref main \
 
 `sync-vendor` records `--mcp-ref` only after `git merge-base --is-ancestor` confirms that the commit is on that branch. The release gate trusts a recorded `main`. After you change `src/editor-messages.mjs`, run `node esbuild.mjs --server`. It rebuilds the bundle and records the new sha256.
 
-**Current snapshot (interim, not releasable).** The connector comes from `433643f` on `claude/distribution-3`. That commit is DIST-M2 with its review fixes:
+**Current snapshot (interim, not releasable).** The connector comes from `b086989` on `claude/distribution-3`. That commit is DIST-M2 with its review fixes, merged with DIST-M1's second review:
 
 - `setup` replaces the Keychain item instead of merging access lists (no `-U`).
 - `/usr/bin/security` runs without `WISPLY_MCP_*` variables.
 - No connector text names the unregistered npm package.
+- When Wisply answers the identity check with its own 503 (it couldn't read its tokens from the Keychain), the connector still keeps the token back, and it now says to quit and reopen Wisply instead of reporting a failed identity check. Check Connection shows that text.
+- `forget` succeeds off macOS, where nothing can have been saved.
 
-These are the parts of the connector the extension runs: the server, `setup` and the token texts. The snapshot doesn't include DIST-M3 or DIST-M4. The bundle's `print-config` and `install` answer "not in this build", and the extension uses neither. The DIST-M2 and DIST-M4 review fixes are on separate branches, so no single commit has both yet. Once they are merged into `wisply-mcp` `main`, re-vendor from `main` with `--mcp-ref main`. Until then the release gate refuses this tree.
+These are the parts of the connector the extension runs: the server, `setup` and the token texts. DIST-M3's tip (`f28a7e1`) has the same `bin/` and `lib/` files byte for byte, so nothing from it is missing. The snapshot doesn't include DIST-M4: the bundle's `print-config` and `install` answer "not in this build", and the extension uses neither. Once M1 to M4 are merged into `wisply-mcp` `main`, re-vendor from `main` with `--mcp-ref main`. Until then the release gate refuses this tree.
 
 Never edit the vendored files or the bundle by hand. `test/vendor.test.mjs` and `test/bundle.test.mjs` fail if you do.
 

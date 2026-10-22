@@ -191,8 +191,15 @@ test('dist/extension.js has no network code: only vscode and child_process are r
   assert.doesNotMatch(text, /wsp[cr]?_[0-9a-f]{64}/);
 });
 
-/** A synthetic Wisply on a system-assigned port. `impostor` proves the wrong token. */
-async function startFakeWisply(t, { impostor = false } = {}) {
+/** What Wisply answers the identity check with when it can read none of its tokens (MCPServer+Identity.swift). */
+const WISPLY_KEYCHAIN_503 = 'MCP tokens are unavailable. Check Keychain access in Wisply.';
+
+/**
+ * A synthetic Wisply on a system-assigned port. `impostor` proves the wrong
+ * token; `keychainFailure` answers the identity check as a Wisply that
+ * couldn't read its tokens from the Keychain.
+ */
+async function startFakeWisply(t, { impostor = false, keychainFailure = false } = {}) {
   const seen = { challenges: [], calls: [] };
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1');
@@ -200,6 +207,11 @@ async function startFakeWisply(t, { impostor = false } = {}) {
     if (url.pathname === '/mcp/identity') {
       const nonce = url.searchParams.get('nonce');
       seen.challenges.push({ authorization: req.headers.authorization });
+      if (keychainFailure) {
+        res.writeHead(503, { 'Content-Type': 'text/plain' });
+        res.end(WISPLY_KEYCHAIN_503);
+        return;
+      }
       const proven = impostor ? `wspc_${'99'.repeat(32)}` : FAKE_TOKENS.connector;
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ server: 'wisply', scheme: 'wisply-mcp-identity-v1', port, nonce,
@@ -262,6 +274,49 @@ test('end to end: an impostor on the port never sees the token', async (t) => {
   assert.ok(impostor.seen.challenges.every((challenge) => challenge.authorization === undefined));
   assert.deepEqual(describeConnection(answer, { port: impostor.port, stored: 'connector', allowClaudeSetup: false }),
     { kind: 'problem', text: messages.notWisply(impostor.port) });
+});
+
+test('end to end: a Wisply that can\'t read its Keychain gets no token, and Check Connection says what to do', async (t) => {
+  const wisply = await startFakeWisply(t, { keychainFailure: true });
+  const { path } = loneBundle(t);
+  const sidecar = createSidecar({
+    execPath: process.execPath, serverPath: path, getPort: () => wisply.port,
+    getToken: async () => FAKE_TOKENS.connector, hostEnv: { PATH: process.env.PATH },
+  });
+  t.after(() => sidecar.dispose());
+  const answer = await sidecar.call('list_memos', { limit: 1 }, 15000);
+  assert.equal(answer.kind, 'result', JSON.stringify(answer));
+  assert.equal(answer.result.isError, true);
+  assert.equal(answer.result.content[0].text, messages.keychainUnavailable(wisply.port));
+  assert.equal(wisply.seen.calls.length, 0, 'the token is kept back');
+  assert.ok(wisply.seen.challenges.every((challenge) => challenge.authorization === undefined));
+  assert.deepEqual(describeConnection(answer, { port: wisply.port, stored: 'connector', allowClaudeSetup: false }),
+    { kind: 'problem', text: messages.keychainUnavailable(wisply.port) });
+});
+
+test('every text the bundled bridge can send to chat names neither npx, the npm package nor a connector command', () => {
+  // The bridge's texts, as it names them (messages.<name>), resolved through
+  // the overlay the bundle uses. A re-vendor that adds an npm or CLI step to
+  // one of them must overlay it in src/editor-messages.mjs (its header says why).
+  const bridge = readFileSync(join(ROOT, 'vendor/wisply-mcp/lib/bridge.mjs'), 'utf8');
+  const names = [...new Set([...bridge.matchAll(/\bmessages\.([A-Za-z_]\w*)/g)].map((match) => match[1]))]
+    .filter((name) => name !== 'mjs').sort();
+  for (const name of ['SETUP', 'MALFORMED', 'notWisply', 'keychainUnavailable', 'UPDATE_WISPLY_SCOPE', 'unavailable']) {
+    assert.ok(names.includes(name), `${name} is one of the bridge's texts`);
+  }
+  const texts = (value) => {
+    if (typeof value === 'string') return [value];
+    if (typeof value === 'function') return [String(value(51771)), String(value('list_memos', 'connector'))];
+    if (value && typeof value === 'object') return Object.values(value).flatMap(texts);
+    return [];
+  };
+  for (const name of names) {
+    assert.ok(Object.hasOwn(messages, name), `src/editor-messages.mjs exports ${name}`);
+    for (const text of texts(messages[name])) {
+      assert.doesNotMatch(text, /npx|@wisply\/mcp|wisply-mcp (setup|status|forget)/, `${name}: ${text}`);
+      assert.match(text, /^[\x20-\x7e\n]*$/, `${name} is ASCII`);
+    }
+  }
 });
 
 test('end to end through the extension: Set Token stores the token and checks the connection', async (t) => {
