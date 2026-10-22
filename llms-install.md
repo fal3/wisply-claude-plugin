@@ -52,8 +52,9 @@ Wisply app on the same Mac, at 127.0.0.1. It needs no account and no API key.
 4. Check it: the server `wisply` lists `list_memos`, `search_transcripts`,
    `get_live_transcript` and `get_action_items`. Ask "List my latest Wisply
    memos." If a tool answers "Wisply MCP token is not set" or "Wisply isn't
-   answering", relay its steps to the user. `npx -y --prefix / @wisply/mcp@0.1.0 status`
-   (run by the user) says which check failed, without printing the token.
+   answering", relay its steps to the user.
+   `npx -y --prefix / @wisply/mcp@0.1.0 status` (run by the user) says which
+   check failed, without printing the token.
 
 ## Good to know
 

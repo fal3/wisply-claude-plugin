@@ -1,7 +1,13 @@
-// What makes this tree releasable: the checks behind `WISPLY_RELEASE=1 npm test`
-// (Alex's local release check, and the release workflow before it stages a
-// version). Pure, so tests/release.test.mjs can check the rules on made-up
-// trees as well as on this one.
+// What the release change itself must do, one of the three checks behind
+// `WISPLY_RELEASE=1 npm test` (Alex's local release check, and the release
+// workflow before it stages a version). The other two are
+// tests/vendor.test.mjs (the contract isn't provisional) and
+// tests/release-checks.test.mjs (what a maintainer records in
+// docs/release-checks.json, PACKAGE_NAME_FINAL with no "private", a
+// destructive setup_claude); tests/clients.test.mjs requires "published":
+// true. So each missing step is named once. Pure, so
+// tests/release.test.mjs can check the rules on made-up trees as well as on
+// this one.
 
 /** The CHANGELOG headings a version may have: dated once it is released, "Unreleased" until then. */
 export const changelogHeading = /^## (\d+\.\d+\.\d+) - (Unreleased|\d{4}-\d{2}-\d{2})$/;
@@ -34,24 +40,16 @@ export function topSection(text) {
  * Why this tree can't be released as `version`, or [] when it can.
  * @param {{
  *   version: string,
- *   pkg: {version?: string, private?: unknown},
- *   source: {provisional?: unknown},
- *   nameFinal: boolean,
- *   clients: {published?: unknown, package_spec?: string},
+ *   pkg: {version?: string},
+ *   clients: {package_spec?: string},
  *   changelog: string,
  *   env?: Record<string, string|undefined>,
  * }} tree
  * @returns {string[]}
  */
-export function releaseProblems({ version, pkg, source, nameFinal, clients, changelog, env = {} }) {
+export function releaseProblems({ version, pkg, clients, changelog, env = {} }) {
   const problems = [];
   if (pkg.version !== version) problems.push(`package.json is ${pkg.version}, lib/constants.mjs VERSION is ${version}`);
-  if (source.provisional !== false) {
-    problems.push('contract/SOURCE.json is provisional: re-vendor the contract from wisply-ai (SECURITY.md, "Re-vendoring the contract")');
-  }
-  if (nameFinal !== true) problems.push('PACKAGE_NAME_FINAL is false: the npm name must be Wisply\'s first (G-NPM)');
-  if (Object.hasOwn(pkg, 'private')) problems.push('package.json still has "private": remove it in the release change');
-  if (clients.published !== true) problems.push('clients/mcp-clients.json says "published": false');
   if (clients.package_spec !== undefined && !clients.package_spec.endsWith(`@${version}`)) {
     problems.push(`clients/mcp-clients.json package_spec is ${clients.package_spec}, not this version`);
   }

@@ -79,7 +79,7 @@
           "label": "Let VS Code keep the token",
           "format": "jsonc",
           "note": "VS Code asks for the token the first time the server starts and keeps it in its secret storage. Copilot harness sessions don't get servers that need input prompts; use the setup command for those.",
-          "text": "{\n  \"inputs\": [\n    { \"type\": \"promptString\", \"id\": \"wisply-token\", \"description\": \"Wisply read-only connector token. Leave empty to use the token saved by npx -y --prefix / @wisply/mcp@0.1.0 setup.\", \"password\": true }\n  ],\n  \"servers\": {\n    \"wisply\": {\n      \"type\": \"stdio\",\n      \"command\": \"npx\",\n      \"args\": [{{args_list}}],\n      \"env\": { \"WISPLY_MCP_TOKEN\": \"${input:wisply-token}\" }\n    }\n  }\n}"
+          "text": "{\n  \"inputs\": [\n    { \"type\": \"promptString\", \"id\": \"wisply-token\", \"description\": \"Wisply read-only connector token. Leave empty to use the token that the connector's setup saved in your login keychain.\", \"password\": true }\n  ],\n  \"servers\": {\n    \"wisply\": {\n      \"type\": \"stdio\",\n      \"command\": \"npx\",\n      \"args\": [{{args_list}}],\n      \"env\": { \"WISPLY_MCP_TOKEN\": \"${input:wisply-token}\" }\n    }\n  }\n}"
         }
       ]
     },
@@ -152,7 +152,12 @@
         "type": "json-file",
         "path": "~/.copilot/mcp-config.json",
         "key": "mcpServers",
-        "dir_env": "COPILOT_HOME"
+        "dir_env": [
+          {
+            "name": "COPILOT_HOME",
+            "path": "mcp-config.json"
+          }
+        ]
       }
     },
     {
@@ -171,14 +176,23 @@
       "format": "json",
       "destination": "cline_mcp_settings.json (in Cline: MCP Servers > Configure > Configure MCP Servers)",
       "stdio": "{\n  \"mcpServers\": {\n    \"wisply\": {\n      \"type\": \"stdio\",\n      \"command\": \"npx\",\n      \"args\": [{{args_list}}],\n      \"disabled\": false,\n      \"autoApprove\": []\n    }\n  }\n}",
-      "note": "The Cline CLI reads ~/.cline/data/settings/cline_mcp_settings.json.",
+      "note": "Cline 4.0 and later keep one MCP settings file for the extension, the CLI and the JetBrains plugin: ~/.cline/data/settings/cline_mcp_settings.json.",
       "install": {
         "type": "json-file",
-        "target": "Cline CLI",
         "path": "~/.cline/data/settings/cline_mcp_settings.json",
         "key": "mcpServers",
         "path_env": "CLINE_MCP_SETTINGS_PATH",
-        "hint": "The Cline extension keeps its own list: in Cline, open MCP Servers > Configure > Configure MCP Servers and add the same entry there."
+        "dir_env": [
+          {
+            "name": "CLINE_DATA_DIR",
+            "path": "settings/cline_mcp_settings.json"
+          },
+          {
+            "name": "CLINE_DIR",
+            "path": "data/settings/cline_mcp_settings.json"
+          }
+        ],
+        "hint": "Cline 4.0 and later read this one file from the extension, the CLI and the JetBrains plugin."
       }
     },
     {

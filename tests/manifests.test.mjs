@@ -6,10 +6,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import contract from '../lib/contract.mjs';
-import { clientsFile } from '../lib/clients.mjs';
-import { NPX_COMMAND, NPX_FLAGS, PACKAGE_NAME, PACKAGE_RANGE, PACKAGE_SPEC, SERVER_KEY, VERSION } from '../lib/constants.mjs';
+import {
+  MCP_NAME, NPX_COMMAND, NPX_FLAGS, PACKAGE_NAME, PACKAGE_RANGE, PACKAGE_SPEC, SERVER_KEY, STANDARD_ENTRY as ENTRY, VERSION,
+} from '../lib/constants.mjs';
 import { toolsFor } from '../lib/scopes.mjs';
 import {
   MCPB_NAME, MCPB_VERSION, PACKER_DIR, bundleFileName, jsonText as buildJsonText, mcpbTools, releaseTag, renderManifest,
@@ -31,11 +32,12 @@ const readme = readText('README.md');
 const AGENT_PLUGIN_SCHEMA = 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json';
 const AGENT_MCP_SCHEMA = 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json';
 const REPO_URL = 'https://github.com/fal3/wisply-mcp';
-/** The token-free entry every npx setup uses (clients/mcp-clients.json "standard_entry", DIST-M4). */
-const STANDARD_ENTRY = { command: 'npx', args: [...NPX_FLAGS, PACKAGE_SPEC] };
+/** The token-free entry every npm snippet and link runs (DIST-M1: npx's --prefix / and the exact version). */
+const STANDARD_ENTRY = { command: ENTRY.command, args: [...ENTRY.args] };
 /**
- * The setup command as the manifests and docs name it: pinned, after npx's flags. The connector's own
- * messages say `wisply-mcp setup` until the package name is final (lib/messages.mjs COMMAND_PREFIX).
+ * The setup command these files name: the final one. They are read only once this repository or its release
+ * is public, which waits for the npm organization (SECURITY.md, release control 1), so they don't take the
+ * connector's interim `wisply-mcp setup` (lib/messages.mjs SETUP_COMMAND while PACKAGE_NAME_FINAL is false).
  */
 const SETUP_COMMAND = `${NPX_COMMAND} setup`;
 const MANIFESTS = ['plugin.json', 'mcp.json', '.agents/plugins/marketplace.json', 'gemini-extension.json', 'mcpb/manifest.json',
@@ -51,8 +53,6 @@ test('every manifest is canonical JSON (two-space indent, final newline)', () =>
 
 test('names, versions and the package agree with package.json and lib/constants.mjs', () => {
   assert.equal(pkg.name, PACKAGE_NAME);
-  // The README's one-click links and llms-install.md use the clients file's standard entry (DIST-M4).
-  assert.deepEqual(clientsFile.standard_entry, STANDARD_ENTRY);
   assert.equal(pkg.version, VERSION);
   assert.equal(plugin.name, SERVER_KEY);
   assert.equal(plugin.version, VERSION);
@@ -61,6 +61,7 @@ test('names, versions and the package agree with package.json and lib/constants.
   assert.equal(mcpb.name, SERVER_KEY);
   assert.equal(mcpb.version, VERSION);
   assert.equal(server.name, pkg.mcpName);
+  assert.equal(server.name, MCP_NAME);
   assert.equal(server.version, VERSION);
   const npm = server.packages.find((entry) => entry.registryType === 'npm');
   assert.equal(npm.identifier, PACKAGE_NAME);
@@ -220,6 +221,35 @@ test('no manifest, skill, command or install text can hold a token or an auth he
   for (const file of ['mcp.json', 'gemini-extension.json', 'server.json', 'llms-install.md']) {
     assert.doesNotMatch(readText(file), /"WISPLY_MCP_TOKEN"\s*:/, file);
   }
+});
+
+/** Every file under these folders, relative to the repository and sorted. */
+const filesUnder = (...dirs) => dirs.flatMap((dir) => readdirSync(join(ROOT, dir), { recursive: true, withFileTypes: true })
+  .filter((entry) => entry.isFile())
+  .map((entry) => relative(ROOT, join(entry.parentPath ?? entry.path, entry.name)))).sort();
+
+test('every npm command and entry in these files runs npx with --prefix / and the exact version', () => {
+  // DIST-M1: without --prefix /, npx resolves the package from the open project (a planted node_modules or
+  // .npmrc) before npm. tests/pack.test.mjs holds the README, SECURITY.md, the CHANGELOG and the design notes to
+  // this; these are the rest of what this repository publishes: the manifests, llms-install.md and every file in
+  // skills/, commands/ and extras/ (the skill and the prompts are text a model reads and may repeat as a command).
+  const escaped = PACKAGE_NAME.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+  const npx = new RegExp(`\\bnpx((?:\\s+-[\\w-]+(?:\\s+/(?=\\s))?)*)\\s+(${escaped}[^\\s\`"'),]*)`, 'g');
+  const files = [...MANIFESTS, 'llms-install.md', ...filesUnder('skills', 'commands', 'extras')];
+  assert.ok(files.includes('skills/wisply-memos/SKILL.md') && files.includes('extras/cursor/rules/wisply.mdc'), files.join(', '));
+  let seen = 0;
+  for (const file of files) {
+    const text = readText(file);
+    for (const match of text.matchAll(npx)) {
+      seen += 1;
+      assert.equal(match[1].replace(/\s+/g, ' ').trim(), NPX_FLAGS.join(' '), `${file}: ${match[0]}`);
+      assert.equal(match[2], PACKAGE_SPEC, `${file}: ${match[0]}`);
+    }
+    assert.doesNotMatch(text, new RegExp(`npx\\s+-y\\s+${escaped}`), `${file}: npx without --prefix /`);
+    assert.doesNotMatch(text, new RegExp(`"-y",\\s*"${escaped}`), `${file}: an entry without --prefix /`);
+  }
+  // server.json, gemini-extension.json, mcpb/manifest.json and llms-install.md (twice) name a command.
+  assert.ok(seen >= 5, `only ${seen} npx commands found`);
 });
 
 test('the JSON Schema checker catches what the schemas forbid', () => {

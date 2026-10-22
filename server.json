@@ -21,6 +21,17 @@
       "identifier": "@wisply/mcp",
       "version": "0.1.0",
       "runtimeHint": "npx",
+      "runtimeArguments": [
+        {
+          "type": "positional",
+          "value": "-y"
+        },
+        {
+          "type": "named",
+          "name": "--prefix",
+          "value": "/"
+        }
+      ],
       "transport": {
         "type": "stdio"
       },

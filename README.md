@@ -8,16 +8,21 @@ talking to Wisply before it uses your token, and needs no account.
 
 > **Status: not released yet.** This package isn't on npm, and the name
 > `@wisply/mcp` is a placeholder until it is (the `wisply` npm organization
-> doesn't exist yet). Its contract with the Wisply app is provisional
-> (transcribed from the app's tool catalog until the app's own contract file
-> is on its `main`), so `package.json` is marked `"private"`, which makes
-> `npm publish` refuse it, and `WISPLY_RELEASE=1 npm test` fails and lists
-> what is still missing. Until the name is Wisply's on npm
-> (`PACKAGE_NAME_FINAL` in `lib/constants.mjs`), the connector's own messages
-> never name it: errors in your AI app point at `WISPLY_MCP_TOKEN`, and
-> terminal messages say `wisply-mcp setup` (from a checkout:
-> `node bin/wisply-mcp.mjs setup`). The `npx` commands below are what the
-> first release will print.
+> doesn't exist yet). Nobody owns that name on npm yet, so don't run the
+> `npx` commands below before the first release: until Wisply owns the name,
+> whoever registers it first would receive the token you type into `setup`.
+> The contract with the Wisply app is provisional (transcribed from the
+> app's tool catalog). `package.json` stays `"private"`, which makes
+> `npm publish` refuse it, until the contract is final and the name is
+> Wisply's, and `WISPLY_RELEASE=1 npm test` fails. Until the name is Wisply's
+> on npm (`PACKAGE_NAME_FINAL` in `lib/constants.mjs`), the connector's own
+> messages never name it: errors in your AI app point at `WISPLY_MCP_TOKEN`,
+> and terminal messages say `wisply-mcp setup`, `wisply-mcp print-config` and
+> so on (from a checkout: `node bin/wisply-mcp.mjs setup`). For the same
+> reason `print-config <app>` and `install` print and add nothing yet (exit
+> 1): every setup runs the connector through `npx`, from a name that isn't
+> Wisply's on npm yet. The `npx` commands below are what the first release
+> will print.
 
 ## What you need
 
@@ -44,27 +49,30 @@ For example, in `~/.cursor/mcp.json`:
 or in Claude Code: `claude mcp add --scope user wisply -- npx -y --prefix / @wisply/mcp@0.1.0`.
 
 Install Wisply once per app. Two entries named `wisply` show the tools twice.
-One-click links, plugins and the setup for each app are under
-[Install in your AI app](#install-in-your-ai-app), and on
-[wisply.ai/docs/mcp/install](https://www.wisply.ai/docs/mcp/install).
 
 **Why `--prefix /`.** AI apps start the connector in the project you have
 open, and `npx` looks for a package in that folder (its `node_modules`, and
 its `.npmrc`, which can send the `@wisply` scope to another registry) before
 it asks npm. Without the flag, a cloned project could bring its own
-`@wisply/mcp` and have it run under the `wisply` entry you already trust.
-`--prefix /` makes `npx` resolve from `/`, the read-only system volume on
-macOS, so only the npm registry (through your own `~/.npmrc`) supplies the
-package. One side effect: npm then reads `/etc/npmrc` instead of the
-`etc/npmrc` of your Node installation; settings in `~/.npmrc` still apply.
-The commands below use the same flags.
+`@wisply/mcp` and have it run under the `wisply` entry you already trust,
+with your token. `--prefix /` makes `npx` resolve from `/`, the read-only
+system volume on macOS, so only the npm registry (through your own
+`~/.npmrc`) supplies the package. One side effect: npm then reads
+`/etc/npmrc` instead of the `etc/npmrc` of your Node installation; settings
+in `~/.npmrc` still apply. Every command below uses the same flags.
+One-click links, plugins and the setup for each app are under
+[Install in your AI app](#install-in-your-ai-app), and on
+[wisply.ai/docs/mcp/install](https://www.wisply.ai/docs/mcp/install).
 
 ### Every app's setup, from the connector
 
 `npx -y --prefix / @wisply/mcp@0.1.0 print-config <app>` prints the setup for
 one app (on stdout, so `| pbcopy` copies just the snippet) and says where it
 goes (on stderr). `npx -y --prefix / @wisply/mcp@0.1.0 print-config` lists the
-apps. Add `--port <n>` if Wisply uses another port.
+apps. Add `--port <n>` if Wisply uses another port. `print-config` and
+`install` take the port only from `--port`: a `WISPLY_MCP_PORT` in your shell
+(for a test Wisply, say) is ignored, with a note, so it never ends up in an
+app's settings without you choosing it.
 
 `npx -y --prefix / @wisply/mcp@0.1.0 install <app>` adds the same entry for
 you, for the apps marked "yes" below. Quit the app first: an app that is open
@@ -75,14 +83,34 @@ for apps with a plain JSON settings file, it changes the text of the `wisply`
 entry and nothing else. Every other byte of the file stays as it was (its
 layout, number spellings and other servers). A file with comments, a key that
 appears twice or text that isn't UTF-8 is left alone, and you get the snippet
-to paste. Before the
-first change it saves the file as `<file>.wisply-backup`, readable only by
-you, with any Wisply token in it masked as `wsp...`. It replaces the file in
-one step, following a symlink to a dotfiles copy, and only if nothing else
-wrote the file while it worked. It never reads the token or the Keychain item,
-and never writes a token or passes one on: the app's command starts without
-`WISPLY_MCP_TOKEN` in its environment. For the other apps it prints the
-snippet to paste.
+to paste. When it
+replaces an old `wisply` entry, it keeps what the app or you set on it
+(`autoApprove`, `alwaysAllow`, `disabled`, `disabledTools`, `timeout`,
+`tools`, unless one holds something token-shaped) and names every other old
+field it didn't carry over, such as `env` or `url`. An entry that already
+matches, in any key order, is left as it is. Before the first change it saves
+the file as `<file>.wisply-backup`, readable only by you, with any Wisply
+token in it masked as `wsp...`. Other servers' keys and tokens stay in that
+copy, as they were in the file, so delete it once the app works with Wisply.
+It writes the new text to a temporary file readable only by you and replaces
+the file in one step, following a symlink to a dotfiles copy, and only if
+nothing else wrote the file while it worked. A file with a second hard link
+is left alone, because replacing it would leave the other copy as it was. It
+never reads the token or the Keychain item, and never writes a token or
+passes one on: the app's command starts without `WISPLY_MCP_TOKEN` in its
+environment. For the other apps it prints the snippet to paste.
+
+An app's own override variable decides the file, as it does for the app:
+Cline's `CLINE_MCP_SETTINGS_PATH`, then `CLINE_DATA_DIR`, then `CLINE_DIR`;
+GitHub Copilot CLI's `COPILOT_HOME`. install says when one is set, and
+refuses a value that isn't a full path (the app would resolve it against
+whatever folder it runs in). `claude mcp add` refuses a name it already has,
+so running `install claude-code` again exits 1 and says how to replace the
+entry (`claude mcp remove wisply`); `codex` and `gemini` replace it, and a
+JSON file that already has the entry exits 0.
+
+Once an app has the entry, what it reads from Wisply, transcripts included,
+goes to the AI service it uses; `print-config` and `install` say so too.
 
 | App | `<app>` | Where the setup goes | `install` |
 |---|---|---|---|
@@ -97,7 +125,7 @@ snippet to paste.
 | Gemini CLI | `gemini-cli` | `gemini mcp add --scope user wisply npx -- ...` | yes |
 | GitHub Copilot CLI | `copilot-cli` | `~/.copilot/mcp-config.json` (or `$COPILOT_HOME`) | yes |
 | Warp | `warp` | Settings > AI > Manage MCP Servers, or `/add-mcp` | |
-| Cline | `cline` | `cline_mcp_settings.json`. `install` sets up the Cline CLI (`~/.cline/data/settings/`, or `CLINE_MCP_SETTINGS_PATH`); for the Cline extension, add the entry in Cline: MCP Servers > Configure > Configure MCP Servers | yes |
+| Cline | `cline` | `~/.cline/data/settings/cline_mcp_settings.json`, which Cline 4.0 and later share between the extension, the CLI and the JetBrains plugin (or the file `CLINE_MCP_SETTINGS_PATH`, `CLINE_DATA_DIR` or `CLINE_DIR` points to); in Cline: MCP Servers > Configure > Configure MCP Servers | yes |
 | Roo Code | `roo-code` | global MCP settings, or `.roo/mcp.json` | |
 | Goose | `goose` | `~/.config/goose/config.yaml` | |
 | LM Studio | `lm-studio` | Program > Install > Edit mcp.json | |
@@ -116,10 +144,9 @@ copies of the same file. None of the setups contains a token.
 **Don't paste a token into a config file.** Config files end up in Settings
 Sync, dotfile repositories and backups. Run
 `npx -y --prefix / @wisply/mcp@0.1.0 setup` once to keep the token in your
-login keychain (next section), or let the app's own
-secret storage set `WISPLY_MCP_TOKEN` (Wisply's VS Code extension, Claude
-Desktop bundle and Gemini CLI extension, which come with the first release,
-work this way).
+login keychain (next section), or let the app's own secret storage set
+`WISPLY_MCP_TOKEN` (Wisply's VS Code extension, Claude Desktop bundle and
+Gemini CLI extension, which come with the first release, work this way).
 
 Three notes:
 
@@ -148,9 +175,10 @@ Run this once in Terminal:
 npx -y --prefix / @wisply/mcp@0.1.0 setup
 ```
 
-The setup, status and forget commands run the same exact version as the
-snippets, so the command that decides which token your apps get never runs
-whatever npm has as its newest release.
+The setup, status and forget commands run the same exact version, with the
+same `--prefix /`, as the snippets, so the command that decides which token
+your apps get never runs whatever npm has as its newest release, or a copy of
+the package in the folder Terminal is in.
 
 Setup first removes any "Wisply MCP token" saved before, so the new item
 starts with a clean access list. Then macOS's own `security` tool asks for the
@@ -161,11 +189,19 @@ output. If you cancel at that point, the token saved before is already gone,
 and setup says so. Setup then reads the item back once:
 
 - A full-access token (`wsp_...`) is removed again unless you run
-  `npx -y --prefix / @wisply/mcp@0.1.0 setup --full-access`. Use the read-only
-  connector token: a full-access token in the keychain gives full access
-  (recording control and follow-ups) to every AI app on this Mac that starts
-  the connector without its own `WISPLY_MCP_TOKEN`, and setup and status say
-  so.
+  `npx -y --prefix / @wisply/mcp@0.1.0 setup --full-access`. Use the
+  read-only connector token: a full-access token in the keychain gives full
+  access (recording control and follow-ups) to every AI app on this Mac that
+  starts the connector without its own `WISPLY_MCP_TOKEN`, and setup and
+  status say so.
+- A recording-control token (`wspr_...`) is kept, and setup and status say
+  what that means: every AI app on this Mac that starts the connector without
+  its own `WISPLY_MCP_TOKEN` can then start and stop recordings whenever
+  Wisply's **Allow agents to start and stop recordings** is on (turning it on
+  for one app, such as Raycast, turns it on for all of them) and propose
+  follow-ups. If only one app should control recordings, give that app the
+  recording token through its own secret storage instead, and keep the
+  read-only connector token in the keychain.
 - Anything that isn't a Wisply token is removed again.
 - A kept token gets the identity check, and setup says what it found:
   "Stored. Wisply answered on 127.0.0.1:51771 and proved it holds this token
@@ -192,11 +228,11 @@ secret. Two more commands:
   says so and succeeds.
 
 The commands exit 0 when they're done (status: a token was found and Wisply
-proved it holds it; install: the entry was added or was already there), 1
-when something needs your attention (no token, Wisply isn't answering, or
-setup or status on a computer that isn't a Mac; the message says which), and
-2 for a usage mistake, such as an unknown option or a token passed as an
-argument.
+proved it holds it; install: the entry was added, or the JSON file already had
+it), 1 when something needs your attention (no token, Wisply isn't answering,
+setup, status or install on a computer that isn't a Mac, an app's own command
+that refused; the message says which), and 2 for a usage mistake, such as an
+unknown option or app, or a token passed as an argument.
 
 What the keychain protects: it keeps the token out of config files, Settings
 Sync, dotfile repositories and backups. It doesn't stop another program
@@ -210,9 +246,10 @@ running.
 
 ## Install in your AI app
 
-Run `npx -y --prefix / @wisply/mcp@0.1.0 setup` once (above), then add Wisply to each app in
-one of the ways below. None of them holds a token: they all use the token
-saved by `setup`, or the one your app keeps in its own secret storage.
+Run `npx -y --prefix / @wisply/mcp@0.1.0 setup` once (above), then add
+Wisply to each app in one of the ways below. None of them holds a token: they
+all use the token saved by `setup`, or the one your app keeps in its own
+secret storage.
 
 ### One click
 
@@ -334,7 +371,7 @@ allows, and Wisply enforces the same rule.
 | Flag | Variable | Meaning |
 |---|---|---|
 | | `WISPLY_MCP_TOKEN` | The Wisply token. Empty, or an unresolved `${...}` placeholder, counts as unset, and then the token saved by `setup` is used. |
-| `--port <n>` | `WISPLY_MCP_PORT` | Wisply's MCP port, 1024-65535. Default `51771`. The host is always `127.0.0.1`. |
+| `--port <n>` | `WISPLY_MCP_PORT` | Wisply's MCP port, 1024-65535. Default `51771`. The host is always `127.0.0.1`. `print-config` and `install` use only `--port`; `forget` takes no port. |
 | `--read-only` | | Offer only the four read-only tools, whatever the token allows. |
 | `--allow-claude-setup` | `WISPLY_MCP_ALLOW_CLAUDE_SETUP=1` | Offer `setup_claude` with a full-access token. |
 | | `WISPLY_MCP_DEBUG=1` | One line per request on stderr: method, tool, outcome, HTTP status, bytes, milliseconds. Never arguments, results, transcript text or tokens. |
@@ -360,12 +397,12 @@ allows, and Wisply enforces the same rule.
 - **No dependencies, no install scripts, no telemetry.** The package has zero
   runtime dependencies and no lifecycle scripts. It sends nothing anywhere
   except `127.0.0.1`.
-- **A pinned version, from npm only.** The npm snippets run one exact,
+- **Pinned versions, from npm only.** The npm snippets run one exact,
   unchangeable npm version, so a new release reaches your app only when you
-  choose it, and `--prefix /` keeps `npx` from taking the package (or an
-  `.npmrc`) from the project folder your app starts it in. Installs from this
-  repository are pinned only when they name a release tag (`--ref v0.1.0`);
-  the others follow `main` (see [SECURITY.md](SECURITY.md)).
+  choose it, and `--prefix /` keeps the open project's `node_modules` and
+  `.npmrc` from supplying another copy. Installs from this repository are
+  pinned only when they name a release tag (`--ref v0.1.0`); the others
+  follow `main` (see [SECURITY.md](SECURITY.md)).
 
 ## Privacy
 
@@ -385,22 +422,28 @@ The connector answers with a plain message instead of a result:
 
 - **"Wisply MCP token is not set"**: copy the connector token from Wisply >
   Settings > Integrations > MCP Server and run
-  `npx -y --prefix / @wisply/mcp@0.1.0 setup`, or give it to your app's secret storage
-  (see above).
+  `npx -y --prefix / @wisply/mcp@0.1.0 setup`, or give it to your app's secret
+  storage (see above).
 - **"Wisply isn't answering on 127.0.0.1:51771"**: open Wisply and turn on the
   MCP server.
 - **"Wisply identity check failed"**: the program on the port couldn't prove
   it holds your token, so the token wasn't sent. If you regenerated the token
-  in Wisply, run `npx -y --prefix / @wisply/mcp@0.1.0 setup` again (or update it in your
-  app). Otherwise quit whatever uses that port.
+  in Wisply, run `npx -y --prefix / @wisply/mcp@0.1.0 setup` again (or update
+  it in your app). Otherwise quit whatever uses that port.
 - **"Wisply couldn't run ..."**: Wisply answered the call with an error. The
   connector passes on Wisply's error code but never Wisply's own error text.
 - **"This version of Wisply has no identity check"**: update Wisply.
+- **"... doesn't know recording-control tokens (wspr_), or couldn't read
+  yours from the Keychain"**: update Wisply, or quit and reopen it and copy
+  the recording token again; or use the connector token.
+- **"Wisply on 127.0.0.1:51771 couldn't read its MCP tokens from the
+  Keychain"**: quit and reopen Wisply, and allow Keychain access if macOS
+  asks.
 - **"... isn't available with your ... token"**: the tool needs another token.
 
-`npx -y --prefix / @wisply/mcp@0.1.0 status` runs the same checks and says which one
-failed. On other platforms the connector explains that it needs Wisply for
-Mac on the same computer.
+`npx -y --prefix / @wisply/mcp@0.1.0 status` runs the same checks and says
+which one failed. On other platforms the connector explains that it needs
+Wisply for Mac on the same computer.
 
 ## Development
 
@@ -445,8 +488,21 @@ and skip (the change reaches the fixture through the re-vendor once it is on
   the two, and `WISPLY_RELEASE=1 npm test` requires `true`).
 - Every release updates the version in `package.json`, `lib/constants.mjs`
   and every `@wisply/mcp@<version>` in `clients/mcp-clients.json`
-  (`package_spec`, `standard_entry` and the `vscode-inputs` text); the tests
-  fail while one is behind.
+  (`package_spec` and `standard_entry`); the tests fail while one is behind.
+  No template text names a command (the `vscode-inputs` prompt says only
+  "the token that the connector's setup saved in your login keychain").
+- `print-config <app>` and `install`, and `render()` and `installPlan()` in
+  `lib/clients.mjs` for anything that bundles it, refuse until the release
+  (`SETUPS_RELEASED`: `PACKAGE_NAME_FINAL` and `"published"`). The tests
+  preview them with `beforeRelease: true` and run the CLI with
+  `released: true`; the Mac QA of `install` runs from the release change's
+  checkout, where both flags are already `true`.
+- `docs/release-checks.json` records the checks no file here can prove (the
+  Mac port test, the MCP Registry namespace, Wisply's npm name);
+  `WISPLY_RELEASE=1 npm test` fails until they are recorded, and
+  `PACKAGE_NAME_FINAL` follows the npm name's record (`tests/pack.test.mjs`).
+  `docs/design-differences.md` lists where this repository departs from the
+  distribution design. Neither is in the package.
 - `tests/fixtures/fake-wisply.mjs` is a synthetic Wisply for local runs:
   `node tests/fixtures/fake-wisply.mjs` prints its port and synthetic tokens.
 - `install` is tested against a temporary `HOME` and a temporary `PATH`
@@ -500,6 +556,9 @@ tools/mcpb/node_modules/.bin/mcpb validate mcpb/manifest.json
 The bundle holds the files git tracks in `bin/`, `lib/`, `contract/` and
 `clients/`, `LICENSE`, the manifest (its `tools` written from the contract:
 every tool but `setup_claude`, which the bundle never turns on) and the icon.
+Only regular files: a tracked symlink, or a path under a symlinked folder,
+stops the build rather than copying what it points to, and the manifest's
+`icon` must be `icon.png`.
 With the packer installed, `npm test` also runs `tests/mcpb-config.test.mjs`
 against the real library, as the CI job `mcpb` does.
 
@@ -525,13 +584,21 @@ gh release download v0.1.0 --repo fal3/wisply-mcp --pattern '*.mcpb' --dir dist/
 WISPLY_REGISTRY_RELEASE=1 WISPLY_MCPB_FILE=dist/check/wisply-mcp-0.1.0.mcpb npm test
 ```
 
+`WISPLY_REGISTRY_RELEASE=1` alone always fails: a hash left over from the
+previous release isn't the placeholder, so only the downloaded asset can show
+that `fileSha256` belongs to this version. When you bump the version, set
+`fileSha256` back to the placeholder (64 zeros) until the new bundle exists.
+
 ### Releasing
 
 `WISPLY_RELEASE=1 npm test` is the release check. It passes only on the tree
-to publish and otherwise lists what is missing: the re-vendored contract, the
-final package name, no `"private"`, `"published": true` in the clients file,
-the CHANGELOG heading with its date and, in the release workflow, the tag
-`v<version>` (`tests/release.test.mjs`).
+to publish and otherwise lists what is missing, each step once: the
+re-vendored contract (`tests/vendor.test.mjs`); the checks recorded in
+`docs/release-checks.json`, the final package name with no `"private"`, and a
+destructive `setup_claude` (`tests/release-checks.test.mjs`); `"published":
+true` in the clients file (`tests/clients.test.mjs`); and the release change
+itself: this version everywhere, the CHANGELOG heading with its date and, in
+the release workflow, the tag `v<version>` (`tests/release.test.mjs`).
 
 0.1.0 is published by hand. Later versions go through
 `.github/workflows/release.yml`: a pushed `v*` tag, the `release`

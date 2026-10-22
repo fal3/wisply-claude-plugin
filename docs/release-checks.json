@@ -1,0 +1,18 @@
+{
+  "schema": "wisply-mcp-release-checks-v1",
+  "port_exclusive": {
+    "verified": false,
+    "wisply_commit": null,
+    "how": null
+  },
+  "registry_namespace": {
+    "name": "ai.wisply/local",
+    "verified": false,
+    "how": null
+  },
+  "npm_scope": {
+    "name": "@wisply",
+    "verified": false,
+    "how": null
+  }
+}

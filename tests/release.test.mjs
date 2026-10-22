@@ -1,20 +1,22 @@
 // The release gate (DIST-M5): `WISPLY_RELEASE=1 npm test` passes only on the
 // tree to publish. Alex runs it before the first, hand-made publish; the
-// release workflow runs it before it stages every later version.
+// release workflow runs it before it stages every later version. This file
+// checks the release change itself (tests/helpers/release.mjs); the contract
+// is tests/vendor.test.mjs's, the recorded checks, the npm name and "private"
+// are tests/release-checks.test.mjs's, and "published" is
+// tests/clients.test.mjs's.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { clientsFile } from '../lib/clients.mjs';
-import { PACKAGE_NAME_FINAL, VERSION } from '../lib/constants.mjs';
+import { VERSION } from '../lib/constants.mjs';
 import { isDate, releaseProblems, topSection } from './helpers/release.mjs';
 import { readJson, readText, ROOT } from './helpers/repo.mjs';
 
 const tree = (env = process.env) => ({
   version: VERSION,
   pkg: readJson('package.json'),
-  source: readJson('contract/SOURCE.json'),
-  nameFinal: PACKAGE_NAME_FINAL,
   clients: clientsFile,
   changelog: readText('CHANGELOG.md'),
   env,
@@ -47,9 +49,7 @@ test('releaseProblems: a releasable tree passes, and each missing step is named'
   const good = {
     version: '1.2.3',
     pkg: { version: '1.2.3' },
-    source: { provisional: false },
-    nameFinal: true,
-    clients: { published: true, package_spec: '@wisply/mcp@1.2.3' },
+    clients: { package_spec: '@wisply/mcp@1.2.3' },
     changelog: '# Changelog\n\nIntro.\n\n## 1.2.3 - 2026-11-02\n\n- The release gate refuses a provisional contract.\n\n' +
       '## 1.2.2 - 2026-10-30\n\n- The contract is provisional.\n',
     env: {},
@@ -59,14 +59,8 @@ test('releaseProblems: a releasable tree passes, and each missing step is named'
 
   const changelog = (heading, body = '- Things.') => `# Changelog\n\n${heading}\n\n${body}\n`;
   const cases = [
-    [{ source: { provisional: true } }, /contract\/SOURCE\.json is provisional: re-vendor/],
-    [{ source: {} }, /contract\/SOURCE\.json is provisional/],
-    [{ nameFinal: false }, /PACKAGE_NAME_FINAL is false/],
-    [{ pkg: { version: '1.2.3', private: true } }, /still has "private"/],
-    [{ pkg: { version: '1.2.3', private: false } }, /still has "private"/],
     [{ pkg: { version: '1.2.4' } }, /package\.json is 1\.2\.4/],
-    [{ clients: { published: false, package_spec: '@wisply/mcp@1.2.3' } }, /"published": false/],
-    [{ clients: { published: true, package_spec: '@wisply/mcp@1.2.2' } }, /package_spec is @wisply\/mcp@1\.2\.2/],
+    [{ clients: { package_spec: '@wisply/mcp@1.2.2' } }, /package_spec is @wisply\/mcp@1\.2\.2/],
     [{ changelog: changelog('## 1.2.3 - Unreleased') }, /give "## 1\.2\.3" its release date/],
     [{ changelog: changelog('## 1.2.3 - 2026-02-30') }, /first section must be|release date/],
     [{ changelog: changelog('## 1.2.2 - 2026-10-30') }, /first section is 1\.2\.2, not 1\.2\.3/],

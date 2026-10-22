@@ -2,9 +2,9 @@
 // copy of this repository against temporary git repositories that stand in
 // for wisply-ai and wisply-claude-plugin. It must take a contract the
 // connector can load, byte for byte, with provisional: false, and refuse
-// anything else before it writes a file: wisply-ai's contract as DIST-A1
-// alone has it (no wspr_ scope) or as raycast PR 1 alone has it (no
-// tool_descriptors).
+// anything else before it writes a single file: a contract without
+// tool_descriptors (wisply-ai's as raycast PR 1 has it), a commit without
+// the contract, a file that isn't JSON, a plugin commit without identity.mjs.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -17,17 +17,17 @@ import { upstreamContractProblems } from '../scripts/sync-vendor.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const FIXTURE = JSON.parse(readFileSync(join(ROOT, 'contract/mcp-contract.json'), 'utf8'));
+// The plugin's identity.mjs one commit later: any byte that lands in the copy before a refusal shows up.
+const PLUGIN_IDENTITY = Buffer.concat([readFileSync(join(ROOT, 'lib/identity.mjs')), Buffer.from('// a later plugin commit\n')]);
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const jsonBytes = (value) => Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
 
-/** What wisply-ai's file should look like once DIST-A1 is on main after raycast PR 1: the union of both. */
-function mergedContract() {
+/** wisply-ai's contract once DIST-A1's descriptors are on main after raycast PR 1 (tail_words included). */
+function finalContract() {
   const contract = structuredClone(FIXTURE);
   const live = contract.tool_descriptors.find((descriptor) => descriptor.name === 'get_live_transcript');
   live.inputSchema.properties = {
-    tail_words: {
-      type: 'integer', description: 'Return only the last N words of the transcript (1-5000).', minimum: 1, maximum: 5000,
-    },
+    tail_words: { type: 'integer', description: 'Return only the last N words of the transcript (1-5000).', minimum: 1, maximum: 5000 },
   };
   return contract;
 }
@@ -44,7 +44,7 @@ const git = (dir, ...args) => {
   return result.stdout.trim();
 };
 
-/** A one-commit repository holding `files`; returns its directory and the commit. */
+/** A one-commit repository holding `files`; returns its directory and the full commit. */
 function repoWith(parent, name, files) {
   const dir = join(parent, name);
   mkdirSync(dir, { recursive: true });
@@ -63,9 +63,9 @@ function workspace(t) {
   const parent = mkdtempSync(join(tmpdir(), 'wisply-sync-vendor-'));
   t.after(() => rmSync(parent, { recursive: true, force: true }));
   const copy = join(parent, 'wisply-mcp');
-  for (const folder of ['scripts', 'lib', 'contract', 'clients']) cpSync(join(ROOT, folder), join(copy, folder), { recursive: true });
+  for (const folder of ['scripts', 'lib', 'contract']) cpSync(join(ROOT, folder), join(copy, folder), { recursive: true });
   cpSync(join(ROOT, 'package.json'), join(copy, 'package.json'));
-  const plugin = repoWith(parent, 'wisply-claude-plugin', { 'lib/identity.mjs': readFileSync(join(ROOT, 'lib/identity.mjs')) });
+  const plugin = repoWith(parent, 'wisply-claude-plugin', { 'lib/identity.mjs': PLUGIN_IDENTITY });
   return { parent, copy, plugin };
 }
 
@@ -74,93 +74,129 @@ function syncVendor(copy, app, plugin, ...extra) {
     '--plugin', plugin.dir, '--plugin-commit', plugin.commit, ...extra], { cwd: copy, encoding: 'utf8' });
 }
 
-const snapshot = (copy) => Object.fromEntries(['contract/mcp-contract.json', 'contract/mcp-contract.mjs', 'contract/SOURCE.json',
-  'lib/identity.mjs'].map((path) => [path, readFileSync(join(copy, path), 'utf8')]));
+const VENDORED = ['contract/mcp-contract.json', 'contract/mcp-contract.mjs', 'contract/SOURCE.json', 'lib/identity.mjs'];
+const snapshot = (copy) => Object.fromEntries(VENDORED.map((path) => [path, readFileSync(join(copy, path), 'utf8')]));
 
-test('a contract with raycast PR 1\'s keys and DIST-A1\'s descriptors is vendored byte for byte, not provisional', async (t) => {
+test('a contract the connector can load is vendored byte for byte, not provisional, and the connector loads it', async (t) => {
   const { parent, copy, plugin } = workspace(t);
-  const bytes = jsonBytes(mergedContract());
+  const bytes = jsonBytes(finalContract());
   const app = repoWith(parent, 'wisply-ai', { 'Docs/mcp-contract.json': bytes });
   const result = syncVendor(copy, app, plugin);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /wrote contract\/SOURCE\.json\n$/);
 
   assert.ok(readFileSync(join(copy, 'contract/mcp-contract.json')).equals(bytes));
+  assert.ok(readFileSync(join(copy, 'lib/identity.mjs')).equals(PLUGIN_IDENTITY));
   const source = JSON.parse(readFileSync(join(copy, 'contract/SOURCE.json'), 'utf8'));
-  assert.equal(source.provisional, false);
-  const [appSource, pluginSource] = source.sources;
-  assert.deepEqual(appSource, {
-    repository: 'github:fal3/wisply-ai', commit: app.commit, provisional: false,
-    files: { 'contract/mcp-contract.json': { upstream: 'Docs/mcp-contract.json', sha256: sha256(bytes) } },
+  assert.deepEqual(source, {
+    schema: 'wisply-mcp-vendor-v1',
+    provisional: false,
+    sources: [
+      {
+        repository: 'github:fal3/wisply-ai', commit: app.commit, provisional: false,
+        files: { 'contract/mcp-contract.json': { upstream: 'Docs/mcp-contract.json', sha256: sha256(bytes) } },
+      },
+      {
+        repository: 'github:fal3/wisply-claude-plugin', commit: plugin.commit, provisional: false,
+        files: { 'lib/identity.mjs': { upstream: 'lib/identity.mjs', sha256: sha256(PLUGIN_IDENTITY) } },
+      },
+    ],
   });
-  assert.match(appSource.commit, /^[0-9a-f]{40}$/);
-  assert.equal(pluginSource.commit, plugin.commit);
-  assert.equal(pluginSource.provisional, false);
-  // gen-data ran: the module the connector imports is the new contract.
-  const module = await import(`${pathToFileURL(join(copy, 'contract/mcp-contract.mjs')).href}?${Date.now()}`);
-  assert.deepEqual(module.default, mergedContract());
-  // And the connector loads it.
+  // gen-data ran, and the connector loads what was vendored.
   const loaded = await import(`${pathToFileURL(join(copy, 'lib/contract.mjs')).href}?${Date.now()}`);
-  assert.deepEqual(loaded.descriptorFor('get_live_transcript').inputSchema.properties.tail_words.maximum, 5000);
+  assert.equal(loaded.descriptorFor('get_live_transcript').inputSchema.properties.tail_words.maximum, 5000);
 });
 
-test('DIST-A1\'s contract without raycast PR 1 (no wspr_ scope) is refused, and nothing is written', (t) => {
+test('a contract without tool_descriptors (raycast PR 1 alone) is refused, and nothing is written', (t) => {
   const { parent, copy, plugin } = workspace(t);
-  const contract = mergedContract();
-  delete contract.scopes.recording;
-  for (const key of ['error_codes', 'legacy_error_prefixes', 'live_transcript']) delete contract[key];
-  const app = repoWith(parent, 'wisply-ai', { 'Docs/mcp-contract.json': jsonBytes(contract) });
-  const before = snapshot(copy);
-  const result = syncVendor(copy, app, plugin);
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /^sync-vendor: Docs\/mcp-contract\.json at [0-9a-f]{7} isn't a contract this connector can load \(scopes\.recording\)\./);
-  assert.match(result.stderr, /Nothing was changed\.\n$/);
-  assert.deepEqual(snapshot(copy), before);
-});
-
-test('raycast PR 1\'s contract without DIST-A1 (no tool_descriptors) is refused, and nothing is written', (t) => {
-  const { parent, copy, plugin } = workspace(t);
-  const contract = mergedContract();
+  const contract = finalContract();
   delete contract.tool_descriptors;
   const app = repoWith(parent, 'wisply-ai', { 'Docs/mcp-contract.json': jsonBytes(contract) });
   const before = snapshot(copy);
   const result = syncVendor(copy, app, plugin);
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /\(tool_descriptors\)/);
+  assert.match(result.stderr, /^sync-vendor: Docs\/mcp-contract\.json at [0-9a-f]{7} isn't a contract this connector can load \(tool_descriptors\)\./);
+  assert.match(result.stderr, /Nothing was changed\.\n$/);
   assert.deepEqual(snapshot(copy), before);
 });
 
-test('a commit without the contract, or with a broken one, is refused too', (t) => {
+test('a contract without the recording scope, or with a broken shape, is refused too', (t) => {
+  const { parent, copy, plugin } = workspace(t);
+  const before = snapshot(copy);
+  const noRecording = finalContract();
+  delete noRecording.scopes.recording;
+  const cases = [
+    [noRecording, /\(scopes\.recording\)/],
+    [{ ...finalContract(), schema: 'wisply-mcp-contract-v2' }, /\(schema\)/],
+    [{ ...finalContract(), tool_descriptors: finalContract().tool_descriptors.slice(1) }, /\(tool_descriptors\)/],
+  ];
+  for (const [index, [contract, expected]] of cases.entries()) {
+    const app = repoWith(parent, `wisply-ai-${index}`, { 'Docs/mcp-contract.json': jsonBytes(contract) });
+    const result = syncVendor(copy, app, plugin);
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stderr, expected);
+    assert.deepEqual(snapshot(copy), before);
+  }
+});
+
+test('a commit without the contract, a file that isn\'t JSON, or a plugin commit without identity.mjs writes nothing', (t) => {
   const { parent, copy, plugin } = workspace(t);
   const before = snapshot(copy);
   const empty = repoWith(parent, 'empty-app', { 'README.md': 'no contract here\n' });
   let result = syncVendor(copy, empty, plugin);
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /Docs\/mcp-contract\.json doesn't exist at [0-9a-f]{7}; nothing was changed/);
+  assert.match(result.stderr, /^sync-vendor: Docs\/mcp-contract\.json doesn't exist at [0-9a-f]{7}\. Nothing was changed\.\n$/);
+  assert.deepEqual(snapshot(copy), before);
+
   const broken = repoWith(parent, 'broken-app', { 'Docs/mcp-contract.json': '{"schema": ' });
   result = syncVendor(copy, broken, plugin);
   assert.equal(result.status, 1);
   assert.match(result.stderr, /\(not JSON\)/);
   assert.deepEqual(snapshot(copy), before);
+
+  const app = repoWith(parent, 'wisply-ai', { 'Docs/mcp-contract.json': jsonBytes(finalContract()) });
+  const noIdentity = repoWith(parent, 'old-plugin', { 'bridge.mjs': '// no lib/identity.mjs yet\n' });
+  result = syncVendor(copy, app, noIdentity);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /^sync-vendor: lib\/identity\.mjs doesn't exist at [0-9a-f]{7}\. Nothing was changed\.\n$/);
+  assert.deepEqual(snapshot(copy), before);
 });
 
-test('--provisional keeps the transcribed fixture and says so', (t) => {
+test('a broken local contract doesn\'t stop a good re-vendor (the shape check has no side effects)', (t) => {
   const { parent, copy, plugin } = workspace(t);
-  const app = repoWith(parent, 'wisply-ai', { 'Docs/mcp-contract.json': jsonBytes(mergedContract()) });
-  const before = snapshot(copy);
-  const result = syncVendor(copy, app, plugin, '--provisional');
+  // lib/contract.mjs throws at import on this module; sync-vendor must not import it.
+  writeFileSync(join(copy, 'contract/mcp-contract.mjs'), 'export default {};\n');
+  const bytes = jsonBytes(finalContract());
+  const app = repoWith(parent, 'wisply-ai', { 'Docs/mcp-contract.json': bytes });
+  const result = syncVendor(copy, app, plugin);
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stderr, /re-vendor without --provisional once it has tool_descriptors/);
-  const after = snapshot(copy);
-  assert.equal(after['contract/mcp-contract.json'], before['contract/mcp-contract.json']);
-  const source = JSON.parse(after['contract/SOURCE.json']);
-  assert.equal(source.provisional, true);
-  assert.equal(source.sources[0].commit, `${app.commit.slice(0, 7)} (transcribed)`);
+  assert.ok(readFileSync(join(copy, 'contract/mcp-contract.json')).equals(bytes));
 });
 
-test('upstreamContractProblems is lib/contract.mjs\'s check on the upstream bytes', () => {
-  assert.deepEqual(upstreamContractProblems(jsonBytes(mergedContract())), []);
+test('--provisional keeps the transcribed fixture and says so, with or without an upstream file', (t) => {
+  const { parent, copy, plugin } = workspace(t);
+  const before = snapshot(copy);
+  for (const [name, files, note] of [
+    ['wisply-ai', { 'Docs/mcp-contract.json': jsonBytes(finalContract()) }, true],
+    ['empty-app', { 'README.md': 'no contract here\n' }, false],
+  ]) {
+    const app = repoWith(parent, name, files);
+    const result = syncVendor(copy, app, plugin, '--provisional');
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(/re-vendor without --provisional once it has tool_descriptors/.test(result.stderr), note, result.stderr);
+    const after = snapshot(copy);
+    assert.equal(after['contract/mcp-contract.json'], before['contract/mcp-contract.json']);
+    const source = JSON.parse(after['contract/SOURCE.json']);
+    assert.equal(source.provisional, true);
+    assert.equal(source.sources[0].commit, `${app.commit.slice(0, 7)} (transcribed)`);
+    assert.equal(source.sources[0].files['contract/mcp-contract.json'].transcribed_from, 'Wisply/Services/MCP/MCPToolCatalog.swift');
+  }
+});
+
+test('upstreamContractProblems is the connector\'s own shape check, on the upstream bytes', () => {
+  assert.deepEqual(upstreamContractProblems(jsonBytes(finalContract())), []);
   assert.deepEqual(upstreamContractProblems(jsonBytes(FIXTURE)), []);
   assert.deepEqual(upstreamContractProblems(Buffer.from('nope')), ['not JSON']);
   assert.deepEqual(upstreamContractProblems(jsonBytes({ ...FIXTURE, schema: 'other' })), ['schema']);
+  assert.deepEqual(upstreamContractProblems(jsonBytes([])), ['contract is not an object']);
 });

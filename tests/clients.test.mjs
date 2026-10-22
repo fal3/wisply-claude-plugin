@@ -6,24 +6,31 @@
 // token in the environment and a Keychain that would hand out another one if
 // anything asked. Nothing asks: no argv, no child environment and no written
 // file may hold a token.
+//
+// Until the release, render() and installPlan() refuse (SETUPS_RELEASED) and
+// so do print-config and install. Most tests here check what they do after
+// the release: they render with `beforeRelease: true` and run the CLI with
+// `released: true`; the gate itself has its own tests.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import {
-  chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync,
+  chmodSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, relative } from 'node:path';
+import { basename, dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import contract from '../lib/contract.mjs';
 import {
-  DEFAULT_PORT, NPX_COMMAND, NPX_FLAGS, PACKAGE_NAME, PACKAGE_NAME_FINAL, PACKAGE_RANGE, PACKAGE_SPEC, SERVER_KEY, VERSION,
+  DEFAULT_PORT, NPX_COMMAND, NPX_FLAGS, PACKAGE_NAME, PACKAGE_NAME_FINAL, PACKAGE_RANGE, PACKAGE_SPEC, SERVER_KEY,
+  STANDARD_ENTRY, VERSION,
 } from '../lib/constants.mjs';
 import {
-  ARGS_CLI, ARGS_LIST, BACKUP_SUFFIX, CLIENT_IDS, FORMATS, TOKEN_MASK, applyJsonInstall, bridgeArgs, clientsFile,
-  clientsProblems, findClient, installPlan, mergeEntry, render, renderTemplate,
+  ARGS_CLI, ARGS_LIST, BACKUP_SUFFIX, CLIENT_IDS, FORMATS, KEPT_FIELDS, NotReleasedError, SETUPS_RELEASED, TOKEN_MASK,
+  applyJsonInstall, bridgeArgs, clientsFile, clientsProblems, findClient, installPath, installPlan as installPlanGated,
+  mergeEntry, render as renderGated, renderTemplate, writeTemporary,
 } from '../lib/clients.mjs';
 import { CLI_COMMANDS, absolutePathFolders, commandEnv, findProgram, parseCliArgs, runCli } from '../lib/cli.mjs';
 import * as messages from '../lib/messages.mjs';
@@ -38,6 +45,10 @@ const ENV_TOKEN = `wspc_${'9e'.repeat(32)}`;
 const KEYCHAIN_TOKEN = `wsp_${'8d'.repeat(32)}`;
 const OLD_TOKEN = `wsp_${'4f'.repeat(32)}`;
 const ARGS = ['-y', '--prefix', '/', PACKAGE_SPEC];
+
+/** render() and installPlan() as they work after the release. */
+const render = (id, options = {}) => renderGated(id, { beforeRelease: true, ...options });
+const installPlan = (id, options = {}) => installPlanGated(id, { beforeRelease: true, ...options });
 
 /** The apps of the spec's per-client table, in its order. */
 const SPEC_IDS = ['claude-code', 'claude-desktop', 'cursor', 'vscode', 'windsurf', 'zed', 'jetbrains', 'codex', 'gemini-cli',
@@ -90,6 +101,8 @@ test('the file agrees with the package constants and the contract', () => {
   assert.equal(FILE.default_port, contract.default_port);
   assert.deepEqual(FILE.standard_entry, { command: 'npx', args: bridgeArgs() });
   assert.deepEqual(FILE.standard_entry.args, [...NPX_FLAGS, PACKAGE_SPEC]);
+  // The bridge's own STANDARD_ENTRY (DIST-M1) is the same entry, so every consumer of either one agrees.
+  assert.deepEqual(FILE.standard_entry, JSON.parse(JSON.stringify(STANDARD_ENTRY)));
   // Snippets run the exact version; the 0.x range is only ever an opt-in (README "Versions").
   assert.ok(!RAW.includes(`"${PACKAGE_RANGE}"`) && !RAW.includes(`${PACKAGE_RANGE} `));
   // Every mention of the package names this exact version, with npx's --prefix / in front.
@@ -97,10 +110,12 @@ test('the file agrees with the package constants and the contract', () => {
     if (match.index === RAW.indexOf(`"package": "${PACKAGE_NAME}"`) + '"package": "'.length) continue;
     assert.equal(match[0], PACKAGE_SPEC, `at ${match.index}`);
   }
-  // A public text (VS Code shows it, the app and wisply.ai copy it), so it names the setup command as the docs do:
-  // pinned, after npx's flags. The connector's own messages say `wisply-mcp setup` until the name is final.
-  assert.ok(render('vscode-inputs').text.includes(`saved by ${NPX_COMMAND} setup.`),
-    'the vscode-inputs description names the pinned setup command (update it with every release)');
+  // A public text that VS Code shows when it asks for the token, so it names no command to run: a pasted token
+  // must never be steered to whatever answers to an npm name (the setup command asks for the token).
+  const description = JSON.parse(render('vscode-inputs').text).inputs[0].description;
+  assert.equal(description, "Wisply read-only connector token. Leave empty to use the token that the connector's setup " +
+    'saved in your login keychain.');
+  assert.doesNotMatch(description, /npx|@wisply|wisply-mcp/);
 });
 
 test('"published" keeps the package name off public pages until the release', () => {
@@ -128,6 +143,16 @@ test('clientsProblems refuses entries without --prefix / and file installs into 
   const cline = FILE.clients.find((client) => client.id === 'cline');
   const badTarget = { ...FILE, clients: FILE.clients.map((client) => (client === cline ? { ...cline, install: { ...cline.install, target: '' } } : client)) };
   assert.deepEqual(clientsProblems(badTarget), ['client cline: install.target']);
+  // Override variables: a variable name, and for a folder, a path that stays inside it.
+  const withInstall = (install) => ({
+    ...FILE, clients: FILE.clients.map((client) => (client === cline ? { ...cline, install: { ...cline.install, ...install } } : client)),
+  });
+  for (const dirEnv of ['CLINE_DIR', [{ name: 'CLINE_DIR' }], [{ name: 'cline_dir', path: 'x.json' }], [{ name: 'CLINE_DIR', path: '/x.json' }],
+    [{ name: 'CLINE_DIR', path: '../x.json' }], [{ name: 'CLINE_DIR', path: 'a//x.json' }], [{ name: 'CLINE_DIR', path: '~/x.json' }]]) {
+    assert.deepEqual(clientsProblems(withInstall({ dir_env: dirEnv })), ['client cline: install.dir_env'], JSON.stringify(dirEnv));
+  }
+  assert.deepEqual(clientsProblems(withInstall({ path_env: 'x y' })), ['client cline: install.path_env']);
+  assert.deepEqual(clientsProblems(withInstall({ dir_env: [{ name: 'CLINE_DIR', path: 'data/settings/x.json' }] })), []);
 });
 
 test('the README names every app id and which ones install supports', () => {
@@ -163,7 +188,7 @@ test('no template holds a token or anything that could carry one', () => {
   const parsed = JSON.parse(inputs.text);
   assert.deepEqual(parsed.servers.wisply.env, { WISPLY_MCP_TOKEN: '${input:wisply-token}' });
   assert.equal(parsed.inputs[0].password, true);
-  assert.ok(inputs.text.includes(`${NPX_COMMAND} setup`), 'the input description names this package\'s setup command');
+  assert.ok(!inputs.text.includes(`${NPX_COMMAND} setup`), 'the input description names no command');
 });
 
 // --- Rendering -----------------------------------------------------------
@@ -301,29 +326,52 @@ test('install plans: JSON apps get exactly the printed entry, at their own path'
     cursor: ['/Users/someone/.cursor/mcp.json', 'Cursor'],
     windsurf: ['/Users/someone/.codeium/windsurf/mcp_config.json', 'Windsurf'],
     'claude-desktop': ['/Users/someone/Library/Application Support/Claude/claude_desktop_config.json', 'Claude Desktop'],
-    cline: ['/Users/someone/.cline/data/settings/cline_mcp_settings.json', 'Cline CLI'],
+    cline: ['/Users/someone/.cline/data/settings/cline_mcp_settings.json', 'Cline'],
     'copilot-cli': ['/Users/someone/.copilot/mcp-config.json', 'GitHub Copilot CLI'],
   };
   for (const [id, [path, target]] of Object.entries(expected)) {
     const result = plan(id);
     assert.deepEqual(result, {
-      kind: 'json-file', id, target, path, key: 'mcpServers', name: 'wisply', entry: jsonEntry(id, render(id).text),
+      kind: 'json-file', id, target, path, pathFrom: null, key: 'mcpServers', name: 'wisply', entry: jsonEntry(id, render(id).text),
       hint: id === 'cline' ? FILE.clients.find((client) => client.id === 'cline').install.hint : null,
     }, id);
   }
-  // Cline: install writes the CLI's file, and says how to add Wisply to the extension.
-  assert.match(plan('cline').hint, /Cline extension .*MCP Servers > Configure > Configure MCP Servers/);
-  assert.equal(render('cline').installTarget, 'Cline CLI');
+  // Cline 4.0 and later: the extension, the CLI and the JetBrains plugin share one file, so install sets up "Cline".
+  assert.equal(plan('cline').hint, 'Cline 4.0 and later read this one file from the extension, the CLI and the JetBrains plugin.');
+  assert.equal(render('cline').installTarget, 'Cline');
+  assert.equal(render('cline').note, 'Cline 4.0 and later keep one MCP settings file for the extension, the CLI and the ' +
+    'JetBrains plugin: ~/.cline/data/settings/cline_mcp_settings.json.');
+  assert.doesNotMatch(JSON.stringify(FILE.clients.find((client) => client.id === 'cline')), /Cline CLI|keeps its own list/);
   assert.equal(render('cursor').installTarget, 'Cursor');
   assert.equal(render('zed').installTarget, null);
-  assert.match(messages.printConfigHint(render('cline')), /install cline` add it to Cline CLI for you\./);
+  assert.match(messages.printConfigHint(render('cline')), /install cline` add it for you\./);
   assert.match(messages.printConfigHint(render('cursor')), /install cursor` add it for you\./);
-  // The apps' own override variables.
-  assert.equal(plan('cline', { CLINE_MCP_SETTINGS_PATH: '/tmp/cline.json' }).path, '/tmp/cline.json');
-  assert.equal(plan('cline', { CLINE_MCP_SETTINGS_PATH: '~/c/cline.json' }).path, '/Users/someone/c/cline.json');
-  assert.equal(plan('cline', { CLINE_MCP_SETTINGS_PATH: '  ' }).path, expected.cline[0]);
+  // The apps' own override variables, in the order the app reads them. Cline (getSharedMcpSettingsPath):
+  // CLINE_MCP_SETTINGS_PATH, then CLINE_DATA_DIR + settings/, then CLINE_DIR + data/settings/.
+  const clineFile = 'cline_mcp_settings.json';
+  assert.deepEqual(plan('cline', { CLINE_MCP_SETTINGS_PATH: '/tmp/cline.json' }), {
+    ...plan('cline'), path: '/tmp/cline.json', pathFrom: 'CLINE_MCP_SETTINGS_PATH',
+  });
+  assert.equal(plan('cline', { CLINE_DATA_DIR: '/d' }).path, `/d/settings/${clineFile}`);
+  assert.equal(plan('cline', { CLINE_DATA_DIR: '/d' }).pathFrom, 'CLINE_DATA_DIR');
+  assert.equal(plan('cline', { CLINE_DIR: '/c/' }).path, `/c/data/settings/${clineFile}`);
+  assert.equal(plan('cline', { CLINE_DIR: '/c', CLINE_DATA_DIR: '/d' }).path, `/d/settings/${clineFile}`);
+  assert.equal(plan('cline', { CLINE_DIR: '/c', CLINE_DATA_DIR: '/d', CLINE_MCP_SETTINGS_PATH: ' /f.json ' }).path, '/f.json');
+  assert.equal(plan('cline', { CLINE_MCP_SETTINGS_PATH: '  ', CLINE_DATA_DIR: '', CLINE_DIR: '\t' }).path, expected.cline[0]);
   assert.equal(plan('copilot-cli', { COPILOT_HOME: '/opt/copilot' }).path, '/opt/copilot/mcp-config.json');
-  assert.equal(plan('cursor', { COPILOT_HOME: '/opt/copilot', CLINE_MCP_SETTINGS_PATH: '/x' }).path, expected.cursor[0]);
+  assert.equal(plan('copilot-cli', { COPILOT_HOME: '/opt/copilot' }).pathFrom, 'COPILOT_HOME');
+  assert.equal(plan('cursor', { COPILOT_HOME: '/opt/copilot', CLINE_MCP_SETTINGS_PATH: '/x', CLINE_DIR: '/c' }).path,
+    expected.cursor[0]);
+  // A value that isn't a full path is resolved by the app against a folder install can't know (Cline doesn't
+  // expand ~ either), and install never acts on the folder it runs in: no file, the snippet instead.
+  for (const [id, variable, value] of [['cline', 'CLINE_MCP_SETTINGS_PATH', 'cline.json'], ['cline', 'CLINE_MCP_SETTINGS_PATH', '~/c.json'],
+    ['cline', 'CLINE_DATA_DIR', './data'], ['cline', 'CLINE_DIR', '~'], ['copilot-cli', 'COPILOT_HOME', 'project/.copilot']]) {
+    const result = plan(id, { [variable]: value });
+    assert.deepEqual(result, { kind: 'not-full-path', id, target: expected[id][1], variable, hint: plan(id).hint }, `${variable}=${value}`);
+  }
+  // The first variable that is set decides, as in the app: a relative one isn't skipped for a later one.
+  assert.equal(plan('cline', { CLINE_DATA_DIR: 'rel', CLINE_DIR: '/c' }).variable, 'CLINE_DATA_DIR');
+  assert.deepEqual(installPath({ path: '~/x.json' }, {}, '/h'), { path: '/h/x.json', from: null });
   // Everything else is pasted by hand.
   for (const id of CLIENT_IDS.filter((entry) => !Object.hasOwn(INSTALLS, entry))) assert.deepEqual(plan(id), { kind: 'manual', id });
   assert.deepEqual(plan('vscode-inputs'), { kind: 'manual', id: 'vscode-inputs' });
@@ -340,7 +388,8 @@ const laidOut = (value, indent, unit = '  ', eol = '\n') => JSON.stringify(value
 
 test('mergeEntry changes only the wisply entry\'s text; every other byte of the file stays', () => {
   const fresh = `${JSON.stringify({ mcpServers: { wisply: ENTRY } }, null, 2)}\n`;
-  assert.deepEqual(mergeEntry(null, change), { ok: true, text: fresh, unchanged: false, replaced: false, replacedHeldToken: false });
+  assert.deepEqual(mergeEntry(null, change),
+    { ok: true, text: fresh, unchanged: false, replaced: false, replacedHeldToken: false, kept: [], dropped: [] });
   assert.equal(mergeEntry(' \n', change).text, fresh);
   assert.equal(mergeEntry('{\n}\n', change).text, fresh);
 
@@ -349,7 +398,8 @@ test('mergeEntry changes only the wisply entry\'s text; every other byte of the 
   const after = { ...original, mcpServers: { ...original.mcpServers, wisply: ENTRY } };
   for (const indent of [2, 4, '\t']) {
     const merged = mergeEntry(JSON.stringify(original, null, indent), change);
-    assert.deepEqual({ ...merged, text: undefined }, { ok: true, text: undefined, unchanged: false, replaced: true, replacedHeldToken: false });
+    assert.deepEqual({ ...merged, text: undefined },
+      { ok: true, text: undefined, unchanged: false, replaced: true, replacedHeldToken: false, kept: [], dropped: ['url'] });
     assert.equal(merged.text, JSON.stringify(after, null, indent), String(indent));
   }
 
@@ -386,7 +436,12 @@ test('mergeEntry changes only the wisply entry\'s text; every other byte of the 
   assert.equal(bom.text, `\uFEFF{"mcpServers":{"wisply": ${compact}}}`);
 
   const same = `${JSON.stringify({ mcpServers: { wisply: ENTRY } }, null, 2)}\n`;
-  assert.deepEqual(mergeEntry(same, change), { ok: true, text: same, unchanged: true, replaced: false, replacedHeldToken: false });
+  assert.deepEqual(mergeEntry(same, change),
+    { ok: true, text: same, unchanged: true, replaced: false, replacedHeldToken: false, kept: [], dropped: [] });
+  // The same entry in another key order is the same entry.
+  const reordered = JSON.stringify({ mcpServers: { wisply: { args: ARGS, command: 'npx' } } });
+  assert.equal(mergeEntry(reordered, change).unchanged, true);
+  assert.equal(mergeEntry(reordered, change).text, reordered);
 
   const withToken = JSON.stringify({ mcpServers: { wisply: { url: 'http://127.0.0.1:51771/mcp', headers: { Authorization: `Bearer ${OLD_TOKEN}` } } } });
   const replaced = mergeEntry(withToken, change);
@@ -396,6 +451,55 @@ test('mergeEntry changes only the wisply entry\'s text; every other byte of the 
   const other = JSON.stringify({ mcpServers: { other: { env: { T: OLD_TOKEN } } } });
   assert.equal(mergeEntry(other, change).replacedHeldToken, false);
   assert.ok(mergeEntry(other, change).text.startsWith(other.slice(0, -2)));
+});
+
+test('mergeEntry keeps what the app or the person set on the old entry, and names what it drops', () => {
+  const cline = { type: 'stdio', command: 'npx', args: ARGS, disabled: false, autoApprove: [] };
+  const clineChange = { key: 'mcpServers', name: 'wisply', entry: cline, keep: KEPT_FIELDS };
+  // Cline wrote its own approvals and a timeout; the person turned the server off. Install again: nothing to do.
+  const approved = JSON.stringify({ mcpServers: { wisply: { ...cline, autoApprove: ['list_memos'], disabled: true, timeout: 120 } } }, null, 2);
+  const again = mergeEntry(approved, clineChange);
+  assert.deepEqual({ ...again, text: undefined }, {
+    ok: true, text: undefined, unchanged: true, replaced: false, replacedHeldToken: false, kept: ['autoApprove', 'disabled', 'timeout'], dropped: [],
+  });
+  assert.equal(again.text, approved);
+  // An old entry of another version: the command and arguments change; the approvals and the switch stay.
+  const older = JSON.stringify({
+    mcpServers: { wisply: { autoApprove: ['get_action_items'], command: 'npx', args: ['-y', '@wisply/mcp@0.0.9'], timeout: 60, env: { A: '1' } } },
+  }, null, 2);
+  const updated = mergeEntry(older, clineChange);
+  assert.equal(updated.replaced, true);
+  assert.deepEqual(updated.kept, ['autoApprove', 'timeout']);
+  assert.deepEqual(updated.dropped, ['env']);
+  assert.deepEqual(JSON.parse(updated.text).mcpServers.wisply,
+    { type: 'stdio', command: 'npx', args: ARGS, disabled: false, autoApprove: ['get_action_items'], timeout: 60 });
+  // Copilot CLI's narrowed tools stay.
+  const copilot = { type: 'local', command: 'npx', args: ARGS, tools: ['*'] };
+  const narrowed = JSON.stringify({ mcpServers: { wisply: { ...copilot, args: ['-y', 'old'], tools: ['list_memos'] } } });
+  assert.deepEqual(JSON.parse(mergeEntry(narrowed, { key: 'mcpServers', name: 'wisply', entry: copilot, keep: KEPT_FIELDS }).text)
+    .mcpServers.wisply.tools, ['list_memos']);
+  // A field that holds something token-shaped never stays; the old direct-HTTP entry goes entirely.
+  const leaky = JSON.stringify({ mcpServers: { wisply: { url: 'http://127.0.0.1:51771/mcp', headers: { Authorization: `Bearer ${OLD_TOKEN}` },
+    timeout: `${OLD_TOKEN}` } } });
+  const cleaned = mergeEntry(leaky, clineChange);
+  assert.deepEqual(cleaned.kept, []);
+  assert.deepEqual(cleaned.dropped, ['url', 'headers', 'timeout']);
+  assert.equal(cleaned.replacedHeldToken, true);
+  assert.doesNotMatch(cleaned.text, TOKEN_SHAPE);
+  // Without `keep` (the default), the template replaces the old entry whole.
+  assert.deepEqual(JSON.parse(mergeEntry(older, { ...clineChange, keep: undefined }).text).mcpServers.wisply, cline);
+  // A field named __proto__ is only ever reported, never copied.
+  const proto = '{"mcpServers": {"wisply": {"__proto__": {"polluted": true}, "command": "x"}}}';
+  const safe = mergeEntry(proto, clineChange);
+  assert.deepEqual(safe.dropped, ['__proto__']);
+  assert.equal({}.polluted, undefined);
+  assert.deepEqual(JSON.parse(safe.text).mcpServers.wisply, cline);
+  // The messages name kept and dropped fields, never anything token-like.
+  assert.equal(messages.installUnchanged('Cline', '/x', ['autoApprove', 'disabled']),
+    'Cline already has this Wisply entry in /x (with your own autoApprove, disabled). Nothing changed.');
+  const text = messages.installedFile('Cline', { path: '/x', replaced: true, kept: ['timeout'], dropped: ['env', OLD_TOKEN, 'a b'] });
+  assert.match(text, /Kept from the old entry: timeout\.\nNot carried over from the old entry: env, 2 more\./);
+  assert.doesNotMatch(text, TOKEN_SHAPE);
 });
 
 test('mergeEntry: random files and layouts read back as exactly the change', () => {
@@ -447,8 +551,13 @@ test('mergeEntry refuses what isn\'t plain JSON of the right shape, or a key it 
 /** The apps' own commands, as executable stubs in a PATH folder of their own (never run: execFile is a spy). */
 const PROGRAMS = ['claude', 'codex', 'gemini', 'code'];
 
-/** runCli's dependencies with a temporary HOME, an execFile spy and a Keychain that must stay untouched. */
-function harness({ platform = 'darwin', env = {}, exec = () => ({ error: null, stdout: '', stderr: '' }), programs = PROGRAMS } = {}) {
+/**
+ * runCli's dependencies with a temporary HOME, an execFile spy and a Keychain that must stay untouched;
+ * print-config and install work as after the release unless `released: false`.
+ */
+function harness({
+  platform = 'darwin', env = {}, exec = () => ({ error: null, stdout: '', stderr: '' }), programs = PROGRAMS, released = true,
+} = {}) {
   const home = mkdtempSync(join(tmpdir(), 'wisply-clients-'));
   const bin = mkdtempSync(join(tmpdir(), 'wisply-bin-'));
   for (const program of programs) {
@@ -461,6 +570,7 @@ function harness({ platform = 'darwin', env = {}, exec = () => ({ error: null, s
   const touched = [];
   const deps = {
     platform,
+    released,
     env: { HOME: home, PATH: `${bin}:/usr/bin:/bin`, LANG: 'en_US.UTF-8', WISPLY_MCP_TOKEN: ENV_TOKEN, ...env },
     out: (text) => out.push(text),
     err: (text) => err.push(text),
@@ -519,14 +629,36 @@ test('print-config: the snippet alone on stdout, where it goes on stderr', async
   t.after(custom.cleanup);
   assert.equal(await runCli(['print-config', 'Cursor', '--port', '51772'], custom.deps), 0);
   assert.equal(custom.out, `${render('cursor', { port: 51772 }).text}\n`);
+  // Only --port changes the port: a WISPLY_MCP_PORT in the shell (a test Wisply's) never ends up in an app's
+  // settings unasked. stderr says it was ignored, without echoing it.
   const fromEnv = harness({ env: { WISPLY_MCP_PORT: '51773' } });
   t.after(fromEnv.cleanup);
   assert.equal(await runCli(['print-config', '--port=51772', 'codex'], fromEnv.deps), 0);
   assert.match(fromEnv.out, /"--port", "51772"/);
-  const envPort = harness({ env: { WISPLY_MCP_PORT: '51773' } });
-  t.after(envPort.cleanup);
-  assert.equal(await runCli(['print-config', 'codex'], envPort.deps), 0);
-  assert.match(envPort.out, /"--port", "51773"/);
+  assert.ok(fromEnv.err.startsWith(`${messages.envPortIgnored(51772)}\n`));
+  for (const value of ['51773', 'eighty', ENV_TOKEN]) {
+    const envPort = harness({ env: { WISPLY_MCP_PORT: value } });
+    t.after(envPort.cleanup);
+    assert.equal(await runCli(['print-config', 'codex'], envPort.deps), 0, value);
+    assert.equal(envPort.out, `${render('codex').text}\n`, value);
+    assert.equal(envPort.err, `${messages.envPortIgnored(DEFAULT_PORT)}\n${messages.printConfigHint(render('codex'))}`, value);
+    assert.doesNotMatch(envPort.err, TOKEN_SHAPE);
+  }
+  // The same port, or a blank one, needs no note.
+  for (const value of [String(DEFAULT_PORT), ' ']) {
+    const same = harness({ env: { WISPLY_MCP_PORT: value } });
+    t.after(same.cleanup);
+    assert.equal(await runCli(['print-config', 'codex'], same.deps), 0);
+    assert.equal(same.err, messages.printConfigHint(render('codex')));
+  }
+  for (const command of ['print-config', 'install']) {
+    assert.equal(parseCliArgs([command, 'cursor'], { WISPLY_MCP_PORT: '51773' }).options.port, DEFAULT_PORT, command);
+    assert.equal(parseCliArgs([command, 'cursor'], { WISPLY_MCP_PORT: 'eighty' }).options.port, DEFAULT_PORT, command);
+    assert.equal(parseCliArgs([command, 'cursor', '--port', '51774'], { WISPLY_MCP_PORT: '51773' }).options.port, 51774, command);
+  }
+  // setup and status still take it, as serving does.
+  assert.equal(parseCliArgs(['status'], { WISPLY_MCP_PORT: '51773' }).options.port, 51773);
+  assert.equal(parseCliArgs(['setup'], { WISPLY_MCP_PORT: '51773' }).options.port, 51773);
   // Off macOS too: printing is harmless.
   const linux = harness({ platform: 'linux' });
   t.after(linux.cleanup);
@@ -668,12 +800,30 @@ test('install: a missing or failing command changes nothing and says what to do'
   assert.equal(await runCli(['install', 'vscode'], vanished.deps), 1);
   assert.ok(vanished.out.endsWith(`${messages.programMissing('code', 'VS Code', plan.hint, plan.display)}\n`));
 
-  const failing = harness({
+  // `claude mcp add` refuses a name it has (claude 2.1: exit 1, "MCP server wisply already exists in user
+  // config"). install can't tell whether that entry is this one, so it exits 1 and says how to replace it.
+  const exists = harness({
     exec: () => ({ error: Object.assign(new Error('exit 1'), { code: 1 }), stdout: '', stderr: 'MCP server wisply already exists in user config\n' }),
+  });
+  t.after(exists.cleanup);
+  assert.equal(await runCli(['install', 'claude-code'], exists.deps), 1);
+  assert.equal(exists.err, 'MCP server wisply already exists in user config\n');
+  assert.ok(exists.out.endsWith(`${messages.commandEntryExists('claude', 'Claude Code', true)}\n`));
+  assert.equal(messages.commandEntryExists('claude', 'Claude Code', true), 'Claude Code already has a server named wisply, so ' +
+    'nothing changed. If install added it before, Wisply is already set up there. To replace it, run `claude mcp remove wisply`, ' +
+    'then run install again.');
+  // code --add-mcp has no `code mcp remove`.
+  const codeExists = harness({ exec: () => ({ error: Object.assign(new Error('exit 1'), { code: 1 }), stdout: 'Server already exists\n', stderr: '' }) });
+  t.after(codeExists.cleanup);
+  assert.equal(await runCli(['install', 'vscode'], codeExists.deps), 1);
+  assert.ok(codeExists.out.endsWith(`${messages.commandEntryExists('code', 'VS Code', false)}\n`));
+  assert.match(messages.commandEntryExists('code', 'VS Code', false), /To replace it, remove it in VS Code, then run install again\.$/);
+  const failing = harness({
+    exec: () => ({ error: Object.assign(new Error('exit 1'), { code: 1 }), stdout: '', stderr: 'error: unknown option --scope\n' }),
   });
   t.after(failing.cleanup);
   assert.equal(await runCli(['install', 'claude-code'], failing.deps), 1);
-  assert.equal(failing.err, 'MCP server wisply already exists in user config\n');
+  assert.equal(failing.err, 'error: unknown option --scope\n');
   assert.ok(failing.out.endsWith(`${messages.programFailed('claude', 'Claude Code', { code: 1 })}\n`));
   assert.match(messages.programFailed('claude', 'Claude Code', { code: 1 }), /^claude failed \(exit 1\)/);
   assert.match(messages.programFailed('codex', 'Codex', { signal: 'SIGTERM', timedOut: true }), /^codex didn't finish in time/);
@@ -771,15 +921,15 @@ test('install into a JSON file: no app folder, no file, and the snippet to paste
   const path = join(h.home, '.cursor/mcp.json');
   assert.equal(h.out, `${messages.installFileProblem('no-folder', 'Cursor', path, join(h.home, '.cursor'))}\n${render('cursor').text}\n`);
   assert.deepEqual(filesUnder(h.home), {});
-  // Cline: install sets up the CLI, and points extension users at the extension's own list.
+  // Cline: install sets up the one file the extension, the CLI and the JetBrains plugin share.
   const cline = harness();
   t.after(cline.cleanup);
   assert.equal(await runCli(['install', 'cline'], cline.deps), 1);
   const clinePath = join(cline.home, JSON_APPS.cline);
   const plan = installPlan('cline', { home: cline.home });
   assert.equal(cline.out,
-    `${messages.installFileProblem('no-folder', 'Cline CLI', clinePath, join(clinePath, '..'))}\n${render('cline').text}\n${plan.hint}\n`);
-  assert.match(cline.out, /so Cline CLI doesn't seem to be set up on this Mac/);
+    `${messages.installFileProblem('no-folder', 'Cline', clinePath, join(clinePath, '..'))}\n${render('cline').text}\n${plan.hint}\n`);
+  assert.match(cline.out, /so Cline doesn't seem to be set up on this Mac/);
   assert.deepEqual(filesUnder(cline.home), {});
 });
 
@@ -811,7 +961,10 @@ test('install into a JSON file: keeps other servers byte for byte, replaces an o
   assert.doesNotMatch(readFileSync(backup, 'utf8'), TOKEN_SHAPE);
   assert.equal(statSync(backup).mode & 0o777, 0o600);
   assert.deepEqual(Object.keys(filesUnder(h.home)).sort(), ['.cursor/mcp.json', `.cursor/mcp.json${BACKUP_SUFFIX}`]);
-  assert.equal(h.out, written('cursor', { path, replaced: true, backup, backupMasked: true, warning: messages.replacedTokenWarning(path) }));
+  assert.equal(h.out, written('cursor', {
+    path, replaced: true, backup, backupMasked: true, dropped: ['url', 'headers'], warning: messages.replacedTokenWarning(path),
+  }));
+  assert.match(h.out, /Not carried over from the old entry: url, headers\./);
   assert.match(messages.installedFile('Cursor', { path, replaced: true, backup, backupMasked: true }), /token in it masked \(wsp\.\.\.\)/);
   assert.match(messages.replacedTokenWarning(path), /It's gone from .*install's backup doesn't keep it/);
   for (const content of Object.values(filesUnder(h.home))) assert.doesNotMatch(content, TOKEN_SHAPE);
@@ -838,7 +991,8 @@ test('install into a JSON file: keeps other servers byte for byte, replaces an o
   assert.equal(readFileSync(`${windsurf}${BACKUP_SUFFIX}`, 'utf8'), plain);
   assert.equal(statSync(`${windsurf}${BACKUP_SUFFIX}`).mode & 0o777, 0o600);
   assert.equal(readFileSync(windsurf, 'utf8'), `{"theme": "dark", "mcpServers": {"x": {"command": "x"}, "wisply": ${JSON.stringify(FILE.standard_entry)}}}`);
-  assert.ok(third.out.includes(`The file as it was is saved as ${windsurf}${BACKUP_SUFFIX}.\n`));
+  assert.ok(third.out.includes(`The file as it was is saved as ${windsurf}${BACKUP_SUFFIX}. It still holds everything else the file ` +
+    "held, other servers' keys and tokens included: delete it once Windsurf works with Wisply.\n"));
 });
 
 test('install into a JSON file: refuses comments, odd shapes, repeated keys and non-UTF-8, and leaves the file as it was', async (t) => {
@@ -888,10 +1042,34 @@ test('install into a JSON file: the apps\' own path variables', async (t) => {
   h.deps.env.CLINE_MCP_SETTINGS_PATH = join(h.home, 'alt/cline.json');
   h.deps.env.COPILOT_HOME = join(h.home, 'alt');
   assert.equal(await runCli(['install', 'cline'], h.deps), 0);
+  assert.ok(h.out.startsWith(`${messages.installPathFrom('CLINE_MCP_SETTINGS_PATH', join(h.home, 'alt/cline.json'))}\n`));
   assert.equal(await runCli(['install', 'copilot-cli'], h.deps), 0);
   assert.deepEqual(Object.keys(filesUnder(h.home)).sort(), ['alt/cline.json', 'alt/mcp-config.json']);
   assert.deepEqual(JSON.parse(readFileSync(join(h.home, 'alt/mcp-config.json'), 'utf8')).mcpServers.wisply,
     { type: 'local', command: 'npx', args: ARGS, tools: ['*'] });
+
+  // Cline's CLINE_DATA_DIR and CLINE_DIR, where Cline itself looks.
+  for (const [variable, folder, file] of [['CLINE_DATA_DIR', 'data', 'data/settings/cline_mcp_settings.json'],
+    ['CLINE_DIR', 'cline', 'cline/data/settings/cline_mcp_settings.json']]) {
+    const dir = harness();
+    t.after(dir.cleanup);
+    mkdirSync(join(dir.home, file, '..'), { recursive: true });
+    dir.deps.env[variable] = join(dir.home, folder);
+    assert.equal(await runCli(['install', 'cline'], dir.deps), 0, variable);
+    assert.deepEqual(Object.keys(filesUnder(dir.home)), [file], variable);
+    assert.ok(dir.out.startsWith(`${messages.installPathFrom(variable, join(dir.home, file))}\n`), variable);
+  }
+
+  // A relative value: Cline would resolve it against its own folder, so install changes nothing and says why.
+  const relative = harness();
+  t.after(relative.cleanup);
+  mkdirSync(join(relative.home, JSON_APPS.cline, '..'), { recursive: true });
+  relative.deps.env.CLINE_DATA_DIR = 'project/.cline';
+  assert.equal(await runCli(['install', 'cline'], relative.deps), 1);
+  const plan = installPlan('cline', {});
+  assert.equal(relative.out, `${messages.installNotFullPath('CLINE_DATA_DIR', 'Cline')}\n${render('cline').text}\n${plan.hint}\n`);
+  assert.deepEqual(filesUnder(relative.home), {});
+  assert.deepEqual(relative.runs, []);
 });
 
 test('applyJsonInstall reports read and write failures without changing anything', async (t) => {
@@ -934,6 +1112,75 @@ test('applyJsonInstall reports read and write failures without changing anything
   assert.ok(h.out.startsWith(messages.installFileProblem('write-failed', 'Cursor', join(h.home, '.cursor/mcp.json'), join(h.home, '.cursor'))));
 });
 
+test('install into a JSON file: a hard-linked config is left alone; the temporary file is private until the rename', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  mkdirSync(join(h.home, '.cursor'));
+  mkdirSync(join(h.home, 'dotfiles'));
+  const path = join(h.home, '.cursor/mcp.json');
+  const original = `{"mcpServers": {"wisply": {"url": "http://127.0.0.1:51771/mcp", "headers": {"Authorization": "Bearer ${OLD_TOKEN}"}}}}`;
+  writeFileSync(path, original, { mode: 0o644 });
+  // A dotfiles copy that is the same file: a rename would leave it with the old text (and the token the warning says is gone).
+  linkSync(path, join(h.home, 'dotfiles/mcp.json'));
+  assert.equal(await runCli(['install', 'cursor'], h.deps), 1);
+  assert.equal(h.out, `${messages.installFileProblem('hard-linked', 'Cursor', path, join(h.home, '.cursor'))}\n${render('cursor').text}\n`);
+  assert.equal(readFileSync(path, 'utf8'), original);
+  assert.deepEqual(Object.keys(filesUnder(h.home)).sort(), ['.cursor/mcp.json', 'dotfiles/mcp.json'], 'no backup, no temporary file');
+  assert.match(messages.installFileProblem('hard-linked', 'Cursor', '/a/b', '/a'),
+    /^\/a\/b has another hard link \(a dotfiles copy\?\)\. install replaces the file, .* Instead, add this to \/a\/b yourself:$/);
+
+  // The temporary file holds the whole new config (other servers' secrets too): 0600 whatever the target's mode.
+  const folder = mkdtempSync(join(tmpdir(), 'wisply-temporary-'));
+  t.after(() => rmSync(folder, { recursive: true, force: true }));
+  const temporary = await writeTemporary(join(folder, 'mcp.json'), '{"x": 1}');
+  assert.equal(dirname(temporary), folder);
+  assert.match(basename(temporary), /^mcp\.json\.wisply-\d+-\d+\.tmp$/);
+  assert.equal(statSync(temporary).mode & 0o777, 0o600);
+  // It never writes through something already at its name (O_EXCL).
+  t.mock.method(Date, 'now', () => 45);
+  const first = await writeTemporary(join(folder, 'mcp.json'), 'first');
+  await assert.rejects(writeTemporary(join(folder, 'mcp.json'), 'second'), (error) => error.code === 'EEXIST');
+  t.mock.restoreAll();
+  assert.equal(readFileSync(first, 'utf8'), 'first');
+  // The file itself keeps its own mode after the rename.
+  const kept = join(folder, 'kept.json');
+  writeFileSync(kept, '{"mcpServers": {}}', { mode: 0o640 });
+  chmodSync(kept, 0o640);
+  assert.equal((await applyJsonInstall({ path: kept, key: 'mcpServers', name: 'wisply', entry: ENTRY })).outcome, 'written');
+  assert.equal(statSync(kept).mode & 0o777, 0o640);
+});
+
+test('install into a JSON file: Cline\'s own approvals and switch survive a second install', async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  const path = join(h.home, JSON_APPS.cline);
+  mkdirSync(join(path, '..'), { recursive: true });
+  assert.equal(await runCli(['install', 'cline'], h.deps), 0);
+  // Cline records approvals in the entry; the person turns it off for a while.
+  const config = JSON.parse(readFileSync(path, 'utf8'));
+  Object.assign(config.mcpServers.wisply, { autoApprove: ['list_memos', 'get_action_items'], disabled: true, timeout: 90 });
+  const edited = `${JSON.stringify(config, null, 2)}\n`;
+  writeFileSync(path, edited);
+  const again = harness();
+  t.after(again.cleanup);
+  again.deps.env.HOME = h.home;
+  assert.equal(await runCli(['install', 'cline'], again.deps), 0);
+  assert.equal(readFileSync(path, 'utf8'), edited, 'nothing to change');
+  assert.ok(again.out.startsWith(`${messages.installUnchanged('Cline', path, ['autoApprove', 'disabled', 'timeout'])}\n`));
+  // A new version of the connector: the arguments change, the approvals stay, and install says so.
+  config.mcpServers.wisply.args = ['-y', '--prefix', '/', '@wisply/mcp@0.0.1'];
+  config.mcpServers.wisply.env = { WISPLY_MCP_PORT: '51772' };
+  writeFileSync(path, JSON.stringify(config, null, 2));
+  const third = harness();
+  t.after(third.cleanup);
+  third.deps.env.HOME = h.home;
+  assert.equal(await runCli(['install', 'cline'], third.deps), 0);
+  assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')).mcpServers.wisply, {
+    type: 'stdio', command: 'npx', args: ARGS, disabled: true, autoApprove: ['list_memos', 'get_action_items'], timeout: 90,
+  });
+  assert.match(third.out, /Kept from the old entry: autoApprove, disabled, timeout\.\nNot carried over from the old entry: env\./);
+});
+
 test('applyJsonInstall leaves a file that changed while it worked (an app writing it) alone', async (t) => {
   const home = mkdtempSync(join(tmpdir(), 'wisply-race-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));
@@ -967,7 +1214,13 @@ test('every print-config and install text is ASCII and names only real commands,
     messages.installedFile('Cursor', { path: '/x', created: true }), messages.replacedTokenWarning('/x'),
     messages.installedFile('Cursor', { path: '/x', backup: '/x.wisply-backup', backupMasked: true }),
     messages.installUnchanged('Cursor', '/x'), messages.installNextSteps('Cursor'), messages.HELP,
-    ...['no-folder', 'invalid-json', 'not-object', 'not-plain', 'changed', 'read-failed', 'write-failed']
+    messages.installUnchanged('Cline', '/x', ['autoApprove']), messages.SETUPS_NOT_RELEASED, messages.envPortIgnored(51772),
+    messages.appDataNote('Cursor'), messages.commandEntryExists('claude', 'Claude Code', true),
+    messages.commandEntryExists('code', 'VS Code', false), messages.installNotFullPath('CLINE_DIR', 'Cline'),
+    messages.installPathFrom('CLINE_DIR', '/c/data/settings/cline_mcp_settings.json'),
+    messages.installedFile('Cline', { path: '/x', replaced: true, kept: ['timeout'], dropped: ['env'] }),
+    messages.appList([{ id: 'cursor', name: 'Cursor', install: true }], { released: false }),
+    ...['no-folder', 'invalid-json', 'not-object', 'not-plain', 'hard-linked', 'changed', 'read-failed', 'write-failed']
       .map((outcome) => messages.installFileProblem(outcome, 'Cursor', '/a/b', '/a')),
     ...Object.values(messages).filter((value) => typeof value === 'string'),
     ...FILE.clients.flatMap((client) => [client.note ?? '', client.install?.hint ?? '']),
@@ -983,6 +1236,15 @@ test('every print-config and install text is ASCII and names only real commands,
     assert.doesNotMatch(text, /npx -y @wisply/, `npx without --prefix / in: ${text}`);
   }
   assert.equal(messages.unknownApp('a\u0007b"', ['x']), 'wisply-mcp: unknown app "a?b"". Apps: x.');
+  // Adding the entry is when transcripts start to reach the app: print-config and install say where they go.
+  assert.equal(messages.appDataNote('Cursor'),
+    "What Cursor reads from Wisply, transcripts included, goes to the AI service Cursor uses, under that service's terms.");
+  for (const id of [...CLIENT_IDS, 'vscode-inputs']) {
+    assert.ok(messages.printConfigHint(render(id)).includes(`\n${messages.appDataNote(render(id).name)}\n`), id);
+  }
+  assert.ok(messages.installNextSteps('Cursor').endsWith(`\n${messages.appDataNote('Cursor')}`));
+  // Not an inherited property name: an unknown outcome is a write failure.
+  assert.equal(messages.installFileProblem('toString', 'Cursor', '/a/b', '/a'), messages.installFileProblem('write-failed', 'Cursor', '/a/b', '/a'));
   assert.match(messages.HELP, /print-config \[<app>\] \[--port <n>\]/);
   assert.match(messages.HELP, /install <app> \[--port <n>\]/);
   // Through npx with the pinned spec once the package name is final, by the bin's name until then (DIST-M2).
@@ -1003,6 +1265,53 @@ test('the docs run the pinned connector with --prefix / everywhere', () => {
   }
 });
 
+// --- Before the release --------------------------------------------------
+
+test('before the release, nothing renders a setup: render, installPlan, print-config and install refuse', async (t) => {
+  // Tied to the package name and "published", which the release change flips together (pack.test, the test above).
+  assert.equal(SETUPS_RELEASED, PACKAGE_NAME_FINAL && FILE.published === true);
+  if (!SETUPS_RELEASED) {
+    for (const id of [...CLIENT_IDS, 'vscode-inputs']) {
+      assert.throws(() => renderGated(id), NotReleasedError, id);
+      assert.throws(() => installPlanGated(id, { home: '/h', env: {} }), (error) => error.code === 'WISPLY_NOT_RELEASED', id);
+    }
+  }
+  // An unknown app is still just unknown.
+  assert.equal(renderGated('nope'), null);
+  assert.equal(installPlanGated('nope'), null);
+
+  // The CLI as it runs from the bin (released: SETUPS_RELEASED), forced to "not yet".
+  for (const id of [...CLIENT_IDS, 'vscode-inputs']) {
+    const printed = harness({ released: false });
+    t.after(printed.cleanup);
+    assert.equal(await runCli(['print-config', id], printed.deps), 1, id);
+    assert.equal(printed.out, '', `${id}: no setup on stdout`);
+    assert.equal(printed.err, `${messages.SETUPS_NOT_RELEASED}\n`);
+    const installed = harness({ released: false });
+    t.after(installed.cleanup);
+    for (const folder of Object.values(JSON_APPS)) mkdirSync(join(installed.home, folder, '..'), { recursive: true });
+    assert.equal(await runCli(['install', id], installed.deps), 1, id);
+    assert.equal(installed.out, `${messages.SETUPS_NOT_RELEASED}\n`);
+    assert.deepEqual(installed.runs, [], `${id}: no app command runs`);
+    assert.deepEqual(filesUnder(installed.home), {}, `${id}: no file is written`);
+    for (const output of [printed.out, printed.err, installed.out, installed.err]) assert.doesNotMatch(output, /\bnpx\b|@wisply\/mcp/);
+  }
+  // The app list still prints, and says why the rest waits.
+  const list = harness({ released: false });
+  t.after(list.cleanup);
+  assert.equal(await runCli(['print-config'], list.deps), 0);
+  assert.equal(list.out, messages.appList(clientsFile.clients.map((client) => ({ id: client.id, name: client.name, install: Boolean(client.install) })),
+    { released: false }));
+  assert.match(list.out, /Not yet: `wisply-mcp print-config <app>` and `wisply-mcp install <app>`/);
+  // Unknown apps and usage mistakes keep their exit code 2.
+  for (const argv of [['print-config', 'nope'], ['install', 'nope'], ['install']]) {
+    const h = harness({ released: false });
+    t.after(h.cleanup);
+    assert.equal(await runCli(argv, h.deps), 2, argv.join(' '));
+  }
+  assert.doesNotMatch(messages.SETUPS_NOT_RELEASED, /\bnpx\b|@wisply/);
+});
+
 // --- The real bin --------------------------------------------------------
 
 async function bin(args, env = {}) {
@@ -1015,24 +1324,31 @@ async function bin(args, env = {}) {
   return { code, stdout, stderr };
 }
 
-test('bin: print-config prints the snippet on stdout and the hint on stderr', async (t) => {
+test('bin: print-config and install as this build ships them (nothing for an app before the release)', async (t) => {
   const home = mkdtempSync(join(tmpdir(), 'wisply-bin-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const result = await bin(['print-config', 'cursor'], { HOME: home, WISPLY_MCP_TOKEN: ENV_TOKEN });
-  assert.equal(result.code, 0, result.stderr);
-  assert.equal(result.stdout, `${render('cursor').text}\n`);
-  assert.equal(result.stderr, messages.printConfigHint(render('cursor')));
+  if (SETUPS_RELEASED) {
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stdout, `${render('cursor').text}\n`);
+    assert.equal(result.stderr, messages.printConfigHint(render('cursor')));
+  } else {
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout, '', 'no setup on stdout before the release');
+    assert.equal(result.stderr, `${messages.SETUPS_NOT_RELEASED}\n`);
+  }
   const list = await bin(['print-config'], { HOME: home });
   assert.equal(list.code, 0);
   for (const id of CLIENT_IDS) assert.ok(list.stdout.includes(`  ${id} `), id);
+  assert.equal(list.stdout.includes('Not yet:'), !SETUPS_RELEASED);
   const usage = await bin(['install'], { HOME: home });
   assert.equal(usage.code, 2);
   assert.equal(usage.stdout, '');
   assert.equal(usage.stderr, `${messages.missingApp('install', CLIENT_IDS)}\n`);
-  if (process.platform !== 'darwin') {
-    const install = await bin(['install', 'cursor'], { HOME: home });
-    assert.equal(install.code, 1);
-    assert.equal(install.stdout, `${messages.notMac(process.platform)}\n`);
-  }
+  const install = await bin(['install', 'cursor'], { HOME: home });
+  assert.equal(install.code, 1);
+  if (!SETUPS_RELEASED) assert.equal(install.stdout, `${messages.SETUPS_NOT_RELEASED}\n`);
+  else if (process.platform !== 'darwin') assert.equal(install.stdout, `${messages.notMac(process.platform)}\n`);
+  for (const output of [result, list, usage, install]) assert.doesNotMatch(output.stdout + output.stderr, /\bnpx\b|@wisply\/mcp/);
   assert.deepEqual(readdirSync(home), []);
 });

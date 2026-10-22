@@ -16,7 +16,10 @@
 // and clients/ (once it exists), LICENSE, the manifest and its icon: the same
 // code as the npm package, run by the host's own Node ("command": "node"). It
 // never runs npx and never fetches anything. Only files git tracks are
-// staged, so nothing untracked in a working tree reaches a bundle. The
+// staged, so nothing untracked in a working tree reaches a bundle, and only
+// regular files: a tracked symlink (or a path under a symlinked folder) stops
+// the build instead of copying whatever it points to, the manifest's icon must
+// be icon.png, and every staged path must land inside the stage. The
 // manifest's tools array lists the contract tools the bundle's own config can
 // reach (setup_claude needs --allow-claude-setup, which the bundle never
 // passes); tools_generated is true because the tools a client sees depend on
@@ -35,7 +38,7 @@
 // Dev-only: not in the npm package.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -49,6 +52,8 @@ export const PACKER_DIR = 'tools/mcpb';
 export const PACKER_INSTALL = `npm ci --ignore-scripts --prefix ${PACKER_DIR}`;
 export const MANIFEST_PATH = 'mcpb/manifest.json';
 export const ICON_PATH = 'mcpb/icon.png';
+/** The icon's path in the bundle: the manifest's `icon` must be exactly this (next to manifest.json). */
+export const BUNDLE_ICON = 'icon.png';
 /** Directories copied into the bundle (flat; only .mjs and .json files). clients/ arrives with DIST-M4. */
 export const STAGED_DIRS = Object.freeze(['bin', 'lib', 'contract', 'clients']);
 /** Single files copied into the bundle, besides the manifest and the icon. */
@@ -56,7 +61,12 @@ export const STAGED_FILES = Object.freeze(['LICENSE']);
 /** The second release asset. Also what makes Gemini CLI install the tag's source (README, "Releasing the bundle"). */
 export const SUMS_FILE = 'SHA256SUMS';
 const DATA_FILE = /\.(mjs|json)$/;
+/** git's modes for a regular file; 120000 (symlink) and 160000 (submodule) never reach a bundle. */
+const FILE_MODES = Object.freeze({ 100644: 0o644, 100755: 0o755 });
 const GIT_MAX_BUFFER = 64 * 1024 * 1024;
+
+/** A bundle source that isn't a regular file of the checkout (a symlink, a submodule, a path through a symlink). */
+export class BundleSourceError extends Error {}
 
 /** The release tag for a version. */
 export const releaseTag = (version) => `v${version}`;
@@ -115,32 +125,63 @@ export function isBundled(path) {
 }
 
 /**
- * The bundle's sources in a working tree: the files git tracks, read from disk.
+ * The bundle's sources in a working tree: the files git tracks, read from disk. Every path, the manifest and
+ * the icon included, must be a regular file at its own place in the checkout: readFileSync follows symlinks,
+ * so a tracked `lib/x.json -> ~/.npmrc` would otherwise copy that file into a test bundle.
  * @returns {{paths: string[], read: (path: string) => Buffer, mode: (path: string) => number}}
  */
 export function trackedSource(root = ROOT) {
   const paths = nulList(git(root, ['ls-files', '-z', '--', ...STAGED_DIRS, ...STAGED_FILES])).filter(isBundled).sort();
+  const rootReal = realpathSync(root);
+  const regular = (path) => {
+    const full = join(root, path);
+    let stat;
+    let real;
+    try {
+      stat = lstatSync(full);
+      real = realpathSync(full);
+    } catch {
+      throw new BundleSourceError(`${path} is missing from the checkout`);
+    }
+    if (!stat.isFile() || real !== join(rootReal, path)) {
+      throw new BundleSourceError(`${path} is not a regular file of the checkout (a symlink, or under a symlinked folder): the bundle takes regular files only`);
+    }
+    return { full, stat };
+  };
+  for (const path of paths) regular(path);
   return {
     paths,
-    read: (path) => readFileSync(join(root, path)),
-    mode: (path) => statSync(join(root, path)).mode & 0o777,
+    read: (path) => readFileSync(regular(path).full),
+    mode: (path) => regular(path).stat.mode & 0o777,
   };
 }
 
 /**
- * The bundle's sources at a git ref (the release tag), read from git's objects, not the working tree.
+ * The bundle's sources at a git ref (the release tag), read from git's objects, not the working tree. Only
+ * regular files (modes 100644 and 100755): a symlink (120000) would stage its link text as a file, and a
+ * submodule (160000) has no content here, so either stops the build.
  * @returns {{paths: string[], read: (path: string) => Buffer, mode: (path: string) => number}}
  */
 export function refSource(root, ref) {
   const modes = new Map();
-  for (const line of nulList(git(root, ['ls-tree', '-r', '-z', '--full-tree', ref, '--', ...STAGED_DIRS, ...STAGED_FILES]))) {
-    const match = /^(\d{6}) blob [0-9a-f]+\t(.+)$/.exec(line);
-    if (match && isBundled(match[2])) modes.set(match[2], match[1] === '100755' ? 0o755 : 0o644);
+  for (const line of nulList(git(root, ['ls-tree', '-r', '-z', '--full-tree', ref, '--', ...STAGED_DIRS, ...STAGED_FILES, MANIFEST_PATH, ICON_PATH]))) {
+    const match = /^(\d{6}) (\w+) [0-9a-f]+\t(.+)$/.exec(line);
+    if (!match) throw new BundleSourceError(`git ls-tree printed a line this build can't read: ${line}`);
+    const [, mode, type, path] = match;
+    if (!isBundled(path) && path !== MANIFEST_PATH && path !== ICON_PATH) continue;
+    if (type !== 'blob' || !Object.hasOwn(FILE_MODES, mode)) {
+      throw new BundleSourceError(`${path} at ${ref} is not a regular file (mode ${mode}, ${type}): the bundle takes regular files only`);
+    }
+    modes.set(path, FILE_MODES[mode]);
   }
+  const known = (path) => {
+    if (!modes.has(path)) throw new BundleSourceError(`${path} is not a file at ${ref}`);
+    return path;
+  };
   return {
-    paths: [...modes.keys()].sort(),
-    read: (path) => git(root, ['show', `${ref}:${path}`]),
-    mode: (path) => modes.get(path) ?? 0o644,
+    paths: [...modes.keys()].filter(isBundled).sort(),
+    read: (path) => git(root, ['show', `${ref}:${known(path)}`]),
+    mode: (path) => modes.get(known(path)),
   };
 }
 
@@ -155,7 +196,11 @@ export function bundleEntries(source, { manifestText }) {
   for (const path of source.paths) entries.set(path, { data: source.read(path), mode: source.mode(path) });
   const text = manifestText(source.read(MANIFEST_PATH).toString('utf8'));
   entries.set('manifest.json', { data: Buffer.from(text, 'utf8'), mode: 0o644 });
-  entries.set(JSON.parse(text).icon, { data: source.read(ICON_PATH), mode: 0o644 });
+  // The manifest names the icon's place in the bundle; only the one next to manifest.json is accepted, so
+  // no manifest can send a staged file elsewhere (an icon of "../x" would be written outside the stage).
+  const { icon } = JSON.parse(text);
+  if (icon !== BUNDLE_ICON) throw new BundleSourceError(`${MANIFEST_PATH}: "icon" must be "${BUNDLE_ICON}", not ${JSON.stringify(icon)}`);
+  entries.set(BUNDLE_ICON, { data: source.read(ICON_PATH), mode: 0o644 });
   return entries;
 }
 
@@ -191,14 +236,20 @@ export function stageBundle({ root = ROOT, stageDir, contract, version, source }
   const entries = bundleEntries(source ?? trackedSource(root), {
     manifestText: (committed) => jsonText(renderManifest(JSON.parse(committed), { contract, version })),
   });
-  rmSync(stageDir, { recursive: true, force: true });
-  mkdirSync(stageDir, { recursive: true });
-  for (const [path, { data, mode }] of entries) {
-    mkdirSync(dirname(join(stageDir, path)), { recursive: true });
-    writeFileSync(join(stageDir, path), data);
-    chmodSync(join(stageDir, path), mode);
+  const stage = resolve(stageDir);
+  for (const path of entries.keys()) {
+    const target = resolve(stage, path);
+    if (target === stage || !within(stage, target)) throw new BundleSourceError(`${path} would be staged outside ${stageDir}`);
   }
-  return listFiles(stageDir);
+  rmSync(stage, { recursive: true, force: true });
+  mkdirSync(stage, { recursive: true });
+  for (const [path, { data, mode }] of entries) {
+    const target = resolve(stage, path);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, data);
+    chmodSync(target, mode);
+  }
+  return listFiles(stage);
 }
 
 /** Every regular file under dir, relative and sorted. */
@@ -278,7 +329,8 @@ export async function verifyBundle({ file, version, lib, root = ROOT }) {
   let expected;
   try {
     expected = bundleEntries(refSource(root, tag), { manifestText: (committed) => committed });
-  } catch {
+  } catch (error) {
+    if (error instanceof BundleSourceError) return [error.message];
     return [`tag ${tag} isn't in this checkout (git fetch --tags)`];
   }
   const { unpackExtension } = await import(pathToFileURL(assertPacker(lib)).href);

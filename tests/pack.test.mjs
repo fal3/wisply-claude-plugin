@@ -7,11 +7,16 @@ import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import contract from '../lib/contract.mjs';
-import { NPX_COMMAND, PACKAGE_NAME, PACKAGE_NAME_FINAL, PACKAGE_RANGE, PACKAGE_SPEC, VERSION } from '../lib/constants.mjs';
+import {
+  MCP_NAME, NPX_COMMAND, NPX_FLAGS, PACKAGE_NAME, PACKAGE_NAME_FINAL, PACKAGE_RANGE, PACKAGE_SPEC, STANDARD_ENTRY, VERSION,
+} from '../lib/constants.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
 const SOURCE = JSON.parse(readFileSync(join(ROOT, 'contract/SOURCE.json'), 'utf8'));
+const CHECKS = JSON.parse(readFileSync(join(ROOT, 'docs/release-checks.json'), 'utf8'));
+/** What has to be Wisply's on npm for a package name: its organization (`@wisply`), or the unscoped name itself. */
+const npmOwner = (name) => (name.startsWith('@') ? name.split('/')[0] : name);
 const LIFECYCLE = ['preinstall', 'install', 'postinstall', 'prepare', 'preprepare', 'postprepare', 'prepack', 'postpack',
   'prepublish', 'prepublishOnly', 'publish', 'postpublish', 'preuninstall', 'uninstall', 'postuninstall',
   'preversion', 'version', 'postversion', 'dependencies'];
@@ -42,48 +47,131 @@ test('the tarball holds only bin, lib, contract, clients, README, LICENSE and pa
   }
 });
 
-test('npm refuses to publish until the contract is final and the name is Wisply\'s ("private": true)', () => {
-  // npm publish refuses a private package without running any script, so a
-  // plain `npm publish` can't ship a provisional contract or an npm name
-  // nobody owns yet. The two are separate facts with separate changes: the
-  // re-vendor from wisply-ai (DIST-M5's follow-up) clears the first, the npm
-  // organization (Alex, G-NPM) the second, and dropping the flag is the
-  // explicit release step once both hold.
-  const publishable = !SOURCE.provisional && PACKAGE_NAME_FINAL;
-  assert.equal(pkg.private === true, !publishable,
-    'package.json "private" must be true exactly while contract/SOURCE.json is provisional or PACKAGE_NAME_FINAL is false');
-  if (publishable) assert.equal(Object.hasOwn(pkg, 'private'), false, 'remove "private" rather than setting it to false');
-});
-
-test('a publishable package.json needs the final package name', () => {
-  // Messages may name the package through npx only once Wisply owns the name
-  // on npm (lib/messages.mjs COMMAND_PREFIX). Owning it doesn't make the
-  // package publishable on its own: "private" stays until the contract is final too.
-  assert.equal(typeof PACKAGE_NAME_FINAL, 'boolean');
-  if (pkg.private !== true) assert.equal(PACKAGE_NAME_FINAL, true, 'a publishable package.json needs PACKAGE_NAME_FINAL');
-});
-
-test('every npx or npm install of the package in the docs and messages runs the pinned version', () => {
-  // The exact version, as every snippet. The 0.x range is only ever a version to write, never a command.
-  // (tests/clients.test.mjs also requires npx's --prefix / before the package.)
-  const escaped = PACKAGE_NAME.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
-  const command = new RegExp(`\\b(?:npx(?: -y)?(?: --prefix /)?|npm (?:i|install) -g) (${escaped}[^\\s\`"'),]*)`, 'g');
-  for (const file of ['README.md', 'SECURITY.md', 'CHANGELOG.md', 'docs/design-differences.md', 'llms-install.md']) {
-    const text = readFileSync(join(ROOT, file), 'utf8');
-    for (const match of text.matchAll(command)) {
-      // `@wisply/mcp@<version>` is how the docs write "this release's version" in general.
-      assert.ok([PACKAGE_SPEC, `${PACKAGE_NAME}@<version>`].includes(match[1]), `${file}: ${match[0]}`);
-    }
+/**
+ * What is wrong with a state's "private" flag; [] when it is right. npm publish refuses a private package without
+ * running any script, so a plain `npm publish` can't ship a provisional contract or an npm name nobody owns yet. The
+ * two are separate facts with separate changes: the re-vendor from wisply-ai (DIST-M5) clears the first, Alex's npm
+ * organization (Grok packet G-NPM, recorded as npm_scope in docs/release-checks.json) the second. Dropping the flag
+ * is the explicit release step once both hold.
+ * @param {{provisional: boolean, packageNameFinal: boolean, pkg: Record<string, unknown>}} state
+ * @returns {string[]}
+ */
+function privateProblems({ provisional, packageNameFinal, pkg: data }) {
+  const publishable = provisional === false && packageNameFinal === true;
+  if (data.private === true) {
+    return publishable ? ['remove "private" from package.json: the contract is final and the name is Wisply\'s'] : [];
   }
-  // In messages.mjs, npx reaches a text only through COMMAND_PREFIX (NPX_COMMAND: npx's flags and the pinned
-  // spec), and only once the name is final.
-  const source = readFileSync(join(ROOT, 'lib/messages.mjs'), 'utf8');
-  const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/^import .*$/gm, '');
-  assert.equal(code.split('NPX_COMMAND').length - 1, 1, 'NPX_COMMAND is used once, in COMMAND_PREFIX');
-  assert.match(code, /export const COMMAND_PREFIX = PACKAGE_NAME_FINAL \? NPX_COMMAND : 'wisply-mcp';/);
-  assert.doesNotMatch(code, /\$\{(PACKAGE_SPEC|PACKAGE_NAME)\}|\bnpx\b/);
-  assert.doesNotMatch(source, /npx -y @wisply/);
-  assert.equal(NPX_COMMAND, `npx -y --prefix / ${PACKAGE_SPEC}`);
+  if (!publishable) {
+    return ['package.json "private" must be true while contract/SOURCE.json is provisional or PACKAGE_NAME_FINAL is false'];
+  }
+  return Object.hasOwn(data, 'private') ? ['remove "private" rather than setting it to false'] : [];
+}
+
+/**
+ * What is wrong with a state's PACKAGE_NAME_FINAL; [] when it is right. Messages may name the package through npx
+ * only once Wisply owns the name on npm (lib/messages.mjs COMMAND_PREFIX). A re-vendored contract says nothing about
+ * who owns the name, so the flag follows the recorded npm check (Alex sets both in one change after G-NPM), never the
+ * contract or "private".
+ * @param {{packageName: string, packageNameFinal: boolean, npmScope: {name?: string, verified?: boolean}}} state
+ * @returns {string[]}
+ */
+function nameProblems({ packageName, packageNameFinal, npmScope }) {
+  const problems = [];
+  if (npmScope?.name !== npmOwner(packageName)) {
+    problems.push('docs/release-checks.json npm_scope.name must be the npm organization (or, unscoped, the name) ' +
+      'PACKAGE_NAME lives under');
+  }
+  if (packageNameFinal !== (npmScope?.verified === true)) {
+    problems.push('lib/constants.mjs PACKAGE_NAME_FINAL must equal docs/release-checks.json npm_scope.verified');
+  }
+  return problems;
+}
+
+const TREE = { provisional: SOURCE.provisional, packageNameFinal: PACKAGE_NAME_FINAL, pkg, packageName: PACKAGE_NAME,
+  npmScope: CHECKS.npm_scope };
+
+test('npm refuses to publish until the contract is final and the name is Wisply\'s ("private": true)', () => {
+  assert.equal(typeof SOURCE.provisional, 'boolean');
+  assert.deepEqual(privateProblems(TREE), []);
+});
+
+test('the package name is final exactly when docs/release-checks.json records that Wisply owns it on npm', () => {
+  assert.equal(typeof PACKAGE_NAME_FINAL, 'boolean');
+  assert.deepEqual(nameProblems(TREE), []);
+});
+
+test('the publish and name gates allow every step towards the release and refuse the unsafe states', () => {
+  // The tree checks above only see today's state, which a weaker gate (say, "private" exactly while provisional)
+  // would pass too. This table pins the gates for every state the release passes through, and for the mistakes.
+  const npm = (verified) => ({ name: '@wisply', verified });
+  const state = (change) => ({ provisional: true, packageNameFinal: false, pkg: { private: true }, packageName: '@wisply/mcp',
+    npmScope: npm(false), ...change });
+  const PRIVATE = 'private';
+  const NAME = 'name';
+  const cases = [
+    ['today: provisional contract, name not Wisply\'s yet', state({}), []],
+    // Valid on the way: "private" stays until both facts hold. A SOURCE.json that says final without a real commit
+    // and hash is tests/vendor.test.mjs's to refuse, not this file's.
+    ['the contract re-vendored first (DIST-M5), name not Wisply\'s yet', state({ provisional: false }), []],
+    ['the npm name recorded first (G-NPM), contract still provisional', state({ packageNameFinal: true, npmScope: npm(true) }), []],
+    ['the release change: final contract, Wisply\'s name, no "private"',
+      state({ provisional: false, packageNameFinal: true, npmScope: npm(true), pkg: {} }), []],
+    // Refused: npm could publish too early, messages could name a package nobody owns, or a flag disagrees with the record.
+    ['"private" dropped after the re-vendor while the name isn\'t Wisply\'s', state({ provisional: false, pkg: {} }), [PRIVATE]],
+    ['"private" dropped while the contract is provisional', state({ packageNameFinal: true, npmScope: npm(true), pkg: {} }), [PRIVATE]],
+    ['"private": false instead of true', state({ pkg: { private: false } }), [PRIVATE]],
+    ['"private": false instead of removed at the release',
+      state({ provisional: false, packageNameFinal: true, npmScope: npm(true), pkg: { private: false } }), [PRIVATE]],
+    ['"private" kept once both hold', state({ provisional: false, packageNameFinal: true, npmScope: npm(true) }), [PRIVATE]],
+    ['PACKAGE_NAME_FINAL set without the npm record', state({ packageNameFinal: true }), [NAME]],
+    // The flag claims both hold, so "private" looks stale too; the flag is the mistake.
+    ['PACKAGE_NAME_FINAL set without the npm record, after the re-vendor', state({ provisional: false, packageNameFinal: true }),
+      [PRIVATE, NAME]],
+    ['the npm record without PACKAGE_NAME_FINAL', state({ npmScope: npm(true) }), [NAME]],
+    ['npm_scope names another owner than PACKAGE_NAME\'s', state({ npmScope: { name: 'wisply-mcp', verified: false } }), [NAME]],
+    ['the release change without the npm record', state({ provisional: false, packageNameFinal: true, pkg: {} }), [NAME]],
+  ];
+  for (const [name, input, expected] of cases) {
+    const found = [
+      ...privateProblems(input).map(() => PRIVATE),
+      ...nameProblems(input).map(() => NAME),
+    ];
+    assert.deepEqual(found, expected, name);
+  }
+  // The unscoped fallback is recorded under its own name.
+  assert.deepEqual(nameProblems(state({ packageName: 'wisply-mcp', npmScope: { name: 'wisply-mcp', verified: false } })), []);
+});
+
+test('until the npm name is Wisply\'s, the README tells readers not to run its npx commands yet', () => {
+  // The README and SECURITY.md show the commands the first release will
+  // print. If the repository goes public, or a catalog indexes the README,
+  // before Alex owns the name, whoever registers it first would receive the
+  // tokens typed into a fake `setup` (SECURITY.md, "Release controls" item 1).
+  if (PACKAGE_NAME_FINAL) return;
+  const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
+  assert.match(readme.split('\n## ')[0].replace(/\n> ?/g, ' '), /don't run the `npx` commands below before the first release/i);
+});
+
+test('docs/design-differences.md re-derives the design\'s one-click links from STANDARD_ENTRY', () => {
+  // The same constructions that reproduce the design's own links from its old entry ["-y", "@wisply/mcp@0"].
+  const links = (args) => {
+    const entry = JSON.stringify({ command: 'npx', args });
+    const base64 = encodeURIComponent(Buffer.from(entry).toString('base64'));
+    const vscode = encodeURIComponent(JSON.stringify({ name: 'wisply', command: 'npx', args }));
+    return [
+      `https://cursor.com/en/install-mcp?name=wisply&config=${base64}`,
+      `https://lmstudio.ai/install-mcp?name=wisply&config=${base64}`,
+      `https://insiders.vscode.dev/redirect?url=${encodeURIComponent(`vscode:mcp/install?${vscode}`)}`,
+      `https://kiro.dev/launch/mcp/add?name=wisply&config=${encodeURIComponent(entry)}`,
+      `cmd=npx&${args.map((arg) => `arg=${encodeURIComponent(arg)}`).join('&')}`,
+    ];
+  };
+  const design = links(['-y', '@wisply/mcp@0']);
+  assert.ok(design[0].endsWith('config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkB3aXNwbHkvbWNwQDAiXX0%3D'));
+  assert.ok(design[2].endsWith('%252C%2522%2540wisply%252Fmcp%25400%2522%255D%257D'));
+  assert.ok(design[3].endsWith('config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40wisply%2Fmcp%400%22%5D%7D'));
+  const text = readFileSync(join(ROOT, 'docs/design-differences.md'), 'utf8');
+  for (const link of links([...STANDARD_ENTRY.args])) assert.ok(text.includes(`\`${link}\``) || text.includes(`\`${link}\` (`), link);
 });
 
 test('no dependencies and no lifecycle scripts', () => {
@@ -105,7 +193,8 @@ test('package.json, the constants and the README agree', () => {
   assert.equal(PACKAGE_RANGE, `${PACKAGE_NAME}@${VERSION.split('.')[0]}`);
   assert.equal(pkg.type, 'module');
   assert.deepEqual(pkg.bin, { 'wisply-mcp': 'bin/wisply-mcp.mjs' });
-  assert.equal(pkg.mcpName, 'ai.wisply/local');
+  // The registry name is a placeholder like the package name (constants.mjs MCP_NAME; docs/release-checks.json).
+  assert.equal(pkg.mcpName, MCP_NAME);
   assert.deepEqual(pkg.engines, { node: '>=20' });
   assert.deepEqual(pkg.files, ['bin', 'lib', 'contract', 'clients', 'README.md', 'LICENSE']);
   assert.equal(pkg.license, 'MIT');
@@ -114,13 +203,56 @@ test('package.json, the constants and the README agree', () => {
   assert.match(readFileSync(join(ROOT, 'LICENSE'), 'utf8'), /^MIT License/);
 
   const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
-  assert.ok(readme.includes(`"args": ["-y", "--prefix", "/", "${PACKAGE_SPEC}"]`), 'README shows the standard entry');
-  assert.ok(readme.includes(NPX_COMMAND));
+  assert.ok(readme.includes(`{ "command": "npx", "args": ["-y", "--prefix", "/", "${PACKAGE_SPEC}"] }`), 'README shows the standard entry');
+  assert.ok(readme.includes(`-- ${NPX_COMMAND}\``), 'README shows the Claude Code command');
   for (const tool of contract.tools) assert.ok(readme.includes(`\`${tool}\``), `README names ${tool}`);
   assert.ok(!readme.includes('@wisply/mcp@latest'));
   // The range appears only in the opt-in note, never in a snippet.
   assert.ok(!readme.includes(`"${PACKAGE_RANGE}"`) && !readme.includes(`/ ${PACKAGE_RANGE} `) && !readme.includes(`/ ${PACKAGE_RANGE}\``),
     'README snippets run the exact version');
+});
+
+test('the standard entry and every command people are told to run use npx\'s --prefix / and the exact version', () => {
+  // Without --prefix /, npx resolves the package from the folder the AI app starts it in (the open project's
+  // node_modules and .npmrc) before it asks npm, so a cloned project could run its own @wisply/mcp with the token.
+  assert.deepEqual([...NPX_FLAGS], ['-y', '--prefix', '/']);
+  assert.equal(NPX_COMMAND, `npx -y --prefix / ${PACKAGE_SPEC}`);
+  assert.deepEqual(JSON.parse(JSON.stringify(STANDARD_ENTRY)), { command: 'npx', args: ['-y', '--prefix', '/', PACKAGE_SPEC] });
+
+  const escaped = PACKAGE_NAME.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+  // Any npx run or global install of the package, in prose (also wrapped across lines) or in a JSON args array.
+  const npx = new RegExp(`\\bnpx((?:\\s+-[\\w-]+(?:\\s+/(?=\\s))?)*)\\s+(${escaped}[^\\s\`"'),]*)`, 'g');
+  const args = new RegExp(`"args": \\[([^\\]]*)"(${escaped}[^"]*)"`, 'g');
+  const install = new RegExp(`\\bnpm (?:i|install) -g +(${escaped}[^\\s\`"'),]*)`, 'g');
+  for (const file of ['README.md', 'SECURITY.md', 'CHANGELOG.md', 'docs/design-differences.md', 'llms-install.md']) {
+    const text = readFileSync(join(ROOT, file), 'utf8');
+    let seen = 0;
+    for (const match of text.matchAll(npx)) {
+      seen += 1;
+      // Gemini CLI's `gemini mcp add ... npx -- -y ...` puts dash arguments after `--` (the design's S1).
+      assert.ok(['-y --prefix /', '-- -y --prefix /'].includes(match[1].replace(/\s+/g, ' ').trim()), `${file}: ${match[0]}`);
+      // `@wisply/mcp@<version>` is how the docs write "this release's version" in general.
+      assert.ok([PACKAGE_SPEC, `${PACKAGE_NAME}@<version>`].includes(match[2]), `${file}: ${match[0]}`);
+    }
+    for (const match of text.matchAll(args)) {
+      assert.equal(match[1], '"-y", "--prefix", "/", ', `${file}: ${match[0]}`);
+      assert.equal(match[2], PACKAGE_SPEC, `${file}: ${match[0]}`);
+    }
+    for (const match of text.matchAll(install)) assert.equal(match[1], PACKAGE_SPEC, `${file}: ${match[0]}`);
+    assert.doesNotMatch(text, new RegExp(`npx\\s+-y\\s+${escaped}`), `${file}: npx without --prefix /`);
+    if (file === 'README.md') assert.ok(seen > 0);
+  }
+
+  // In messages.mjs, npx reaches a text only through NPX_COMMAND (npx's flags and the pinned spec), and
+  // only once the package name is final; until then the commands use the bin's own name.
+  const source = readFileSync(join(ROOT, 'lib/messages.mjs'), 'utf8');
+  const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/^import .*$/gm, '');
+  assert.match(code, /export const COMMAND_PREFIX = PACKAGE_NAME_FINAL \? NPX_COMMAND : 'wisply-mcp';/);
+  for (const command of ['setup', 'forget', 'status']) {
+    assert.match(code, new RegExp(`export const ${command.toUpperCase()}_COMMAND = \`\\$\\{COMMAND_PREFIX\\} ${command}\`;`));
+  }
+  assert.equal([...code.matchAll(/\bNPX_COMMAND\b/g)].length, 1, 'NPX_COMMAND appears only in COMMAND_PREFIX');
+  assert.doesNotMatch(code, /\$\{(PACKAGE_SPEC|PACKAGE_NAME|PACKAGE_RANGE|NPX_COMMAND)\}|\bnpx\b/);
 });
 
 test('the bin is an executable node script', () => {
