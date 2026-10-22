@@ -1,13 +1,4 @@
 {
   "name": "wisply",
-  "plugins": [
-    {
-      "name": "wisply",
-      "source": {
-        "source": "url",
-        "url": "https://github.com/fal3/wisply-mcp"
-      },
-      "category": "productivity"
-    }
-  ]
+  "plugins": []
 }

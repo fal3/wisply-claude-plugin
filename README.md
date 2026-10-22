@@ -16,6 +16,8 @@ The plugin works in Claude Code on the Mac that runs Wisply: Claude Code in a te
 
 The tools aren't available in claude.ai chat, which doesn't start local MCP servers, or in Cowork, which skips an MCP server that needs a value you haven't given it (here, the token) and doesn't ask for one.
 
+Codex can add this repository as a plugin marketplace, but finds no plugin in it, because this plugin needs Claude Code. The marketplace is named `wisply` in Codex too, so if you added it there, run `codex plugin marketplace remove wisply` before you add another Wisply marketplace to Codex.
+
 ## Requirements
 
 - macOS 26 or later with the Wisply app installed and running
@@ -34,7 +36,13 @@ In Claude Code 2.1.275 or later, run this in a session:
 /plugin install wisply-local --marketplace fal3/wisply-claude-plugin
 ```
 
-It adds this repository as a plugin marketplace named `wisply` and installs the plugin from it. On an older Claude Code, or from a terminal, do the same in two steps:
+Or, with Claude Code 2.1.292 or later, run this in a terminal:
+
+```bash
+claude plugin install wisply-local --marketplace fal3/wisply-claude-plugin
+```
+
+Either one adds this repository as a plugin marketplace named `wisply` and installs the plugin from it. On an older Claude Code, do the same in two steps:
 
 ```bash
 claude plugin marketplace add fal3/wisply-claude-plugin
@@ -223,7 +231,11 @@ claude plugin eval .            # eval cases against mocked Wisply tools (calls 
 
 The eval cases in `evals/` are synthetic and mock the `wisply` server from `evals/mocks/wisply/`, so an eval run never starts the bridge, needs a token or contacts Wisply; it does call the model on your account. The tests use synthetic data only. The loopback tests start a mock server on `127.0.0.1:51771` and skip themselves if that port is in use, so a running Wisply app isn't disturbed. Other HTTP tests use ports the system assigns. A test also fails if any file in the package holds invisible or text-direction characters.
 
-Layout: `.claude-plugin/plugin.json` is the plugin manifest and `.claude-plugin/marketplace.json` the one-plugin marketplace that `claude plugin marketplace add` reads (`marketplace.test.mjs` keeps the two in step), `.agents/plugins/marketplace.json` sends Codex, which reads that file first, to Wisply's Codex plugin instead because this plugin's server needs Claude Code, `bridge.mjs` is the MCP server, `lib/identity.mjs` is its identity check (used only by the bridge), `lib/shared.mjs` holds the pure helpers that the bridge and the mod share (endpoint, tool descriptions, token checks, status text, excerpt quoting), `hooks/register.tsx` is the mod, `types/index.d.ts` declares the mod's state, `skills/wisply/SKILL.md` is the skill, `tests/` holds the mod's tests and `evals/` the eval cases.
+Layout: `.claude-plugin/plugin.json` is the plugin manifest and `.claude-plugin/marketplace.json` the one-plugin marketplace that `claude plugin marketplace add` reads (`marketplace.test.mjs` keeps the two in step), `.agents/plugins/marketplace.json` is an empty Codex marketplace (below), `bridge.mjs` is the MCP server, `lib/identity.mjs` is its identity check (used only by the bridge), `lib/shared.mjs` holds the pure helpers that the bridge and the mod share (endpoint, tool descriptions, token checks, status text, excerpt quoting), `hooks/register.tsx` is the mod, `types/index.d.ts` declares the mod's state, `skills/wisply/SKILL.md` is the skill, `tests/` holds the mod's tests and `evals/` the eval cases.
+
+Codex reads `.agents/plugins/marketplace.json` before `.claude-plugin/marketplace.json`, so the empty file keeps Codex from offering this plugin, whose server needs Claude Code. It stays empty until Wisply's Codex plugin is released. It then lists that plugin pinned to a release tag and its full commit; `marketplace.test.mjs` refuses an unpinned entry.
+
+Releasing: the marketplace entry's source is `./`, so `claude plugin marketplace add` and `claude plugin marketplace update` install whatever this repository's default branch holds, without the plugin directory's review. Every commit on `main` reaches users the next time they add or update the marketplace. So `main` takes changes only through reviewed pull requests, with force-pushes and deletion blocked. A release changes `version` in `.claude-plugin/plugin.json`, both versions in `.claude-plugin/marketplace.json` and `package.json` together; `npm test` checks that they agree.
 
 ## License
 
