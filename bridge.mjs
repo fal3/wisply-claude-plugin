@@ -7,6 +7,10 @@
 // after whatever listens there has proved it is Wisply: before every forwarded
 // call the bridge sends a fresh identity challenge, without the token, and
 // checks the answer (lib/identity.mjs).
+//
+// Run directly, this file is the Claude Code server. codex/bridge.mjs runs the
+// same handler for Codex, with the token read from the Keychain and Codex's
+// own setup messages.
 import http from 'node:http';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
@@ -39,6 +43,16 @@ export const MAX_IDENTITY_BYTES = 8 * 1024;
 
 /** JSON-RPC error code Wisply returns when a token's scope does not allow a tool. */
 export const TOOL_NOT_PERMITTED = -32003;
+
+/**
+ * The tool errors whose fix depends on the client. These are Claude Code's;
+ * codex/bridge.mjs passes Codex's.
+ */
+export const CLAUDE_CODE_MESSAGES = Object.freeze({
+  setup: SETUP_MESSAGE,
+  notWisply: NOT_WISPLY_MESSAGE,
+  scope: SCOPE_MESSAGE,
+});
 
 /** The port the proof is bound to: the one the bridge connects to. */
 const WISPLY_PORT = Number(new URL(WISPLY_ENDPOINT).port);
@@ -148,22 +162,23 @@ const isWrongAnswer = (failure) => failure?.code === TOO_LARGE || /^HPE_/.test(S
  * tool error to answer with; the token must not be sent in that case.
  * @param {ReturnType<typeof createIdentityTransport>} identityTransport
  * @param {string} token
+ * @param {string} notWisply the client's message for a failed proof
  * @returns {Promise<string | null>}
  */
-async function identityProblem(identityTransport, token) {
+async function identityProblem(identityTransport, token, notWisply) {
   const nonce = newNonce();
   let response;
   try {
     response = await identityTransport({nonce, timeoutMs:IDENTITY_TIMEOUT_MS});
   } catch (failure) {
-    return isWrongAnswer(failure) ? NOT_WISPLY_MESSAGE : UNAVAILABLE_MESSAGE;
+    return isWrongAnswer(failure) ? notWisply : UNAVAILABLE_MESSAGE;
   }
-  if (!isObject(response)) return NOT_WISPLY_MESSAGE;
+  if (!isObject(response)) return notWisply;
   if (isOldWisply(response)) return UPDATE_WISPLY_MESSAGE;
-  if (response.status !== 200 || typeof response.text !== 'string') return NOT_WISPLY_MESSAGE;
+  if (response.status !== 200 || typeof response.text !== 'string') return notWisply;
   let body;
-  try { body = JSON.parse(response.text); } catch { return NOT_WISPLY_MESSAGE; }
-  return proofMatches(body, {token, port:WISPLY_PORT, nonce}) ? null : NOT_WISPLY_MESSAGE;
+  try { body = JSON.parse(response.text); } catch { return notWisply; }
+  return proofMatches(body, {token, port:WISPLY_PORT, nonce}) ? null : notWisply;
 }
 
 function initializeResult(params) {
@@ -178,11 +193,20 @@ function initializeResult(params) {
 
 /**
  * Handles one JSON-RPC message from the MCP client.
+ *
+ * The token is `token`, or, when `readToken` is given, whatever it returns.
+ * `readToken` runs only for a tools/call of one of the four read-only tools
+ * with valid arguments, never for the handshake or a refused call.
  * @param {unknown} message
- * @param {{token?: unknown, transport?: ReturnType<typeof createHttpTransport>,
+ * @param {{token?: unknown, readToken?: () => Promise<unknown>,
+ *   messages?: {setup: string, notWisply: string, scope: string},
+ *   transport?: ReturnType<typeof createHttpTransport>,
  *   identityTransport?: ReturnType<typeof createIdentityTransport>}} [options]
  */
-export async function handle(message, {token, transport = defaultTransport, identityTransport = defaultIdentityTransport} = {}) {
+export async function handle(message, {
+  token, readToken, messages = CLAUDE_CODE_MESSAGES,
+  transport = defaultTransport, identityTransport = defaultIdentityTransport,
+} = {}) {
   const hasID = Object.hasOwn(message ?? {}, 'id');
   const id = hasID ? message.id : null;
   if (!message || message.jsonrpc !== '2.0' || typeof message.method !== 'string' ||
@@ -205,11 +229,11 @@ export async function handle(message, {token, transport = defaultTransport, iden
 
   // Missing, unresolved ${...} placeholders, CR/LF injection and anything not
   // shaped like a Wisply token are refused before any request is made.
-  const bearer = usableToken(token);
-  if (!bearer) return toolError(id, SETUP_MESSAGE);
+  const bearer = usableToken(readToken ? await readToken() : token);
+  if (!bearer) return toolError(id, messages.setup);
 
   // The token goes only to a listener that has just proved it is Wisply.
-  const problem = await identityProblem(identityTransport, bearer);
+  const problem = await identityProblem(identityTransport, bearer, messages.notWisply);
   if (problem) return toolError(id, problem);
 
   let response;
@@ -228,7 +252,7 @@ export async function handle(message, {token, transport = defaultTransport, iden
   let answer;
   try { answer = JSON.parse(response.text); } catch { return toolError(id, UNAVAILABLE_MESSAGE); }
   if (answer?.jsonrpc !== '2.0' || answer.id !== id) return toolError(id, UNAVAILABLE_MESSAGE);
-  if (isObject(answer.error) && answer.error.code === TOOL_NOT_PERMITTED) return toolError(id, SCOPE_MESSAGE);
+  if (isObject(answer.error) && answer.error.code === TOOL_NOT_PERMITTED) return toolError(id, messages.scope);
   if (isObject(answer.error) && Number.isInteger(answer.error.code) && typeof answer.error.message === 'string') {
     return error(id, answer.error.code, answer.error.message);
   }
@@ -236,15 +260,26 @@ export async function handle(message, {token, transport = defaultTransport, iden
   return reply(id, answer.result);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  // Serial processing preserves request order; stdout carries JSON-RPC only.
-  // The token comes only from WISPLY_PLUGIN_TOKEN, which this plugin's
-  // .mcp.json sets from its own "Wisply MCP token" option.
-  for await (const line of createInterface({input:process.stdin, crlfDelay:Infinity})) {
+/**
+ * Answers the JSON-RPC lines on `input` with frames on `output`, one message
+ * at a time: serial processing preserves request order, and `output` carries
+ * JSON-RPC only.
+ * @param {NodeJS.ReadableStream} input
+ * @param {{write: (text: string) => unknown}} output
+ * @param {Parameters<typeof handle>[1]} options
+ */
+export async function serve(input, output, options) {
+  for await (const line of createInterface({input, crlfDelay:Infinity})) {
     if (!line.trim()) continue;
     let result;
-    try { result = await handle(JSON.parse(line), {token:process.env.WISPLY_PLUGIN_TOKEN}); }
+    try { result = await handle(JSON.parse(line), options); }
     catch { result = error(null, -32700, 'Invalid JSON'); }
-    if (result) process.stdout.write(JSON.stringify(result)+'\n');
+    if (result) output.write(JSON.stringify(result)+'\n');
   }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  // The token comes only from WISPLY_PLUGIN_TOKEN, which this plugin's
+  // .mcp.json sets from its own "Wisply MCP token" option.
+  await serve(process.stdin, process.stdout, {token:process.env.WISPLY_PLUGIN_TOKEN});
 }

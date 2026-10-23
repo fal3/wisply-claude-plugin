@@ -1,0 +1,27 @@
+{
+  "name": "wisply-local",
+  "version": "0.2.2",
+  "description": "Read-only access to your Wisply memos, transcript excerpts, live transcript and action items from Codex on the Mac running Wisply. Talks only to the Wisply app on 127.0.0.1.",
+  "keywords": ["wisply", "transcription", "meetings", "voice-memos", "local", "privacy", "mcp", "macos"],
+  "skills": "./codex/skills/",
+  "mcpServers": "./codex/mcp.json",
+  "hooks": {
+    "description": "No hooks in Codex. The mod in hooks/ (status line, quote button, slash commands) runs only in Claude Code."
+  },
+  "interface": {
+    "displayName": "Wisply Local Connector",
+    "shortDescription": "Ask Codex about your Wisply recordings, read-only, on this Mac.",
+    "longDescription": "Lists your Wisply memos, searches transcript excerpts, reads the live transcript of a recording in progress and pulls the action items Wisply generated. It talks only to the Wisply app on 127.0.0.1:51771, sends the token only after Wisply proves its identity, and can't record, change settings or act for you.",
+    "developerName": "Wisply",
+    "category": "Productivity",
+    "websiteURL": "https://wisply.ai",
+    "privacyPolicyURL": "https://www.wisply.ai/privacy",
+    "termsOfServiceURL": "https://www.wisply.ai/terms",
+    "defaultPrompt": [
+      "List my last five Wisply memos.",
+      "What action items came out of my latest Wisply meeting?",
+      "What has been said so far in the meeting I'm recording in Wisply?"
+    ],
+    "logo": "./.claude-plugin/icon.png"
+  }
+}

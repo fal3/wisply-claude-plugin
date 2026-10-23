@@ -10,11 +10,13 @@ The plugin works in Claude Code on the Mac that runs Wisply: Claude Code in a te
 
 | Part | What it does | Where it loads |
 | --- | --- | --- |
-| `wisply` MCP server (`bridge.mjs`) | A small Node.js bridge that forwards four read-only tools to the Wisply app | Claude Code only (terminal and the Code tab of Claude Desktop) |
-| `wisply` skill | Tells Claude when to use those tools and to treat recorded speech as data, not instructions | Wherever skills load. Outside Claude Code it has no tools to use, so it tells you the plugin needs Claude Code |
+| `wisply` MCP server (`bridge.mjs`) | A small Node.js bridge that forwards four read-only tools to the Wisply app | Claude Code (terminal and the Code tab of Claude Desktop). Codex runs the same bridge as `wisply-local` (`codex/bridge.mjs`) |
+| `wisply` skill | Tells Claude when to use those tools and to treat recorded speech as data, not instructions | Wherever Claude skills load. Outside Claude Code it has no tools to use, so it tells you the plugin needs Claude Code. Codex loads a copy with Codex's setup steps (`codex/skills/wisply/SKILL.md`) |
 | Claude Code mod (`hooks/register.tsx`) | Status line entry, a quote button above the prompt while recording, and the `/wisply-quote` and `/wisply-status` commands | Claude Code in a terminal and the Code tab of Claude Desktop |
 
 The tools aren't available in claude.ai chat, which doesn't start local MCP servers, or in Cowork, which skips an MCP server that needs a value you haven't given it (here, the token) and doesn't ask for one.
+
+The plugin also works in Codex on the Mac that runs Wisply: the same four read-only tools, with the same identity check, and a Codex version of the skill. The mod is Claude Code only. See [Use it in Codex](#use-it-in-codex).
 
 ## Requirements
 
@@ -23,12 +25,34 @@ The tools aren't available in claude.ai chat, which doesn't start local MCP serv
 - Wisply's MCP server turned on: **Wisply Settings > Integrations > MCP Server**. It's off by default.
 - Node.js 20 or later on your `PATH` (the bridge runs with `node`)
 - For the mod: Claude Code 2.1.287 or later
+- For Codex: Codex CLI 0.163.0 or later
 
 The plugin has no npm dependencies and downloads nothing when it runs.
 
 ## Install
 
-Once the plugin is listed in the Claude plugin directory, add **Wisply Local Connector** from **Customize > Plugins** on claude.ai, or from `/plugin` in Claude Code. A plugin added on claude.ai also reaches Claude Code through your account.
+In Claude Code 2.1.275 or later, run this in a session:
+
+```text
+/plugin install wisply-local --marketplace fal3/wisply-claude-plugin
+```
+
+Or, with Claude Code 2.1.292 or later, run this in a terminal:
+
+```bash
+claude plugin install wisply-local --marketplace fal3/wisply-claude-plugin
+```
+
+Either one adds this repository as a plugin marketplace named `wisply` and installs the plugin from it. On an older Claude Code, do the same in two steps:
+
+```bash
+claude plugin marketplace add fal3/wisply-claude-plugin
+claude plugin install wisply-local@wisply
+```
+
+Then set the token as in [Set up the token](#set-up-the-token); installed this way, the plugin's id is `wisply-local@wisply`. For a newer version later, run `claude plugin marketplace update wisply`, then `claude plugin update wisply-local@wisply`, and restart Claude Code.
+
+Once the plugin is listed in the Claude plugin directory, you can also add **Wisply Local Connector** from **Customize > Plugins** on claude.ai, or from `/plugin` in Claude Code. A plugin added on claude.ai also reaches Claude Code through your account. Install it from one place only: two copies show every Wisply tool twice.
 
 To try it from a copy of this repository for one Claude Code session:
 
@@ -60,13 +84,45 @@ Wisply protects its local MCP server with bearer tokens. It offers a full-access
 
 If you regenerate the token in Wisply, set it again and restart Claude Code. Until you do, the identity check below fails and the plugin sends nothing.
 
-The bridge accepts only values shaped like a Wisply token (`wspc_` or `wsp_` followed by 64 lowercase hexadecimal characters). An empty value, an unresolved `${...}` placeholder or anything else, such as an API key pasted into the wrong field, is refused before any request is made. The bridge reads the token only from the variable this plugin's own MCP configuration sets, never from a `WISPLY_MCP_TOKEN` you exported in your shell.
+The bridge accepts only values shaped like a Wisply token (`wspc_` or `wsp_` followed by 64 lowercase hexadecimal characters). An empty value, an unresolved `${...}` placeholder or anything else, such as an API key pasted into the wrong field, is refused before any request is made. In Claude Code the bridge reads the token only from the variable this plugin's own MCP configuration sets, never from a `WISPLY_MCP_TOKEN` you exported in your shell. In Codex it reads only the Keychain item described in [Use it in Codex](#use-it-in-codex).
 
 ### The identity check
 
 Before every Wisply tool call, the bridge sends a fresh random challenge, without the token, to the program on `127.0.0.1:51771` and asks it to prove that it is the Wisply that issued your token; Wisply answers with a proof derived from the token, and the bridge checks it. A program that can't answer correctly, such as another app that took the port while Wisply was closed, never receives the token, and Claude gets an error saying the token was not sent. A Wisply version without the check gets the same treatment, with a request to update Wisply.
 
 One limit: the check and the tool call are two separate requests a few milliseconds apart. If Wisply quit and another program took the port in exactly that gap, that program could receive the token. A read-only connector token limits what it could do with it, and regenerating the token in Wisply revokes it.
+
+## Use it in Codex
+
+Codex can install this plugin from the same repository. It gets the four read-only tools, the same [identity check](#the-identity-check) and a Codex version of the skill; the status line, the quote button and the `/wisply-quote` and `/wisply-status` commands are Claude Code only. In a terminal on the Mac that runs Wisply:
+
+```bash
+codex plugin marketplace add fal3/wisply-claude-plugin
+codex plugin add wisply-local@wisply-claude-plugin
+```
+
+In Codex this marketplace is named `wisply-claude-plugin`, not `wisply` as in Claude Code, so the plugin's id in Codex is `wisply-local@wisply-claude-plugin`; `wisply-local@wisply` is its id in Claude Code only. Codex refuses a second marketplace with a name it already has, and `wisply` is reserved for Wisply's own Codex marketplace, so the two can be added side by side. Install Wisply in Codex only once, though: from this marketplace, from Wisply's own, or with `codex mcp add`. Two of them show every Wisply tool twice.
+
+Codex has no masked field for a plugin's settings, and a token in Codex's environment would reach every command Codex runs. So in Codex the token lives in your Mac's login Keychain:
+
+1. In Wisply, open **Settings > Integrations > MCP Server**, turn the server on and copy the token under **Connector token** (`wspc_`).
+2. In Terminal, run this and paste the token twice when it asks. It doesn't echo, and it stays out of your shell history:
+
+   ```bash
+   security add-generic-password -U -s ai.wisply.mcp -a token -l "Wisply MCP token" -T /usr/bin/security -w
+   ```
+
+3. Ask Codex: "List my last five Wisply memos." Nothing needs a restart.
+
+When a Wisply tool runs in Codex, and only then, the plugin reads that item (service `ai.wisply.mcp`, account `token`) with `/usr/bin/security find-generic-password`. It never writes the item, and the token never appears in Codex's configuration or environment. If you regenerate the token in Wisply, run the `security add-generic-password` line again. The Keychain keeps the token out of files, dotfile repositories and backups; it doesn't stop another program running as you on this Mac, including a command an assistant runs for you, from reading the item the same way. So use the read-only connector token, and regenerate it in Wisply if you think it leaked.
+
+For a newer version, run `codex plugin marketplace upgrade wisply-claude-plugin`, then `codex plugin add wisply-local@wisply-claude-plugin` again. To remove the plugin, the marketplace and the token:
+
+```bash
+codex plugin remove wisply-local@wisply-claude-plugin
+codex plugin marketplace remove wisply-claude-plugin
+security delete-generic-password -s ai.wisply.mcp -a token
+```
 
 ## Try it
 
@@ -143,11 +199,11 @@ What the mod can't do: in the VS Code extension's chat panel and in `claude -p`,
 
 **Who receives the token.** Only a program that proves, for that call, that it holds the same token, which in practice means the Wisply that issued it (see [The identity check](#the-identity-check)). If Wisply is closed and another program on the Mac, including one run by another user account, listens on port 51771, it gets the challenge and nothing else, and the plugin reports that the token was not sent. The check can't protect against malware already running under your account that can read the Keychain or Claude Code's settings. With the connector token, a token that leaked that way can only read through Wisply's read-only tools; it can't start recordings, change settings or run Wisply's other tools. Regenerate the token in Wisply if you think it leaked.
 
-**What reaches your model provider.** When Claude calls a tool, the result (memo titles, summaries, transcript excerpts, the live transcript or action items) becomes part of your conversation and is sent to the model provider your Claude app uses, as everything else in the conversation is. Keeping recordings on your Mac doesn't keep the content you ask Claude about private from that provider. Review what you ask for, and check your provider's data terms.
+**What reaches your model provider.** When Claude calls a tool, the result (memo titles, summaries, transcript excerpts, the live transcript or action items) becomes part of your conversation and is sent to the model provider your Claude app uses, as everything else in the conversation is. In Codex, it goes to the provider Codex uses. Keeping recordings on your Mac doesn't keep the content you ask Claude about private from that provider. Review what you ask for, and check your provider's data terms.
 
 **The mod.** The background check reads the live transcript from Wisply but keeps only the state, duration and word count, in memory, for the status line. Transcript text reaches your prompt only when you press the quote button or run `/wisply-quote`, and reaches the model only if you then send the prompt. `/wisply-status` and the error messages of `/wisply-quote` add a short line to the conversation with the state and duration, never transcript text. Claude Code hands the mod all of the plugin's options, the token included; the mod reads only `live_status` and `quote_words` and never reads, stores, logs or sends the token.
 
-**Storage.** The plugin writes no files and keeps no logs. Claude Code stores the token in your system's secure credential store. The bridge writes only JSON-RPC messages to its output and never includes the token or app responses in error messages.
+**Storage.** The plugin writes no files and keeps no logs. Claude Code stores the token in your system's secure credential store. In Codex, the token is in the login Keychain item you created, which the plugin only reads (see [Use it in Codex](#use-it-in-codex)). The bridge writes only JSON-RPC messages to its output and never includes the token or app responses in error messages.
 
 Wisply's privacy policy is at <https://www.wisply.ai/privacy> and its terms are at <https://www.wisply.ai/terms>.
 
@@ -163,7 +219,10 @@ Wisply's privacy policy is at <https://www.wisply.ai/privacy> and its terms are 
 | `This Wisply tool needs a full-access token` | Wisply refused the tool for the token you set. The four tools this plugin uses are read-only and work with the connector token, so update Wisply and this plugin. |
 | `Local Wisply request failed` | Wisply passed the identity check but answered the call with an HTTP error. Turn Wisply's MCP server off and on again; if it keeps happening, copy the token again and restart Claude Code. |
 | `/mcp` shows the `wisply` server as failed | The server starts without the token or the app, so this is about Node.js: check that `node --version` prints 20 or later in the shell Claude Code starts from, then restart Claude Code. |
-| The Wisply tools are missing in claude.ai chat or Cowork | They work only in Claude Code. See [Where it works](#where-it-works). |
+| The Wisply tools are missing in claude.ai chat or Cowork | They work only in Claude Code and Codex. See [Where it works](#where-it-works). |
+| Codex says `Wisply MCP token is not set or not valid` | Save the connector token in the Keychain as in [Use it in Codex](#use-it-in-codex), then ask again. `security find-generic-password -s ai.wisply.mcp -a token` (without `-w`) shows whether the item exists without printing the token. |
+| Codex says `` plugin `wisply-local` was not found in marketplace `wisply` `` | That is the plugin's Claude Code id. In Codex the id is `wisply-local@wisply-claude-plugin`, so run `codex plugin add wisply-local@wisply-claude-plugin`. `codex plugin list` shows the id of every plugin Codex can install. |
+| Codex says `marketplace 'wisply-claude-plugin' is already added from a different source` | You added this marketplace before from another place, such as a clone. Run `codex plugin marketplace remove wisply-claude-plugin`, then add it again. |
 | No status line entry | It appears only while Wisply is recording or paused, and only after you've used Wisply in the session. Run `/wisply-status`, or check that `live_status` is on. |
 | No quote button | The band appears only while Wisply is recording, and only in the terminal and Claude Desktop's Code tab. Run `/wisply-status` once to start the checks. |
 | A search misses an older memo | Search covers your newest 500 memos. Ask Claude to list memos with an `offset` instead. |
@@ -200,7 +259,7 @@ Email support@fallah.io, or report bugs and ask questions in [GitHub issues](htt
 ## Development
 
 ```bash
-npm test                        # synthetic unit, loopback and stdio tests (Node.js 20+)
+npm test                        # synthetic unit, loopback, stdio, marketplace and Codex manifest tests (Node.js 20+)
 claude plugin validate .        # manifest, MCP config and mod checks
 claude plugin test .            # the mod's tests in Claude Code's mod runtime
 claude plugin eval .            # eval cases against mocked Wisply tools (calls the model)
@@ -208,7 +267,18 @@ claude plugin eval .            # eval cases against mocked Wisply tools (calls 
 
 The eval cases in `evals/` are synthetic and mock the `wisply` server from `evals/mocks/wisply/`, so an eval run never starts the bridge, needs a token or contacts Wisply; it does call the model on your account. The tests use synthetic data only. The loopback tests start a mock server on `127.0.0.1:51771` and skip themselves if that port is in use, so a running Wisply app isn't disturbed. Other HTTP tests use ports the system assigns. A test also fails if any file in the package holds invisible or text-direction characters.
 
-Layout: `bridge.mjs` is the MCP server, `lib/identity.mjs` is its identity check (used only by the bridge), `lib/shared.mjs` holds the pure helpers that the bridge and the mod share (endpoint, tool descriptions, token checks, status text, excerpt quoting), `hooks/register.tsx` is the mod, `types/index.d.ts` declares the mod's state, `skills/wisply/SKILL.md` is the skill, `tests/` holds the mod's tests and `evals/` the eval cases.
+Layout: `.claude-plugin/plugin.json` is the plugin manifest and `.claude-plugin/marketplace.json` the one-plugin marketplace that `claude plugin marketplace add` reads, `.agents/plugins/marketplace.json` and `.codex-plugin/plugin.json` are the Codex marketplace and manifest (`marketplace.test.mjs` keeps both marketplace files and the README's install lines in step with the manifests), and `codex/` holds the Codex server's entry point, MCP configuration, Keychain read and skill (below; `codex.test.mjs` checks them), `bridge.mjs` is the MCP server, `lib/identity.mjs` is its identity check (used only by the bridge), `lib/shared.mjs` holds the pure helpers that the bridge and the mod share (endpoint, tool descriptions, token checks, status text, excerpt quoting), `hooks/register.tsx` is the mod, `types/index.d.ts` declares the mod's state, `skills/wisply/SKILL.md` is the skill, `tests/` holds the mod's tests and `evals/` the eval cases.
+
+Codex reads `.agents/plugins/marketplace.json` before `.claude-plugin/marketplace.json`, and `.codex-plugin/plugin.json` before `.claude-plugin/plugin.json`. The Codex manifest points Codex at `codex/mcp.json`, which starts `codex/bridge.mjs`, and at `codex/skills/`, because Codex doesn't expand the `${CLAUDE_PLUGIN_ROOT}` and `${user_config.*}` in `.mcp.json`, and the Claude skill's setup steps are Claude Code's. Its inline, empty `hooks` keeps Codex from reading `hooks/hooks.json`, the Claude Code mod. `codex/bridge.mjs` runs the same handler as `bridge.mjs`, with the token from the Keychain and Codex's setup messages. A plugin from another Wisply repository may join the Codex marketplace only pinned to a release tag and its full commit; `marketplace.test.mjs` refuses an unpinned entry. To try the Codex build from a clone without touching your own Codex setup:
+
+```bash
+export CODEX_HOME="$(mktemp -d)"
+codex plugin marketplace add ./wisply-claude-plugin
+codex plugin add wisply-local@wisply-claude-plugin
+codex mcp list                  # wisply-local: node ./codex/bridge.mjs
+```
+
+Releasing: both marketplace entries' source is `./`, so `claude plugin marketplace add` and `update`, and `codex plugin marketplace add` and `upgrade`, install whatever this repository's default branch holds, without the plugin directory's review. Every commit on `main` reaches users the next time they add or update the marketplace. So `main` takes changes only through reviewed pull requests, with force-pushes and deletion blocked. A release changes `version` in `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, both versions in `.claude-plugin/marketplace.json` and `package.json` together; `npm test` checks that they agree.
 
 ## License
 

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "wisply-local": {
+      "command": "node",
+      "args": ["./codex/bridge.mjs"],
+      "cwd": "."
+    }
+  }
+}
